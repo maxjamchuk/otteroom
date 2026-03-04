@@ -1,0 +1,23 @@
+{
+  "name": "otteroom",
+  "version": "1.0.0",
+  "description": "Otteroom is a mobile-first app for picking a movie together in a shared \"room\". Two people join via QR/code, set preferences (up to 5 genres), then swipe synced movie cards. A match happens when both like the same movie.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/maxjamchuk/otteroom.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/maxjamchuk/otteroom/issues"
+  },
+  "homepage": "https://github.com/maxjamchuk/otteroom#readme",
+  "devDependencies": {
+    "supabase": "^2.76.16"
+  }
+}
