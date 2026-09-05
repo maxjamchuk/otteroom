@@ -369,15 +369,99 @@ workflow, commit or push occurred.
 
 **Minimum validation**: CLI version, Docker prerequisites, empty-schema reset, idempotent allowlisted env generation including legacy fallback, clean shutdown.
 
-- [ ] T021 Verify the installed project `supabase@2.116.0` dependency in `package.json` and `package-lock.json` from T004, invoke that local binary to initialize `supabase/config.toml`, retain CLI-managed PostgreSQL `major_version = 17`, set `[auth] enable_anonymous_sign_ins = true`, `[auth.rate_limit] anonymous_users = 150`, and `api.auto_expose_new_tables = false`; retain every other Auth rate limit. This committed local-only quota follows N = 47 and max(120, round-up-to-10(3 × N)) = 150, not production policy; add no application schema or seed dependency.
-- [ ] T022 Add `__tests__/config/local-supabase-config.test.ts` to validate the actual local configuration's `auth.enable_anonymous_sign_ins = true` and numeric `auth.rate_limit.anonymous_users = 150`, including section-aware parsing and rejection of missing, disabled, duplicate, or wrong settings; exercise safe altered-config fixtures without mutating the canonical `supabase/config.toml`. Use the existing Jest runner and Node utilities, not a new config subsystem/dependency; pair static config evidence with T029's real startup and later Auth/E2E sign-in evidence.
-- [ ] T023 Add `supabase:start`, `supabase:status`, `supabase:stop`, `db:reset`, and `db:test` wrappers for the corresponding project-local `supabase start`, `status`, `stop`, `db reset`, and `test db` commands in `package.json`; route start/status/stop through `node scripts/safe-process.mjs supabase:start`, `supabase:status`, and `supabase:stop` respectively, without unrestricted startup/status persistence. Database reset/test commands remain unchanged; never depend on a global CLI.
-- [ ] T024 Create `.env.example` with only `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY` using non-secret example values, and verify `.gitignore` ignores `.env`, `.env.local`, and other machine-local variants without ignoring `.env.example`.
-- [ ] T025 Write env-wrapper behavior tests in `__tests__/config/configure-local-env.test.ts` covering preferred `PUBLISHABLE_KEY`, fallback `ANON_KEY`, invalid/missing URL/key, repeated execution, atomic replacement, failed CLI exit, and exclusion of all other CLI fields from files/errors/stdout; use synthetic non-secret CLI fixtures and isolated temporary output directories.
-- [ ] T026 Implement `scripts/configure-local-env.mjs` to capture project-local `supabase status --output env` without echoing it, parse only `API_URL` and the approved public-key alternatives, validate HTTP(S) plus a nonempty client key, reject accidental secret/service-role values, and atomically replace ignored `.env.local` via a restrictive-permission temporary file containing exactly the two approved assignments; failures must name only safe fields, preserve the prior file, and not log full status, database credentials, or JWT secrets.
-- [ ] T027 Add `env:local` → `node scripts/configure-local-env.mjs` to `package.json` and run its synthetic wrapper and local-config tests through `npm run test:client -- --runTestsByPath __tests__/config/configure-local-env.test.ts __tests__/config/local-supabase-config.test.ts`; defer the `db:types` and `db:types:check` wrapper until T046 and T047, after both RPCs exist.
-- [ ] T028 Align the prerequisites/local-start portion of `specs/001-room-session/quickstart.md` with `supabase/config.toml`, Node and bundled npm, Docker/Compose, actual local API/Studio URLs, available ports, safe diagnostics, and cleanup traps; document this phase's schema-free reset versus later complete migration replay. Record N = 47, anonymous_users = 150, stop/start after config changes, and that database reset/fixture cleanup does not reset hourly Auth allowance.
-- [ ] T029 Checkpoint — run `node --version`, `npm --version`, `docker version`, `docker compose version`, `./node_modules/.bin/supabase --version`, `npm run supabase:start`, `npm run env:local` twice, `npm run db:reset`, and `npm run supabase:stop` with cleanup traps; verify the two allowlisted values and identical second env output without printing credentials, run the env-wrapper and local-config tests, and record results in `specs/001-room-session/tasks.md`. Require enabled Anonymous Auth and local anonymous_users = 150, successful config loading/startup, and documented stop/start-after-change semantics; do not claim database reset or basic startup replenishes Auth allowance. Block migrations on failure.
+- [X] T021 Verify the installed project `supabase@2.116.0` dependency in `package.json` and `package-lock.json` from T004, invoke that local binary to initialize `supabase/config.toml`, retain CLI-managed PostgreSQL `major_version = 17`, set `[auth] enable_anonymous_sign_ins = true`, `[auth.rate_limit] anonymous_users = 150`, and `api.auto_expose_new_tables = false`; retain every other Auth rate limit. This committed local-only quota follows N = 47 and max(120, round-up-to-10(3 × N)) = 150, not production policy; add no application schema or seed dependency.
+- [X] T022 Add `__tests__/config/local-supabase-config.test.ts` to validate the actual local configuration's `auth.enable_anonymous_sign_ins = true` and numeric `auth.rate_limit.anonymous_users = 150`, including section-aware parsing and rejection of missing, disabled, duplicate, or wrong settings; exercise safe altered-config fixtures without mutating the canonical `supabase/config.toml`. Use the existing Jest runner and Node utilities, not a new config subsystem/dependency; pair static config evidence with T029's real startup and later Auth/E2E sign-in evidence.
+- [X] T023 Add `supabase:start`, `supabase:status`, `supabase:stop`, `db:reset`, and `db:test` wrappers for the corresponding project-local `supabase start`, `status`, `stop`, `db reset`, and `test db` commands in `package.json`; route start/status/stop through `node scripts/safe-process.mjs supabase:start`, `supabase:status`, and `supabase:stop` respectively, without unrestricted startup/status persistence. Database reset/test commands remain unchanged; never depend on a global CLI.
+- [X] T024 Create `.env.example` with only `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY` using non-secret example values, and verify `.gitignore` ignores `.env`, `.env.local`, and other machine-local variants without ignoring `.env.example`.
+- [X] T025 Write env-wrapper behavior tests in `__tests__/config/configure-local-env.test.ts` covering preferred `PUBLISHABLE_KEY`, fallback `ANON_KEY`, invalid/missing URL/key, repeated execution, atomic replacement, failed CLI exit, and exclusion of all other CLI fields from files/errors/stdout; use synthetic non-secret CLI fixtures and isolated temporary output directories.
+- [X] T026 Implement `scripts/configure-local-env.mjs` to capture project-local `supabase status --output env` without echoing it, parse only `API_URL` and the approved public-key alternatives, validate HTTP(S) plus a nonempty client key, reject accidental secret/service-role values, and atomically replace ignored `.env.local` via a restrictive-permission temporary file containing exactly the two approved assignments; failures must name only safe fields, preserve the prior file, and not log full status, database credentials, or JWT secrets.
+- [X] T027 Add `env:local` → `node scripts/configure-local-env.mjs` to `package.json` and run its synthetic wrapper and local-config tests through `npm run test:client -- --runTestsByPath __tests__/config/configure-local-env.test.ts __tests__/config/local-supabase-config.test.ts`; defer the `db:types` and `db:types:check` wrapper until T046 and T047, after both RPCs exist.
+- [X] T028 Align the prerequisites/local-start portion of `specs/001-room-session/quickstart.md` with `supabase/config.toml`, Node and bundled npm, Docker/Compose, actual local API/Studio URLs, available ports, safe diagnostics, and cleanup traps; document this phase's schema-free reset versus later complete migration replay. Record N = 47, anonymous_users = 150, stop/start after config changes, and that database reset/fixture cleanup does not reset hourly Auth allowance.
+- [X] T029 Checkpoint — run `node --version`, `npm --version`, `docker version`, `docker compose version`, `./node_modules/.bin/supabase --version`, `npm run supabase:start`, `npm run env:local` twice, `npm run db:reset`, and `npm run supabase:stop` with cleanup traps; verify the two allowlisted values and identical second env output without printing credentials, run the env-wrapper and local-config tests, and record results in `specs/001-room-session/tasks.md`. Require enabled Anonymous Auth and local anonymous_users = 150, successful config loading/startup, and documented stop/start-after-change semantics; do not claim database reset or basic startup replenishes Auth allowance. Block migrations on failure.
+
+### Phase 2 execution evidence — 2026-09-06
+
+T021–T029 are GREEN. Started on clean `main` at Phase 1 commit
+`3e2ccf2622c78424ce0c3f6e18e7736facfe5eb1`. The implementation prerequisite
+check passed; requirements checklist 16/16. No extension hooks were configured.
+Task text and all T030–T121 checkboxes remain unchanged; no Phase 3 work ran.
+
+| Command / evidence | Exit / observed result |
+|---|---|
+| `node --version` | 0; v24.20.0 |
+| `npm --version` | 0; 11.19.0 |
+| `docker version` | 0; client/server 28.5.1, Docker Desktop 4.49.0 |
+| `docker compose version` | 0; v2.40.3-desktop.1 |
+| `./node_modules/.bin/supabase --version` | 0; 2.116.0, matching manifest and lockfile |
+| `./node_modules/.bin/supabase init` | 0; CLI-generated config reviewed before first start |
+| T022 local-config Jest selection | 0; 15 tests, including altered fixtures |
+| T025 env-wrapper Jest selection before T026 | 1 as expected; 8 real behavior tests red before implementation |
+| T025 env-wrapper selection after T026 | 0; 8 tests |
+| `npm run supabase:start` | 0; real CLI health checks completed, no ignored health checks |
+| `npm run supabase:status` | 0, both before and after reset |
+| `npm run env:local`, twice | 0 / 0; same two-line bytes, mode 0600, values withheld |
+| `git check-ignore .env.local` | 0; real env ignored, example stays versionable |
+| `npm run db:reset` | 0; schema-free reset with no seeds or application migrations |
+| `npm run test:client -- --runTestsByPath __tests__/config/configure-local-env.test.ts __tests__/config/local-supabase-config.test.ts` | 0; 23/23, before and during the real checkpoint |
+| `npm run supabase:stop` | 0; trap-owned lifecycle, clean shutdown |
+| `npm run env:local` after stop | Expected 1; safe STATUS_FAILED diagnostic, prior env preserved, no partial file |
+| Additional fresh-install sanity: `npm ci` | 0; unchanged lockfile, no dependency/version changes |
+| Local CLI version after `npm ci` | 0; still 2.116.0 |
+| `npm run lint` | 0, including after fresh install |
+| `npm run typecheck` | 0, including after fresh install |
+| `npm run test:client` after fresh install | 0; 47/47 across 5 suites, including Phase 1 C1/runtime/route regressions |
+| `git diff --check` and untracked whitespace check | 0; no whitespace errors |
+
+The real checkpoint used `set -eu`, EXIT cleanup, and INT/TERM exit traps.
+Start/status/stop used the existing safe-process wrapper. For the diagnostic
+invocation of the unchanged `npm run db:reset`, the existing managed-process
+helper drained stdout/stderr and returned the original exit; no raw Supabase
+status, startup log, reset output, credentials or database dumps were retained.
+
+Actual services: API `http://127.0.0.1:55321`, PostgreSQL
+`127.0.0.1:55322`, Studio `http://127.0.0.1:55323`, mail inspection
+`http://127.0.0.1:55324`. Auth health, Studio and mail HTTP probes returned 200.
+Read-only database inspection before reset returned PostgreSQL 17.6,
+`public_tables=0` and `auth_users=0`. No application schema was added to make
+reset pass. Actual Auth-container allowlisted settings confirmed anonymous
+sign-ins enabled and hourly limit 150. All other Auth rate limits equal the
+generated pinned CLI template; **anonymous sign-ins performed: 0**.
+
+Environment evidence covered preferred publishable and legacy anon keys,
+missing/empty/malformed/duplicated fields, rejection of privileged/session
+values and env injection, exclusion of all other status fields from files and
+stdout/errors, bounded subprocess failure/timeout, atomic rename, restrictive
+permissions, idempotency, partial-write/rename failure, and handled interruption.
+Failures preserve the previous file and clean temporary output. Only
+`EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY` occur
+in the generated ignored file; no values are recorded here.
+
+Infrastructure choices within T021/T028: project ID `otteroom-room-session`
+avoids old `otteroom` data volumes; ports 5532x avoid the unrelated `hrh`
+stack. Seeds, unused Edge runtime and analytics are disabled; no Studio AI key
+is configured. No architecture/version/product decision changed. The skill's
+setup verification also added a defensive `.dockerignore`; no Dockerfile,
+custom image or Docker build was introduced.
+
+Cleanup: all nine new project containers and its network were removed by the
+CLI. All four exposed ports could be rebound immediately; no owned Supabase
+process remained. The CLI intentionally retained only its new DB/storage data
+volumes for local reuse, outside Git. All 18 pre-existing containers retained
+their exact IDs, running state, StartedAt and restart counts, including the
+running `hrh` stack. Old Otteroom volumes were not used or deleted. No global
+prune/stop or global Docker configuration change occurred.
+
+R02 remains N = 47, limit 150 (94/141 for two/three acceptance runs;
+48/144 for one/three security-plus-acceptance pairs). Stop/start applies config
+changes only; reset/fixture cleanup does not replenish hourly Auth allowance,
+and no restart was used for quota evasion. R01 generation/check remains deferred
+to T046–T047; neither command nor any generated schema artifact was added/run.
+
+Fresh `npm ci` repeated the pre-existing 13 moderate advisories and skipped
+unapproved `unrs-resolver` postinstall from the Phase 1 locked graph. No audit
+fix, package upgrade or install-policy change was attempted; all required
+checks passed. No browser suite, client Auth, room behavior, application migrations,
+commit or push ran. Stop before T030.
 
 ## Phase 3: Foundational — Rooms Schema, Privileges, RLS, and Base pgTAP
 

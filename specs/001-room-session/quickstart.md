@@ -89,6 +89,109 @@ This amendment supersedes only the native-only install mapping in completed
 T009; T001–T019 remain untouched, and T008's host/browser URL agreement remains.
 It does not authorize T021 or change C1/R01/R02, product behavior or versions.
 
+## Implemented Phase 2: Local Infrastructure Only (T021–T029)
+
+Use Node `24.20.0` with bundled npm `11.19.0` and the committed npm lockfile.
+Supabase CLI `2.116.0` is already a project dev dependency; npm scripts resolve
+the local executable, never a global CLI. Docker Engine and Docker Compose must
+be available (`docker version`, `docker compose version`). No Supabase login,
+hosted project, Dashboard SQL or mobile emulator is required.
+
+The CLI-generated `supabase/config.toml` uses project ID
+`otteroom-room-session`, isolating this baseline from old `otteroom` volumes.
+Its dedicated ports avoid the existing unrelated local stack on 5432x:
+
+| Local service | URL / port |
+|---|---|
+| Supabase API (Auth, Data API, Realtime, Storage) | `http://127.0.0.1:55321` |
+| PostgreSQL 17 | `127.0.0.1:55322` (no connection credential in documentation) |
+| Studio (optional inspection, not a setup step) | `http://127.0.0.1:55323` |
+| Local mail inspection | `http://127.0.0.1:55324` |
+| Shadow database | 55320 reserved; not a running Phase 2 service |
+| Pooler / analytics | 55329 / 55327 reserved; disabled |
+
+Check these ports are free before starting. Expo remains on 8081; it need not run
+for this infrastructure checkpoint. Edge runtime and analytics are disabled;
+Studio has no external AI key. Other platform defaults remain CLI-managed, with
+no application tables/functions or new product behavior. Seeds are disabled
+with an empty seed path list. The PostgreSQL major remains 17 and
+`api.auto_expose_new_tables = false` is explicit. RLS/schema work starts only at
+T030, not here.
+
+The committed local Auth configuration explicitly enables
+`auth.enable_anonymous_sign_ins = true` and `auth.rate_limit.anonymous_users = 150`;
+all other Auth rate limits retain their pinned-template values. N = 47 acceptance
+sign-ins; two runs cost at most 94, three at most 141. A later security probe adds
+one (48 per security/acceptance pair, 144 for three pairs). Phase 2 makes **zero**
+anonymous sign-ins and validates config loading, not application Auth behavior.
+This is local-only configuration, not a production recommendation.
+
+After any `supabase/config.toml` change, run `npm run supabase:stop` then
+`npm run supabase:start`, as required by the [official configuration reference](https://supabase.com/docs/guides/local-development/cli/config).
+Neither `db:reset` nor fixture cleanup resets the hourly Auth allowance; never
+restart services to evade it. Stop/start applies configuration only.
+
+The schema-free Phase 2 checkpoint is separate from the future full-feature
+fresh-clone sequence below:
+
+```bash
+set -eu
+cleanup_otteroom_services() { npm run supabase:stop; }
+trap cleanup_otteroom_services EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+node --version
+npm --version
+docker version
+docker compose version
+./node_modules/.bin/supabase --version
+npm run supabase:start
+npm run supabase:status
+npm run env:local
+npm run env:local
+npm run db:reset
+npm run test:client -- --runTestsByPath __tests__/config/configure-local-env.test.ts __tests__/config/local-supabase-config.test.ts
+npm run supabase:stop
+trap - EXIT INT TERM
+```
+
+Startup waits for the CLI's actual service health checks; status is an additional
+readiness check, not a timed sleep. The start/status/stop wrappers suppress raw
+CLI stdout/stderr (which may include credentials), reporting only safe fixed
+process status. Never retain raw status/startup output or full Docker inspect
+output. If startup fails, inspect only service names/health and approved bounded
+sanitized process excerpts, then stop this project. No global prune, `--all`
+stop, or operation on another project's containers/volumes is permitted.
+`supabase:stop` removes this project's containers while preserving its local
+Docker data volumes; `db:reset` reconstructs the database without relying on them.
+
+At this phase, reset rebuilds only Supabase-managed infrastructure with **no
+application migrations or seeds**. Later phases supply the complete versioned
+schema/RPC/publication replay. `db:test` is available but the application pgTAP
+suite does not yet exist. `db:types` / `db:types:check` remain deferred to
+T046–T047 and must not run in Phase 2.
+
+`scripts/configure-local-env.mjs` captures `supabase status --output env` in
+bounded memory (64 KiB, 30-second timeout); no raw status reaches diagnostics.
+It chooses `PUBLISHABLE_KEY` if present, otherwise `ANON_KEY`, and writes exactly
+the two public assignments. An empty/invalid preferred field fails instead of
+hiding the problem through fallback. It rejects non-HTTP(S)/credential-bearing
+URLs, env expansion/injection, secret keys, and JWTs other than legacy `anon`
+public keys; it never copies arbitrary CLI fields. A unique same-directory temp
+file has mode 0600, is atomically renamed only after complete successful
+generation, and is cleaned on success/error/handled interruption. Previous valid
+`.env.local` survives failure. There is no Git-index dependency.
+
+Both env executions must yield byte-identical two-line files; compare in memory
+and report only the field names/nonempty booleans, never contents. Check that
+`git check-ignore .env.local` succeeds and `.env.example` stays versionable.
+The committed example contains placeholders only. The wrapper tests exercise
+synthetic preferred/fallback keys, malformed/missing/duplicate fields, privileged
+values, bounded subprocess failure, partial write/rename failure, interruption,
+file permissions, cleanup and repeated execution. A stopped real stack must make
+`env:local` fail safely without damaging its previous file.
+
 ## Planned Fresh-Clone Setup
 
 After the feature is implemented and committed, a new checkout will use:
