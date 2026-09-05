@@ -15,7 +15,8 @@ globally installed Supabase CLI requirements.
 - Git.
 - Node.js `24.20.0` LTS with its bundled npm.
 - Docker Engine with a running daemon and Docker Compose support.
-- A browser supported by Playwright.
+- A supported native Playwright OS, or the automatic official Docker runtime on
+  unsupported Linux (including AlmaLinux), as defined below.
 - Local ports required by Supabase and Expo, including Expo web port `8081`,
   available.
 
@@ -36,6 +37,57 @@ docker compose version
 
 The Node command must report `v24.20.0`. Docker commands must reach the local
 daemon.
+
+### Phase 1 Playwright runtime amendment
+
+`scripts/playwright-runtime.mjs` owns automatic runtime selection and preparation.
+For pinned Playwright 1.63.0, native Chromium is used on supported x64/arm64
+Debian 12/13, Ubuntu 22.04/24.04/26.04, macOS 14+, and Windows 11+/Server 2019+.
+Other Linux distributions (including AlmaLinux) use only the official image
+`mcr.microsoft.com/playwright:v1.63.0-noble`; no native fallback after Docker
+failure, global Playwright, `LD_LIBRARY_PATH`, extracted RPM libraries, or
+temporary Node/Chromium installation is accepted as checkpoint evidence.
+Node 24.20.0 remains the `.nvmrc`/engines prerequisite; a persistent user version
+manager may supply it without machine-specific paths in repository commands.
+
+`npm run playwright:install` maps to
+`node scripts/playwright-runtime.mjs install`: install project-local Chromium
+on supported systems, otherwise pull the exact image. The Docker daemon must be
+accessible before preparation/testing; failures give bounded actionable guidance.
+The image supplies browsers/system libraries; its server command separately pins
+`npx --yes playwright@1.63.0 run-server --port 3000 --host 0.0.0.0`.
+
+`scripts/run-e2e.mjs` owns each uniquely named/labeled container, loopback-only
+ephemeral WS port discovery, bounded WebSocket readiness probes, and
+`PW_TEST_CONNECT_WS_ENDPOINT` injection for the host-side test fixture. No manual
+endpoint export or externally supplied browser executable is used.
+Use `--add-host=hostmachine:host-gateway`; Expo listens on the host LAN interface.
+Both host readiness and browser baseURL remain `http://127.0.0.1:8081`.
+Docker uses official Playwright `exposeNetwork: '<loopback>'` to forward only
+loopback traffic through the runner-owned connection, so host firewall rules for
+bridge-to-host traffic do not become an undocumented prerequisite. The host
+mapping is still explicit, but gateway HTTP is not required. No application
+source hardcodes `hostmachine`, and unchanged local-service URLs need no backend
+work or firewall changes in Phase 1.
+
+Container stop/remove runs in finally after success, test/startup failure, SIGINT
+or SIGTERM, without touching unrelated containers. Preserve original test exit
+codes (and signal codes 130/143); cleanup/scanner failure also fails validation.
+The existing exact controlled-C security exception is unchanged.
+Docker uses `--log-driver=none`; the safe-process layer drains server/CLI output
+without raw persistence and parses only bounded port/state metadata in memory.
+No host repository, credential registry, storage files or Docker socket is mounted.
+C1 capture-off defaults, safe reporter, sanitizer, registry and scanner stay intact.
+
+`__tests__/config/playwright-runtime.test.ts` proves selection, exact image,
+preparation, readiness, unavailable Docker diagnostics, exit preservation,
+success/failure/interrupt cleanup, and absence of runtime environment injection.
+T020 additionally requires real Docker navigation on AlmaLinux to `/` and
+`/room/ABCDEF0123`, direct navigation/reload, static C1 A/B, fresh `npm ci`,
+Expo dependency checks, and no remaining owned container/Expo process or port.
+This amendment supersedes only the native-only install mapping in completed
+T009; T001–T019 remain untouched, and T008's host/browser URL agreement remains.
+It does not authorize T021 or change C1/R01/R02, product behavior or versions.
 
 ## Planned Fresh-Clone Setup
 
@@ -101,7 +153,7 @@ The future root `package.json` will expose these commands:
 | `npm run web` | `expo start --web --port 8081` |
 | `npm run web:e2e` | `node scripts/safe-process.mjs web:e2e`; project-local `expo start --web --port 8081` with `CI=1`, sanitized/suppressed process output |
 | `npm run web:export` | `expo export --platform web` |
-| `npm run playwright:install` | project-local locked `playwright install chromium` |
+| `npm run playwright:install` | `node scripts/playwright-runtime.mjs install`; automatic native Chromium install or pinned Docker image pull |
 | `npm run test:e2e:security` | `node scripts/run-e2e.mjs security`; project-local Playwright `credential-safety` project and finalized-artifact scanner |
 | `npm run test:e2e` | `node scripts/run-e2e.mjs acceptance`; project-local Playwright `acceptance` project and finalized-artifact scanner |
 
@@ -437,9 +489,9 @@ npm run supabase:stop
 trap - EXIT INT TERM
 ```
 
-`npm run playwright:install` installs the browser binary with the project-local
-version already locked by `npm ci`; it cannot choose a new application
-dependency. The trap is installed before service startup, so Supabase is stopped
+`npm run playwright:install` prepares the automatically selected native or Docker
+runtime at locked Playwright 1.63.0; it cannot choose a new application dependency.
+The trap is installed before service startup, so Supabase is stopped
 after a failed reset, build, browser install, or E2E command as well as after an
 interrupt. On success the explicit stop runs and the trap is removed. Playwright
 itself terminates the managed Expo web server on pass or failure.

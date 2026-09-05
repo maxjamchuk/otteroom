@@ -22,7 +22,7 @@ than assembled from unrelated package `latest` tags.
 | `expo-router` | `57.0.19` (manifest range `~57.0.19`) | Stable SDK 57 package line | [Published package](https://www.npmjs.com/package/expo-router/v/57.0.19) and [Router reference](https://docs.expo.dev/versions/latest/sdk/router/) | Scaffold range plus exact resolved version in lockfile |
 | Supabase CLI (`supabase`) | `2.116.0` | Stable | [CLI release](https://github.com/supabase/cli/releases/tag/v2.116.0) | Exact dev dependency, npm scripts, and lockfile; no global CLI |
 | `@supabase/supabase-js` | `2.115.0` | Stable | [Supabase JavaScript release](https://github.com/supabase/supabase-js/releases/tag/v2.115.0) | Exact application dependency plus lockfile |
-| `@playwright/test` | `1.63.0` | Stable; published 2026-09-04, not draft/prerelease | [Official v1.63.0 release](https://github.com/microsoft/playwright/releases/tag/v1.63.0) | Exact dev dependency plus lockfile; browser installed by the locked CLI |
+| `@playwright/test` | `1.63.0` | Stable; published 2026-09-04, not draft/prerelease | [Official v1.63.0 release](https://github.com/microsoft/playwright/releases/tag/v1.63.0) | Exact dev dependency plus lockfile; native browser or Docker server pinned to this version |
 | Local PostgreSQL | `17` | Stable major managed by the pinned CLI stack | [CLI v2.116.0 generated config sets `major_version = 17`](https://github.com/supabase/cli/blob/v2.116.0/apps/cli-go/pkg/config/templates/config.toml#L40-L42) | Commit the CLI-generated `supabase/config.toml` unchanged at major 17; no manual override |
 
 Playwright `1.62.1` was the last confirmed candidate before `1.63.0` was
@@ -584,6 +584,65 @@ Playwright owns its web server; a shell trap stops Supabase even when E2E fails.
 Multiple pages in one context were rejected because they share session storage.
 Mocked Supabase and tests that inspect implementation details were rejected
 because they cannot prove Auth, RPC, RLS, Realtime, or concurrency behavior.
+
+### Phase 1 Playwright runtime amendment
+
+`scripts/playwright-runtime.mjs` owns automatic runtime selection and preparation.
+For pinned Playwright 1.63.0, native Chromium is used on supported x64/arm64
+Debian 12/13, Ubuntu 22.04/24.04/26.04, macOS 14+, and Windows 11+/Server 2019+.
+Other Linux distributions (including AlmaLinux) use only the official image
+`mcr.microsoft.com/playwright:v1.63.0-noble`; no native fallback after Docker
+failure, global Playwright, `LD_LIBRARY_PATH`, extracted RPM libraries, or
+temporary Node/Chromium installation is accepted as checkpoint evidence.
+Node 24.20.0 remains the `.nvmrc`/engines prerequisite; a persistent user version
+manager may supply it without machine-specific paths in repository commands.
+
+`npm run playwright:install` maps to
+`node scripts/playwright-runtime.mjs install`: install project-local Chromium
+on supported systems, otherwise pull the exact image. The Docker daemon must be
+accessible before preparation/testing; failures give bounded actionable guidance.
+The image supplies browsers/system libraries; its server command separately pins
+`npx --yes playwright@1.63.0 run-server --port 3000 --host 0.0.0.0`.
+
+`scripts/run-e2e.mjs` owns each uniquely named/labeled container, loopback-only
+ephemeral WS port discovery, bounded WebSocket readiness probes, and
+`PW_TEST_CONNECT_WS_ENDPOINT` injection for the host-side test fixture. No manual
+endpoint export or externally supplied browser executable is used.
+Use `--add-host=hostmachine:host-gateway`; Expo listens on the host LAN interface.
+Both host readiness and browser baseURL remain `http://127.0.0.1:8081`.
+Docker uses official Playwright `exposeNetwork: '<loopback>'` to forward only
+loopback traffic through the runner-owned connection, so host firewall rules for
+bridge-to-host traffic do not become an undocumented prerequisite. The host
+mapping is still explicit, but gateway HTTP is not required. No application
+source hardcodes `hostmachine`, and unchanged local-service URLs need no backend
+work or firewall changes in Phase 1.
+
+Container stop/remove runs in finally after success, test/startup failure, SIGINT
+or SIGTERM, without touching unrelated containers. Preserve original test exit
+codes (and signal codes 130/143); cleanup/scanner failure also fails validation.
+The existing exact controlled-C security exception is unchanged.
+Docker uses `--log-driver=none`; the safe-process layer drains server/CLI output
+without raw persistence and parses only bounded port/state metadata in memory.
+No host repository, credential registry, storage files or Docker socket is mounted.
+C1 capture-off defaults, safe reporter, sanitizer, registry and scanner stay intact.
+
+`__tests__/config/playwright-runtime.test.ts` proves selection, exact image,
+preparation, readiness, unavailable Docker diagnostics, exit preservation,
+success/failure/interrupt cleanup, and absence of runtime environment injection.
+T020 additionally requires real Docker navigation on AlmaLinux to `/` and
+`/room/ABCDEF0123`, direct navigation/reload, static C1 A/B, fresh `npm ci`,
+Expo dependency checks, and no remaining owned container/Expo process or port.
+This amendment supersedes only the native-only install mapping in completed
+T009; T001–T019 remain untouched, and T008's host/browser URL agreement remains.
+It does not authorize T021 or change C1/R01/R02, product behavior or versions.
+
+Runtime amendment sources: [official Docker remote-server/networking guidance](https://playwright.dev/docs/docker),
+[supported systems](https://playwright.dev/docs/intro#system-requirements), and
+[scoped connection network exposure](https://playwright.dev/docs/api/class-browsertype#browser-type-connect-option-expose-network).
+Rejected runtime alternatives: manually extracted RPMs or temporary library paths
+(unrecorded machine state), native Chromium on unsupported Linux, an unpinned
+image/server version, a user-managed WS endpoint, and raw Docker log retention.
+This runtime decision applies to pre-Auth Phase 1; later Auth semantics are unchanged.
 
 ## 13. Credential-safe Playwright Diagnostics for Real Anonymous Auth
 

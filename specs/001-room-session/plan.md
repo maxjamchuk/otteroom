@@ -586,6 +586,7 @@ correction does not rerun planning or task generation.
 ├── __tests__/
 │   ├── config/
 │   │   ├── e2e-diagnostics.test.ts
+│   │   ├── playwright-runtime.test.ts
 │   │   ├── database-types.test.ts
 │   │   └── local-supabase-config.test.ts
 │   ├── rooms/
@@ -606,6 +607,7 @@ correction does not rerun planning or task generation.
 ├── scripts/
 │   ├── check-e2e-artifacts.mjs
 │   ├── run-e2e.mjs
+│   ├── playwright-runtime.mjs
 │   ├── safe-process.mjs
 │   ├── configure-local-env.mjs
 │   └── database-types.mjs
@@ -646,6 +648,57 @@ Remove scaffold sample routes/assets not used by this slice before the single
 root `npm install` that creates the lockfile. Expo-native additions use
 `npx expo install`; they are not selected from unrelated latest tags. The future
 implementation must review the generated manifest and diff before proceeding.
+
+### Phase 1 Playwright runtime amendment
+
+`scripts/playwright-runtime.mjs` owns automatic runtime selection and preparation.
+For pinned Playwright 1.63.0, native Chromium is used on supported x64/arm64
+Debian 12/13, Ubuntu 22.04/24.04/26.04, macOS 14+, and Windows 11+/Server 2019+.
+Other Linux distributions (including AlmaLinux) use only the official image
+`mcr.microsoft.com/playwright:v1.63.0-noble`; no native fallback after Docker
+failure, global Playwright, `LD_LIBRARY_PATH`, extracted RPM libraries, or
+temporary Node/Chromium installation is accepted as checkpoint evidence.
+Node 24.20.0 remains the `.nvmrc`/engines prerequisite; a persistent user version
+manager may supply it without machine-specific paths in repository commands.
+
+`npm run playwright:install` maps to
+`node scripts/playwright-runtime.mjs install`: install project-local Chromium
+on supported systems, otherwise pull the exact image. The Docker daemon must be
+accessible before preparation/testing; failures give bounded actionable guidance.
+The image supplies browsers/system libraries; its server command separately pins
+`npx --yes playwright@1.63.0 run-server --port 3000 --host 0.0.0.0`.
+
+`scripts/run-e2e.mjs` owns each uniquely named/labeled container, loopback-only
+ephemeral WS port discovery, bounded WebSocket readiness probes, and
+`PW_TEST_CONNECT_WS_ENDPOINT` injection for the host-side test fixture. No manual
+endpoint export or externally supplied browser executable is used.
+Use `--add-host=hostmachine:host-gateway`; Expo listens on the host LAN interface.
+Both host readiness and browser baseURL remain `http://127.0.0.1:8081`.
+Docker uses official Playwright `exposeNetwork: '<loopback>'` to forward only
+loopback traffic through the runner-owned connection, so host firewall rules for
+bridge-to-host traffic do not become an undocumented prerequisite. The host
+mapping is still explicit, but gateway HTTP is not required. No application
+source hardcodes `hostmachine`, and unchanged local-service URLs need no backend
+work or firewall changes in Phase 1.
+
+Container stop/remove runs in finally after success, test/startup failure, SIGINT
+or SIGTERM, without touching unrelated containers. Preserve original test exit
+codes (and signal codes 130/143); cleanup/scanner failure also fails validation.
+The existing exact controlled-C security exception is unchanged.
+Docker uses `--log-driver=none`; the safe-process layer drains server/CLI output
+without raw persistence and parses only bounded port/state metadata in memory.
+No host repository, credential registry, storage files or Docker socket is mounted.
+C1 capture-off defaults, safe reporter, sanitizer, registry and scanner stay intact.
+
+`__tests__/config/playwright-runtime.test.ts` proves selection, exact image,
+preparation, readiness, unavailable Docker diagnostics, exit preservation,
+success/failure/interrupt cleanup, and absence of runtime environment injection.
+T020 additionally requires real Docker navigation on AlmaLinux to `/` and
+`/room/ABCDEF0123`, direct navigation/reload, static C1 A/B, fresh `npm ci`,
+Expo dependency checks, and no remaining owned container/Expo process or port.
+This amendment supersedes only the native-only install mapping in completed
+T009; T001–T019 remain untouched, and T008's host/browser URL agreement remains.
+It does not authorize T021 or change C1/R01/R02, product behavior or versions.
 
 ## Implementation Phases
 
