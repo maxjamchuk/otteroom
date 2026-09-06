@@ -1669,12 +1669,199 @@ Phase 8 complete; stop before T108.
 
 **Independent test**: Use fresh full/Waiting rooms and distinct browser contexts. A third participant is denied; two genuinely overlapping final-seat requests accept exactly one; unrelated reads and direct mutation attempts disclose/change nothing.
 
-- [ ] T108 [US3] Strengthen E05 in `e2e/room-session.spec.ts` with `@us3` full-room acceptance: use three distinct isolated contexts, assert the third receives only the full outcome/UI with no room projection, and verify host/accepted guest remain the same Ready members after rejection and repeated rejected attempts.
-- [ ] T109 [US3] Add E06 `@us3` in `e2e/room-session.spec.ts` using a new Waiting room and two separately bootstrapped isolated guests; dispatch both real final-seat join actions before awaiting either outcome, coordinate an observable request-start barrier without fabricated responses, and assert one `joined`, one `full`, host/winner Ready, loser denied, and no overwritten winner or duplicate seat via real member re-entry and the paired database race evidence. Register request routes for each guest before navigation, hold both outbound join requests until both have arrived, then release both unchanged to the real server before awaiting responses; assert the barrier was reached by two distinct authenticated contexts. Browser dispatch overlap complements, but does not replace, the controlled SQL-lock trial.
-- [ ] T110 [US3] Strengthen E12 in `e2e/room-session.spec.ts` with `@us3` read/subscription isolation: create two unrelated rooms, use only the unrelated context's own authenticated publishable-key client to query the exact known unrelated ID and attempt the corresponding Realtime filter, and assert zero Data API rows with no room UI disclosure. Use a fresh Waiting target for a genuine guest-seat UPDATE, confirm it at an authorized observer, and assert no unrelated payload within a bounded observation window; distinguish explicit subscription denial from an allowed empty stream, and never treat lack of subscription readiness as proof of RLS.
-- [ ] T111 [US3] Add the E12 `@us3` stale cross-room navigation variant in `e2e/room-session.spec.ts`: use two legitimate invitations, hold one actual old-room response, navigate to the other canonical code, then release the unchanged old response and assert only the newly authorized room remains displayed; observe old-channel teardown and retain independent known-ID RLS denial from T110, without injecting production state or fabricating API payloads.
-- [ ] T112 [US3] Extend E12 adversarial coverage in `e2e/room-session.spec.ts` with direct Data API INSERT/UPDATE/DELETE, participant spoofing, occupied-seat replacement/clearing, and writable-state attempts from ordinary participant credentials; assert permission rejection and unchanged authorized membership/Ready, using real client calls only as negative tests and never adding these mutations to application code.
-- [ ] T113 [US3] Checkpoint — from a clean reset run `npm run lint`, `npm run typecheck`, `npm run test:client`, `npm run db:test`, and `npm run test:e2e -- --grep @us3 --repeat-each=3`; independently prove scenarios 9–12 and E05/E06/E12, require every final-seat trial to have exactly one winner and every isolation/manipulation trial to disclose/change nothing, record actual results in `specs/001-room-session/tasks.md`, and block final validation on any failure. Record each trial separately; three repetitions exercise the harness and introduce no product performance threshold. Normal validation also requires `npm run db:types:check` after the phase reset, without preceding `db:types`. Before this ordinary Auth acceptance selection, run unfiltered `npm run test:e2e:security` after reset/check and account for its separate one-signup cost.
+- [X] T108 [US3] Strengthen E05 in `e2e/room-session.spec.ts` with `@us3` full-room acceptance: use three distinct isolated contexts, assert the third receives only the full outcome/UI with no room projection, and verify host/accepted guest remain the same Ready members after rejection and repeated rejected attempts.
+- [X] T109 [US3] Add E06 `@us3` in `e2e/room-session.spec.ts` using a new Waiting room and two separately bootstrapped isolated guests; dispatch both real final-seat join actions before awaiting either outcome, coordinate an observable request-start barrier without fabricated responses, and assert one `joined`, one `full`, host/winner Ready, loser denied, and no overwritten winner or duplicate seat via real member re-entry and the paired database race evidence. Register request routes for each guest before navigation, hold both outbound join requests until both have arrived, then release both unchanged to the real server before awaiting responses; assert the barrier was reached by two distinct authenticated contexts. Browser dispatch overlap complements, but does not replace, the controlled SQL-lock trial.
+- [X] T110 [US3] Strengthen E12 in `e2e/room-session.spec.ts` with `@us3` read/subscription isolation: create two unrelated rooms, use only the unrelated context's own authenticated publishable-key client to query the exact known unrelated ID and attempt the corresponding Realtime filter, and assert zero Data API rows with no room UI disclosure. Use a fresh Waiting target for a genuine guest-seat UPDATE, confirm it at an authorized observer, and assert no unrelated payload within a bounded observation window; distinguish explicit subscription denial from an allowed empty stream, and never treat lack of subscription readiness as proof of RLS.
+- [X] T111 [US3] Add the E12 `@us3` stale cross-room navigation variant in `e2e/room-session.spec.ts`: use two legitimate invitations, hold one actual old-room response, navigate to the other canonical code, then release the unchanged old response and assert only the newly authorized room remains displayed; observe old-channel teardown and retain independent known-ID RLS denial from T110, without injecting production state or fabricating API payloads.
+- [X] T112 [US3] Extend E12 adversarial coverage in `e2e/room-session.spec.ts` with direct Data API INSERT/UPDATE/DELETE, participant spoofing, occupied-seat replacement/clearing, and writable-state attempts from ordinary participant credentials; assert permission rejection and unchanged authorized membership/Ready, using real client calls only as negative tests and never adding these mutations to application code.
+- [X] T113 [US3] Checkpoint — from a clean reset run `npm run lint`, `npm run typecheck`, `npm run test:client`, `npm run db:test`, and `npm run test:e2e -- --grep @us3 --repeat-each=3`; independently prove scenarios 9–12 and E05/E06/E12, require every final-seat trial to have exactly one winner and every isolation/manipulation trial to disclose/change nothing, record actual results in `specs/001-room-session/tasks.md`, and block final validation on any failure. Record each trial separately; three repetitions exercise the harness and introduce no product performance threshold. Normal validation also requires `npm run db:types:check` after the phase reset, without preceding `db:types`. Before this ordinary Auth acceptance selection, run unfiltered `npm run test:e2e:security` after reset/check and account for its separate one-signup cost.
+
+### Phase 9 execution evidence — 2026-09-06–07
+
+**T108–T113 GREEN; full US3 checkpoint passed.** Work began on clean `main`
+at `a45297b389db16eafd945f50e735e8a640959fa0`. A user-owned Expo on port
+8081 initially prevented browser validation; it was not killed or reused as
+test evidence. After the user stopped it and explicitly authorized continuation,
+the partial test worktree was preserved and all required real-stack checks ran.
+The Spec Kit prerequisite check and requirements checklist (16/16) passed;
+no before/after extension hooks were configured or executed.
+
+Only test/harness files and this task evidence changed:
+`e2e/room-session.spec.ts`, `e2e/support/safe-reporter.ts`,
+`scripts/run-e2e.mjs`, `__tests__/config/e2e-diagnostics.test.ts`, and
+`specs/001-room-session/tasks.md`. No application, schema, RPC, RLS, generated
+type, package/version, product specification or contract edit was necessary.
+Task descriptions are unchanged. Existing component tests cover full/result
+mapping, safe error rendering, Ready preservation, duplicate guards and Realtime;
+the complete client suite was rerun instead of duplicating those tests.
+
+#### Final clean-reset checkpoint
+
+All rows below are actual executions, not commands proposed for later. The
+driver used `set -eu`, EXIT cleanup and INT/TERM handling; a nonzero validation
+or cleanup exit would leave T113 incomplete. The unchanged reset/test commands
+were invoked through bounded process capture without retaining unrestricted
+Supabase output; database test output was limited to the TAP result summary.
+
+| Command | Exit | Result |
+|---|---|---|
+| `node --version` | 0 | v24.20.0 |
+| `npm --version` | 0 | 11.19.0 |
+| `./node_modules/.bin/supabase --version` | 0 | 2.116.0 |
+| `npm run supabase:start` | 0 | Real local health checks passed |
+| `npm run env:local` | 0 | Only the two approved public variable names; ignored local file, values withheld |
+| `npm run db:reset` | 0 | All existing migrations replayed; no Phase 9 migration |
+| `npm run db:types:check` | 0 | Canonical artifact matches the clean database; no preceding write |
+| `npm run lint` | 0 | PASS |
+| `npm run typecheck` | 0 | PASS |
+| `npm run test:client` | 0 | 275/275, 16 suites |
+| `npm run db:test` | 0 | 287/287 pgTAP, including real-session SQL locking and ACL/RLS regression |
+| `npm run web:export` | 0 | Production Expo web export |
+| `npm run playwright:install` | 0 | Official pinned Docker runtime prepared |
+| `npm run test:e2e:security` | 0 | A/B PASS; C has exactly the expected controlled inner exit 1; one verified PNG on attempt 1; zero scanner findings |
+| `npm run test:e2e -- --grep @us3 --repeat-each=3` | 0 | All 18 individual trials below PASS; 51 attempts / 51 identities |
+| Read-only aggregate postcondition check | 0 | PostgreSQL 17.6; 27 rooms, 18 Ready, 9 Waiting, 18 distinct occupied guest seats; 52 anonymous users after reset |
+| Read-only Realtime publication/image check | 0 | Publication contains only `public.rooms`; server v2.129.3 |
+| `npm run supabase:stop` | 0 | Trap completed; no owned services remain |
+| `git diff --check` | 0 | Clean whitespace |
+
+The 27 rooms are the expected nine per repetition: one each for capacity,
+race and manipulation, and two each for read isolation, subscription isolation
+and legitimate cross-room navigation. The guest in the navigation case is
+legitimately admitted to two different rooms; this does not add a third seat to
+either room. Per-room assertions additionally compare all eight stored fields,
+not just aggregate counts. The read-only local SQL controller never acts as the
+caller in an access-control attack; no privileged key is sent to a browser.
+
+#### Individual T113 trials
+
+Each cell is a separately reported successful trial, with its actual new
+anonymous identity count in parentheses. No failed trial is hidden by averaging.
+
+| Case | Repetition 1 | Repetition 2 | Repetition 3 | Required observation in every trial |
+|---|---|---|---|---|
+| E05 / third participant | PASS (3) | PASS (3) | PASS (3) | `full`, all room-result fields null, approved Full UI, three rejected attempts, admitted host/guest unchanged and Ready |
+| E06 / final-seat race | PASS (3) | PASS (3) | PASS (3) | Two authenticated requests at barrier; exactly one `joined`, one `full`; one seat UPDATE; stable winner |
+| E12 / read isolation | PASS (2) | PASS (2) | PASS (2) | Known-ID and code reads return zero rows; private columns denied; both own rooms unchanged |
+| E12 / subscription isolation | PASS (3) | PASS (3) | PASS (3) | Unrelated subscription genuinely live, zero target payloads; authorized host observes real UPDATE and Ready |
+| E12 / stale navigation | PASS (3) | PASS (3) | PASS (3) | Old channel leave acknowledged; real delayed old response cannot replace the newly authorized room |
+| E12 / direct mutation | PASS (3) | PASS (3) | PASS (3) | 21 denied attacks with ordinary host/guest/outsider credentials; complete Ready row unchanged |
+| Total | PASS (17) | PASS (17) | PASS (17) | 18/18 trials; 51 identities |
+
+T109 registers both request routes before guest navigation, after distinct
+Anonymous Auth bootstraps. Both outbound `join_room` requests must arrive while
+neither is forwarded; the barrier then releases both unchanged before either
+response is awaited. The winner is selected from actual outcomes, never assumed
+to be a particular context. A read-only DOM observer catches transient false
+Ready in the loser. The admitted winner remains the sole guest after loser
+re-entry and host/winner `already_member` calls. Host receives one successful
+UPDATE and reaches Ready without reload/navigation. Browser dispatch overlap is
+paired with, not substituted for, the existing controlled SQL-lock concurrency
+trials in the passing pgTAP suite.
+
+T110 uses ordinary participant credentials for exact `id,code,state` Data API
+reads and a test-owned pinned SDK subscription. The unrelated subscription
+receives both transport join and actual
+`system(extension="postgres_changes", status="ok")`; absence of readiness,
+system error or timeout is always failure, not isolation proof. The existing
+access token is installed before this test-owned client subscribes, with no
+extra sign-in. A real guest then changes a fresh Waiting target and an authorized
+observer sees its UPDATE/Ready. The required bounded **1500 ms negative
+observation window starts only after that evidence**; no unrelated payload is
+received. It is not a readiness delay or application polling. The observed
+result is an allowed live stream filtered by RLS, not an explicit join denial.
+
+T111 holds one actual old-room HTTP response, performs normal SPA navigation
+through the manual code flow to another legitimate invitation, verifies the old
+channel's leave acknowledgement and the new channel's system-ready refetch, then
+delivers the old response unchanged. Response completion and actual animation
+frames are observed; no synthetic API payload, production state injection or
+fixed sleep is used. Only the new room remains displayed; both rows and the
+retained identity remain correct.
+
+T112 exercises host, guest and outsider separately: direct INSERT, host spoofing,
+guest replacement, guest clearing and DELETE each return HTTP 403 / SQLSTATE
+42501 (15 denials per trial). Explicit writes of either generated state return
+HTTP 400 / SQLSTATE 428C9 (6 denials per trial). PostgreSQL rejects generated
+column assignments before the missing UPDATE privilege is evaluated; the
+unchanged Phase 3 pgTAP tests independently prove both generated-column denial
+and absent UPDATE grants. Only that explicit state-only PATCH has the 428C9
+expectation; every other attack still requires exact permission denial. RLS
+and column grants, RPC function ACL and SECURITY DEFINER transition enforcement
+remain separate evidence boundaries; no application direct-write path or new
+write policy was added.
+
+#### Targeted attempts and identity accounting
+
+T108–T112 were checked in order only after their targeted real tests passed.
+Three initial test-harness failures were diagnosed and fixed before the final
+checkpoint, not treated as product success: T109 counted an explicit host
+re-entry as if it were another automatic join; the test-only T110 SDK subscribed
+before its asynchronous custom access-token initialization completed; T112
+incorrectly expected 403 for a generated-column assignment already covered as
+428C9 by the approved SQL tests. Fixes were confined to the new test assertions
+and test-client initialization. No production behavior was weakened.
+
+Every acceptance invocation below was preceded by an unfiltered passing C1
+invocation (one identity each). Failed attempts are included in the budget.
+
+| Acceptance invocation | Exit | Acceptance sign-ins | Preceding C1 sign-ins |
+|---|---|---|---|
+| T108 targeted E05 | 0 | 3 | 1 |
+| T109 first E06 | 1; counter assertion diagnosed | 3 | 1 |
+| T109 corrected E06 | 0 | 3 | 1 |
+| T110 first read/subscription selection | 1; read passed, subscription initialization failed before guest sign-in | 4 | 1 |
+| T110 corrected subscription selection | 0 | 3 | 1 |
+| T111 targeted stale navigation | 0 | 3 | 1 |
+| T112 first manipulation selection | 1; exact generated-state denial diagnosed | 3 | 1 |
+| T112 corrected manipulation selection | 0 | 3 | 1 |
+| Final T113 three-repeat selection | 0 | 51 | 1 |
+| Total for this Phase 9 execution | Final checkpoint PASS | 76 | 9 |
+
+**Actual total: 85 signup attempts, 85 distinct new identities; C1 9,
+acceptance 76.** The final clean-reset checkpoint alone consumed 52: C1 1 plus
+three acceptance repetitions of 17. All same-context re-entry/reload added zero
+identities; no HTTP 429 or automatic Auth retry occurred. Counts include all
+attempts across stack lifecycles and are not reset when services stop. Stack
+restart/reset was never used to evade the hourly allowance. The approved full
+suite budget remains N = 47 and the local limit remains 150; the standard US3
+allocation is E05 = 3, E06 = 3, E12 = 11. No quota/config change was made.
+
+#### C1, R01 and cleanup
+
+All browser invocations used the real local Auth/RPC/RLS/Realtime stack, Expo
+HTTP readiness and `mcr.microsoft.com/playwright:v1.63.0-noble`; no Supabase
+mock, global browser runtime or library-path workaround was used. C1 remains
+fail-closed: trace/HAR/video/automatic screenshots/storage-state export and raw
+network/WebSocket/process dumps remain disabled. The only new reporter fields
+are allowlisted US3 case labels and bounded repetition numbers, covered by the
+sanitization regression test. Each finalized invocation was scanned while its
+credential registry was still available, before clearing registry/IPC; all
+scans had zero findings, including the failed targeted attempts.
+
+Final receipts were inspected in `test-results/run-X3Ex8T` (C1: 6 files, exactly
+one approved PNG, attempt 1) and `test-results/run-hXmWlh` (18 US3 results,
+3 files). All 18 disposable directories from this execution were then removed
+after their scans/receipts were verified (84 files, including 9 approved C1
+PNGs). The nine pre-existing diagnostic directories were left unchanged.
+
+Cleanup receipts confirm all contexts finalized. Test-owned Realtime channels,
+interceptors and observers were removed, all 18 owned Playwright Docker runtimes
+were removed, Expo/Metro and local Supabase stopped, and registry/IPC cleared.
+No owned runtime process or credential socket directory remains. Loopback ports
+8081, 55320–55324, 55327 and 55329 are free. IDs, running states, StartedAt
+values and restart counts of all 18 unrelated Docker containers exactly match
+the continuation's pre-run snapshot; no global Docker cleanup occurred.
+
+R01 canonical SHA-256 remains
+`46f41c3ca2a88d65a2604f449b17aa10c36b535c8ee0a67047683fb37f80fb4b`.
+No `db:types` write ran. Protected specification/contract/configuration,
+migration and generated files match their starting hashes. No versionable
+credentials, runtime state, disposable artifacts or untracked files were added.
+The four story checkpoints T077/T106/T107/T113 are now evidenced; this does not
+claim completion of Phase 10 or fresh-clone final acceptance. T001–T113 are
+checked and T114–T121 remain unchecked. No staging, commit, push, branch/tag
+creation or Phase 10 work occurred. Phase 9 complete; stop before T114.
 
 ## Phase 10: Polish — Complete Validation and Documentation
 

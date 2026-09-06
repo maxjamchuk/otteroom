@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { createClient } from '@supabase/supabase-js';
 import { expect, type Page, type Route, type Browser, type BrowserContextOptions, type TestInfo, type Response, type WebSocketRoute } from '@playwright/test';
 import { test, safeBody, SafeDiagnostics } from './support/safe-diagnostics';
 
 // Binding allocation from quickstart; later cases consume these trials, not
-// additional fixture/bootstrap identities. Phase 8 closes US2/US4; the existing
-// capacity/isolation checks remain smoke, not full US3 acceptance.
+// additional fixture/bootstrap identities. US3 strengthens the existing smokes
+// in place and uses exactly the separately allocated E06/E12 trials.
 export const anonymousBudget = Object.freeze({
   E01: 3, E02: 2, E03: 4, E04: 4, E05: 3, E06: 3,
   E07: 5, E08: 4, E09: 2, E10: 2, E11: 1, E12: 11, auth: 3,
@@ -12,6 +14,24 @@ export const anonymousBudget = Object.freeze({
 
 type PublicApi = { origin: string; publicKey: string };
 type RoomProjection = { id: string; code: string; state: string };
+
+// Test-controller SELECT only: private membership/timestamps are postconditions,
+// never caller credentials, browser authorization or an application endpoint.
+// Local container Unix authentication avoids secrets in argv/env/output.
+function roomSnapshot(room: RoomProjection) {
+  if (!/^[0-9a-f-]{36}$/.test(room.id) || !/^[0-9A-F]{10}$/.test(room.code)) throw new Error('E2E_SAFE_FAILURE');
+  const result = spawnSync('docker', ['exec', 'supabase_db_otteroom-room-session',
+    'psql', '-X', '-U', 'postgres', '-d', 'postgres', '-At', '-c',
+    `SELECT coalesce(json_agg(r ORDER BY id), '[]'::json) FROM public.rooms r WHERE id = '${room.id}'::uuid OR code = '${room.code}';`],
+  { encoding: 'utf8', maxBuffer: 65536, timeout: 10000 });
+  if (result.status !== 0 || result.error) throw new Error('E2E_SAFE_FAILURE');
+  try {
+    const rows = JSON.parse(result.stdout);
+    if (!Array.isArray(rows) || rows.length !== 1 || rows[0].id !== room.id || rows[0].code !== room.code ||
+      Object.keys(rows[0]).sort().join(',') !== 'code,created_at,creation_request_id,guest_user_id,host_user_id,id,state,updated_at') throw new Error();
+    return rows[0] as { id: string; code: string; state: string; host_user_id: string; guest_user_id: string | null; creation_request_id: string; created_at: string; updated_at: string };
+  } catch { throw new Error('E2E_SAFE_FAILURE'); }
+}
 const createEndpoint = '**/rest/v1/rpc/create_room';
 
 async function startHost(page: Page, diagnostics: SafeDiagnostics): Promise<PublicApi> {
@@ -29,20 +49,20 @@ async function startHost(page: Page, diagnostics: SafeDiagnostics): Promise<Publ
   return { origin: new URL(signup.url()).origin, publicKey };
 }
 
-async function ownRooms(page: Page, api: PublicApi, targetId?: string): Promise<RoomProjection[]> {
+async function ownRooms(page: Page, api: PublicApi, targetId?: string, targetCode?: string): Promise<RoomProjection[]> {
   // A real member-authorized Data API read, never an owner/service-role oracle.
   // Session access stays inside this browser context and only id/code/state return.
-  const rows: unknown = await page.evaluate(async ({ origin, publicKey, targetId }) => {
+  const rows: unknown = await page.evaluate(async ({ origin, publicKey, targetId, targetCode }) => {
     const key = Object.keys(localStorage).find(name => /^sb-.+-auth-token$/.test(name));
     const session = key ? JSON.parse(localStorage.getItem(key) ?? 'null') : null;
     if (!session?.access_token) throw new Error('E2E_SAFE_FAILURE');
-    const filter = targetId ? `&id=eq.${encodeURIComponent(targetId)}` : '';
+    const filter = targetId ? `&id=eq.${encodeURIComponent(targetId)}` : targetCode ? `&code=eq.${encodeURIComponent(targetCode)}` : '';
     const response = await fetch(`${origin}/rest/v1/rooms?select=id,code,state${filter}`, {
       headers: { apikey: publicKey, Authorization: `Bearer ${session.access_token}` },
     });
     if (!response.ok) throw new Error('E2E_SAFE_FAILURE');
     return response.json();
-  }, { ...api, targetId });
+  }, { ...api, targetId, targetCode });
   if (!Array.isArray(rows) || rows.length > 10 || rows.some(row => !row ||
     Object.keys(row).sort().join(',') !== 'code,id,state' || typeof row.id !== 'string' ||
     typeof row.code !== 'string' || !/^[0-9A-F]{10}$/.test(row.code) || !['waiting', 'ready'].includes(row.state))) {
@@ -258,7 +278,8 @@ async function realtimeBarrier(page: Page, holdInitial = false) {
   let holdReady = false;
   let readyFrames: { connection: Connection; message: string | Buffer }[] = [];
   const dbReady = new Set<Connection>();
-  const stats = { held: 0, transportJoins: 0, readiness: 0, readyHeld: 0, prematureReads: 0, reads: 0, updates: 0, losses: 0, joins: 0 };
+  const stats = { held: 0, transportJoins: 0, readiness: 0, readyHeld: 0, prematureReads: 0, reads: 0, updates: 0, losses: 0, joins: 0, leaves: 0, leaveAcks: 0 };
+  const pendingLeaves = new Map<string, string>(), retiredRooms = new Set<string>();
   const changed = () => { for (const notify of waiting) notify(); };
   const failure = () => { failed = true; changed(); };
   const wait = (name: keyof typeof stats, minimum: number) => new Promise<void>((resolve, reject) => {
@@ -275,7 +296,7 @@ async function realtimeBarrier(page: Page, holdInitial = false) {
     if (typeof message !== 'string' || message.length > 65536) throw new Error('E2E_SAFE_FAILURE');
     const value = JSON.parse(message);
     if (!Array.isArray(value) || value.length !== 5) throw new Error('E2E_SAFE_FAILURE');
-    return { topic: value[2], event: value[3], payload: value[4] };
+    return { ref: value[1], topic: value[2], event: value[3], payload: value[4] };
   };
   const closeConnection = async (c: Connection) => {
     connections.delete(c); dbReady.delete(c);
@@ -312,6 +333,9 @@ async function realtimeBarrier(page: Page, holdInitial = false) {
     browser.onMessage(message => {
       try {
         const frame = decode(message);
+        if (frame.event === 'phx_leave' && /^realtime:room:/.test(frame.topic)) {
+          pendingLeaves.set(frame.ref, frame.topic.slice('realtime:room:'.length)); stats.leaves++; changed();
+        }
         if (frame.event === 'phx_join' && /^realtime:room:/.test(frame.topic)) {
           const filters = frame.payload?.config?.postgres_changes;
           if (!Array.isArray(filters) || filters.length !== 1 || filters[0].event !== 'UPDATE' ||
@@ -327,6 +351,9 @@ async function realtimeBarrier(page: Page, holdInitial = false) {
       try {
         const frame = decode(message);
         if (/^realtime:room:/.test(frame.topic)) {
+          if (frame.event === 'phx_reply' && frame.payload?.status === 'ok' && pendingLeaves.has(frame.ref)) {
+            retiredRooms.add(pendingLeaves.get(frame.ref)!); pendingLeaves.delete(frame.ref); stats.leaveAcks++;
+          }
           if (frame.event === 'phx_reply' && frame.payload?.status === 'ok' && Array.isArray(frame.payload.response?.postgres_changes)) stats.transportJoins++;
           if (frame.event === 'system' && frame.payload?.extension === 'postgres_changes') {
             if (frame.payload.status === 'ok') {
@@ -343,6 +370,7 @@ async function realtimeBarrier(page: Page, holdInitial = false) {
   });
   return {
     stats, wait,
+    assertRetired(id: string) { expect(retiredRooms.has(id)).toBe(true); },
     release() { hold = false; const frames = held; held = []; for (const { connection, message } of frames) connection.server.send(message); },
     async disconnect() { paused = true; const before = stats.losses; await Promise.all([...connections].map(closeConnection)); await wait('losses', before + 1); },
     holdReadiness() { holdReady = true; },
@@ -357,7 +385,7 @@ async function realtimeBarrier(page: Page, holdInitial = false) {
     resume() { paused = false; },
     assertHealthy() { expect(!failed && !disposed && stats.prematureReads === 0).toBe(true); },
     async close() {
-      disposed = true; held = []; readyFrames = []; dbReady.clear(); changed();
+      disposed = true; held = []; readyFrames = []; dbReady.clear(); pendingLeaves.clear(); retiredRooms.clear(); changed();
       page.removeListener('websocket', socket); page.removeListener('request', request); page.removeListener('response', response);
       await Promise.all([...connections].map(closeConnection));
       // Playwright's WS routes have context lifetime; the fixture closes that
@@ -589,44 +617,370 @@ test('@us2-join E04 pre-acceptance failure preserves Waiting then same-code retr
   });
 });
 
-test('@capacity-smoke E05 minimal third identity rejection preserves admitted seats', async ({ page, diagnostics, browser, baseURL, viewport }, info) => {
+test('@us3 E05 full-room repeated rejection preserves admitted seats @capacity-smoke', async ({ page, diagnostics, browser, baseURL, viewport }, info) => {
   await safeBody(diagnostics, async () => {
     const { api, room, invitation, participant } = await createWaiting(page, diagnostics);
     await withParticipants(browser, { baseURL, viewport }, info, 2, async ([guest, third]) => {
       await linkGuest(guest, room, invitation);
+      await assertReady(page, diagnostics, room);
       const guestId = await ownParticipant(guest.page);
+      const before = roomSnapshot(room);
+      expect(before.host_user_id === participant && before.guest_user_id === guestId && before.state === 'ready').toBe(true);
       const rejected = third.page.waitForResponse(response => response.url().endsWith('/rpc/join_room'));
       await third.page.goto(invitation);
       await assertRejected(await rejected, 'full');
       await assertNoRoomDetails(third.page, third, fullMessage);
       const thirdId = await ownParticipant(third.page);
       expect(new Set([participant, guestId, thirdId]).size === 3 && (await ownRooms(third.page, api)).length === 0).toBe(true);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const repeated = third.page.waitForResponse(response => response.url().endsWith('/rpc/join_room'));
+        await third.page.reload();
+        await assertRejected(await repeated, 'full');
+        await assertNoRoomDetails(third.page, third, fullMessage);
+        expect((await ownParticipant(third.page)) === thirdId && JSON.stringify(roomSnapshot(room)) === JSON.stringify(before)).toBe(true);
+        expect(await third.page.evaluate(values => values.every(value => !document.body.innerText.includes(value)), [room.id, participant, guestId, thirdId])).toBe(true);
+      }
       await assertReady(page, diagnostics, room);
       await repeatReady(page, diagnostics, api, room, 'host');
       await repeatReady(guest.page, guest, api, room, 'guest');
       expect((await ownParticipant(page)) === participant && (await ownParticipant(guest.page)) === guestId).toBe(true);
+      expect(JSON.stringify(roomSnapshot(room)) === JSON.stringify(before)).toBe(true);
       expect(diagnostics.signupAttempts + guest.signupAttempts + third.signupAttempts === anonymousBudget.E05).toBe(true);
-      await diagnostics.record({ scenario: 'E05', outcome: 'minimal full smoke; third rejected; same admitted host guest' });
+      await diagnostics.record({ scenario: 'E05', outcome: 'full; all projection fields null; three rejections; admitted host guest Ready; complete row unchanged' });
     });
   });
 });
 
-test('@capacity-smoke E12 minimal known-ID RLS read preserves two own rooms', async ({ page, diagnostics, browser, baseURL, viewport }, info) => {
+test('@us3 E06 overlapping final-seat requests accept exactly one guest', async ({ page, diagnostics, browser, baseURL, viewport }, info) => {
+  await safeBody(diagnostics, async () => {
+    const transport = await realtimeBarrier(page);
+    try {
+      const { api, room, participant } = await createWaiting(page, diagnostics);
+      await transport.wait('readiness', 1); await transport.wait('reads', 1);
+      const before = roomSnapshot(room);
+      expect(before.host_user_id === participant && before.guest_user_id === null && before.state === 'waiting').toBe(true);
+      await withParticipants(browser, { baseURL, viewport }, info, 2, async guests => {
+        for (const guest of guests) await startHost(guest.page, guest);
+        const identities = await Promise.all(guests.map(guest => ownParticipant(guest.page)));
+        expect(new Set([participant, ...identities]).size === 3).toBe(true);
+        let release!: () => void, arrived!: () => void, timedOut = false;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        const barrier = new Promise<void>(resolve => { arrived = resolve; });
+        const held = new Set<number>(), forwarded = new Set<number>();
+        let interceptionFailed = false;
+        const deadline = setTimeout(() => { timedOut = true; arrived(); release(); }, 10000);
+        const handlers = guests.map((_, index) => async (route: Route) => {
+          try {
+            if (held.has(index) || route.request().postDataJSON()?.p_room_code !== room.code) throw new Error();
+            held.add(index); if (held.size === 2) arrived();
+            await gate;
+            if (timedOut || held.size !== 2) { await route.abort(); return; }
+            forwarded.add(index); await route.continue();
+          } catch { interceptionFailed = true; await route.abort().catch(() => {}); }
+        });
+        const monitors = [];
+        try {
+          // Both routes precede navigation. Both callers are already authenticated.
+          for (let index = 0; index < guests.length; index++) {
+            await guests[index].page.route(joinEndpoint, handlers[index], { times: 1 });
+            monitors.push(await monitorRendered(guests[index].page));
+            await guests[index].page.getByLabel('Room code input', { exact: true }).fill(room.code);
+          }
+          const pending = guests.map(guest => guest.page.waitForResponse(response => response.url().endsWith('/rpc/join_room')));
+          // Dispatch both actions before observing either RPC outcome.
+          await Promise.all(guests.map(guest => guest.page.getByRole('button', { name: 'Join Room', exact: true }).click()));
+          await barrier;
+          expect(!timedOut && held.size === 2 && forwarded.size === 0).toBe(true);
+          clearTimeout(deadline); release();
+          const responses = await Promise.all(pending);
+          const outcomes = await Promise.all(responses.map(async response => (await response.json())[0]?.outcome));
+          expect(!interceptionFailed && forwarded.size === 2 && outcomes.filter(outcome => outcome === 'joined').length === 1 && outcomes.filter(outcome => outcome === 'full').length === 1).toBe(true);
+          const winnerIndex = outcomes.indexOf('joined'), loserIndex = outcomes.indexOf('full');
+          const winner = guests[winnerIndex], loser = guests[loserIndex];
+          await assertAccepted(responses[winnerIndex], room, 'joined', 'guest', 'ready');
+          await assertRejected(responses[loserIndex], 'full');
+          await assertReady(winner.page, winner, room);
+          await assertNoRoomDetails(loser.page, loser, fullMessage);
+          expect(!await monitors[loserIndex].violated()).toBe(true);
+          await transport.wait('updates', 1); await transport.wait('reads', 2);
+          await assertReady(page, diagnostics, room);
+          const committed = roomSnapshot(room);
+          expect(committed.host_user_id === before.host_user_id && committed.guest_user_id === identities[winnerIndex] &&
+            committed.state === 'ready' && committed.creation_request_id === before.creation_request_id && committed.created_at === before.created_at).toBe(true);
+          await monitors[loserIndex].close();
+          const rejected = loser.page.waitForResponse(response => response.url().endsWith('/rpc/join_room'));
+          await loser.page.reload(); await assertRejected(await rejected, 'full');
+          await assertNoRoomDetails(loser.page, loser, fullMessage);
+          expect((await ownRooms(loser.page, api)).length === 0).toBe(true);
+          expect(transport.stats.joins === 1).toBe(true);
+          await repeatJoin(page, api, room, 'host'); await repeatJoin(winner.page, api, room, 'guest');
+          expect(JSON.stringify(roomSnapshot(room)) === JSON.stringify(committed)).toBe(true);
+          expect(transport.stats.updates === 1 && transport.stats.joins === 2).toBe(true);
+          for (let index = 0; index < guests.length; index++) {
+            expect((await ownParticipant(guests[index].page)) === identities[index]).toBe(true);
+            await guests[index].assertAuthAccounting(1, 1);
+          }
+          transport.assertHealthy();
+          await diagnostics.record({ scenario: 'E06', outcome: 'two authenticated requests held then forwarded; exactly joined/full; one UPDATE; no transient loser Ready; stable committed winner; SQL lock evidence paired' });
+        } finally {
+          clearTimeout(deadline); release();
+          for (let index = 0; index < guests.length; index++) {
+            await guests[index].page.unroute(joinEndpoint, handlers[index]);
+            await monitors[index]?.close();
+          }
+        }
+      });
+    } finally { await transport.close(); }
+  });
+});
+
+// Read-only browser observer: no production state injection or DOM persistence.
+// Used before a race to catch even transient false Ready, or after navigation to
+// detect stale projection. Only a boolean crosses the diagnostics boundary.
+async function monitorRendered(page: Page, forbiddenCode?: string) {
+  const handle = await page.evaluateHandle(code => {
+    let violation = false;
+    const inspect = () => {
+      if (code) violation ||= document.querySelector('[aria-label="Room code"]')?.textContent === code;
+      else violation ||= [...document.querySelectorAll('[role="heading"]')].some(node => node.textContent === 'Ready') || /2 of 2/.test(document.body.innerText);
+    };
+    const observer = new MutationObserver(inspect);
+    observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true }); inspect();
+    return { violated: () => { inspect(); return violation; }, close: () => observer.disconnect() };
+  }, forbiddenCode);
+  let closed = false;
+  return {
+    violated: () => handle.evaluate(observer => observer.violated()),
+    async close() {
+      if (closed) return;
+      closed = true;
+      try { await handle.evaluate(observer => observer.close()); }
+      finally { await handle.dispose(); }
+    },
+  };
+}
+
+test('@us3 E12 known-ID and code RLS reads preserve two own rooms @capacity-smoke', async ({ page, diagnostics, browser, baseURL, viewport }, info) => {
   await safeBody(diagnostics, async () => {
     const owner = await createWaiting(page, diagnostics);
     await withParticipants(browser, { baseURL, viewport }, info, 1, async ([unrelated]) => {
       const other = await createWaiting(unrelated.page, unrelated);
       expect(owner.participant !== other.participant && owner.room.id !== other.room.id).toBe(true);
       const beforeOwner = await ownRooms(page, owner.api), beforeOther = await ownRooms(unrelated.page, other.api);
+      const snapshotOwner = roomSnapshot(owner.room), snapshotOther = roomSnapshot(other.room);
       // Internal ID came only from its owner's accepted real create/re-entry.
       // This request uses the unrelated browser's own ordinary Auth and RLS.
       expect((await ownRooms(unrelated.page, other.api, owner.room.id)).length === 0).toBe(true);
+      expect((await ownRooms(unrelated.page, other.api, undefined, owner.room.code)).length === 0).toBe(true);
+      await assertDenied(unrelated.page, other.api, { method: 'GET', query: `select=host_user_id,guest_user_id&id=eq.${owner.room.id}` });
+      await assertDenied(page, owner.api, { method: 'GET', query: `select=host_user_id,guest_user_id&id=eq.${owner.room.id}` });
       expect(JSON.stringify(await ownRooms(page, owner.api)) === JSON.stringify(beforeOwner)).toBe(true);
       expect(JSON.stringify(await ownRooms(unrelated.page, other.api)) === JSON.stringify(beforeOther)).toBe(true);
       await assertWaiting(page, diagnostics, owner.room);
       await assertWaiting(unrelated.page, unrelated, other.room);
+      expect(JSON.stringify(roomSnapshot(owner.room)) === JSON.stringify(snapshotOwner) && JSON.stringify(roomSnapshot(other.room)) === JSON.stringify(snapshotOther)).toBe(true);
+      expect(await unrelated.page.evaluate(values => values.every(value => !document.body.innerText.includes(value)), [owner.room.id, owner.room.code, owner.participant])).toBe(true);
       expect(diagnostics.signupAttempts + unrelated.signupAttempts === 2).toBe(true);
-      await diagnostics.record({ scenario: 'E12', outcome: 'minimal known-id exact-column read zero rows; both own rooms unchanged; not full US3' });
+      await diagnostics.record({ scenario: 'E12', outcome: 'known-id and code exact-column reads zero rows; private columns denied; both complete own rows unchanged' });
+    });
+  });
+});
+
+// Every attack uses the originating browser's ordinary session. Raw responses
+// stay in that context; only HTTP status and the exact permission category return.
+async function assertDenied(page: Page, api: PublicApi, operation: { method: 'GET' | 'POST' | 'PATCH' | 'DELETE'; query?: string; body?: Record<string, unknown> }, expected: 'permission' | 'generated-state' = 'permission') {
+  const result = await page.evaluate(async ({ api, operation }) => {
+    const key = Object.keys(localStorage).find(name => /^sb-.+-auth-token$/.test(name));
+    const session = key ? JSON.parse(localStorage.getItem(key) ?? 'null') : null;
+    if (!session?.access_token) throw new Error('E2E_SAFE_FAILURE');
+    const response = await fetch(`${api.origin}/rest/v1/rooms${operation.query ? '?' + operation.query : ''}`, {
+      method: operation.method,
+      headers: { apikey: api.publicKey, Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+      ...(operation.body ? { body: JSON.stringify(operation.body) } : {}),
+    });
+    const value = await response.json();
+    return { status: response.status, permissionDenied: value?.code === '42501', generatedDenied: value?.code === '428C9' };
+  }, { api, operation });
+  if (expected === 'generated-state') {
+    // Existing Phase 3 pgTAP separately proves missing UPDATE privileges: PG
+    // rejects an explicit generated-column assignment before checking that ACL.
+    expect(operation.method === 'PATCH' && Object.keys(operation.body ?? {}).join(',') === 'state').toBe(true);
+    expect(result.status === 400 && result.generatedDenied).toBe(true);
+  } else expect(result.status === 403 && result.permissionDenied).toBe(true);
+}
+
+test('@us3 E12 live unrelated subscription receives no authorized target UPDATE', async ({ page, diagnostics, browser, baseURL, viewport }, info) => {
+  await safeBody(diagnostics, async () => {
+    const transport = await realtimeBarrier(page);
+    try {
+      const target = await createWaiting(page, diagnostics);
+      await transport.wait('readiness', 1); await transport.wait('reads', 1);
+      await withParticipants(browser, { baseURL, viewport }, info, 2, async ([unrelated, guest]) => {
+        const other = await createWaiting(unrelated.page, unrelated);
+        const before = roomSnapshot(other.room);
+        expect((await ownRooms(unrelated.page, other.api, target.room.id)).length === 0).toBe(true);
+        // Select only this context's access token, register it in memory, and use
+        // the pinned ordinary SDK. No session export, privileged caller or signup.
+        let token: string | undefined = await unrelated.page.evaluate(() => {
+          const key = Object.keys(localStorage).find(name => /^sb-.+-auth-token$/.test(name));
+          return key ? JSON.parse(localStorage.getItem(key) ?? 'null')?.access_token : undefined;
+        });
+        if (typeof token !== 'string' || !token) throw new Error('E2E_SAFE_FAILURE');
+        await unrelated.register([token]);
+        const client = createClient(other.api.origin, other.api.publicKey, {
+          accessToken: async () => token ?? null,
+          auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+          realtime: { disconnectOnEmptyChannelsAfterMs: 0, logger: () => {} },
+        });
+        // This test-owned SDK has no application bootstrap/auth listener. Finish
+        // installing the existing caller token before constructing its join.
+        await client.realtime.setAuth(token);
+        expect(client.realtime.accessTokenValue === token).toBe(true);
+        let transportJoined = false, live = false, failed = false, payloads = 0;
+        let expired = false, channelError = false, systemError = false;
+        let ready!: () => void;
+        const barrier = new Promise<void>(resolve => { ready = resolve; });
+        const deadline = setTimeout(() => { expired = true; failed = true; ready(); }, 15000);
+        const channel = client.channel(`isolation:${target.room.id}`)
+          .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${target.room.id}`, select: ['id'] }, () => { payloads++; })
+          .on('system', {}, payload => {
+            if (payload.extension !== 'postgres_changes') return;
+            if (payload.status === 'ok') live = true; else { systemError = true; failed = true; }
+            ready();
+          }).subscribe(status => {
+            if (status === 'SUBSCRIBED') transportJoined = true;
+            else if (['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED'].includes(status)) { channelError = true; failed = true; ready(); }
+          });
+        try {
+          await barrier; clearTimeout(deadline);
+          // A timeout/system error is failure, NOT isolation evidence. This trial
+          // requires the allowed-but-RLS-filtered live stream path explicitly.
+          expect(!expired).toBe(true);
+          expect(!channelError).toBe(true);
+          expect(!systemError).toBe(true);
+          expect(transportJoined).toBe(true);
+          expect(!failed && live).toBe(true);
+          await linkGuest(guest, target.room, target.invitation);
+          await transport.wait('updates', 1); await transport.wait('reads', 2);
+          await assertReady(page, diagnostics, target.room);
+          // Negative observation window required by T110, only AFTER confirmed
+          // readiness and an authorized observer's genuine committed UPDATE.
+          await new Promise<void>(resolve => setTimeout(resolve, 1500));
+          expect(!failed && live && payloads === 0).toBe(true);
+          expect((await ownRooms(unrelated.page, other.api, target.room.id)).length === 0).toBe(true);
+          expect(JSON.stringify(roomSnapshot(other.room)) === JSON.stringify(before)).toBe(true);
+          const admitted = roomSnapshot(target.room);
+          expect(admitted.host_user_id === target.participant && admitted.guest_user_id === await ownParticipant(guest.page) && admitted.state === 'ready').toBe(true);
+          await assertWaiting(unrelated.page, unrelated, other.room);
+          expect(await unrelated.page.evaluate(values => values.every(value => !document.body.innerText.includes(value)), [target.room.id, target.room.code, target.participant])).toBe(true);
+          transport.assertHealthy();
+          await diagnostics.record({ scenario: 'E12', outcome: 'unrelated ordinary authenticated subscription system-ok; live empty stream; authorized observer UPDATE and Ready; 1500ms negative window; zero disclosure' });
+        } finally {
+          clearTimeout(deadline);
+          try { expect(await client.removeChannel(channel) === 'ok').toBe(true); }
+          finally { await client.realtime.disconnect(); token = undefined; }
+        }
+      });
+    } finally { await transport.close(); }
+  });
+});
+
+test('@us3 E12 delayed old-room response cannot contaminate legitimate new navigation', async ({ page, diagnostics, browser, baseURL, viewport }, info) => {
+  await safeBody(diagnostics, async () => {
+    const old = await createWaiting(page, diagnostics);
+    await withParticipants(browser, { baseURL, viewport }, info, 2, async ([otherHost, guest]) => {
+      const next = await createWaiting(otherHost.page, otherHost);
+      const transport = await realtimeBarrier(guest.page);
+      const matchesOld = (url: URL) => url.pathname === '/rest/v1/rooms' && url.searchParams.get('id') === `eq.${old.room.id}`;
+      let release!: () => void, captured!: () => void, delivered!: () => void;
+      let failed = false, held = 0;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const capturedResponse = new Promise<void>(resolve => { captured = resolve; });
+      const deliveredResponse = new Promise<void>(resolve => { delivered = resolve; });
+      const deadline = setTimeout(() => { failed = true; captured(); delivered(); release(); }, 15000);
+      const hold = async (route: Route) => {
+        try {
+          const response = await route.fetch({ maxRetries: 0, maxRedirects: 0, timeout: 10000 });
+          try {
+            const rows = await response.json();
+            if (!response.ok() || !Array.isArray(rows) || rows.length !== 1 || rows[0].id !== old.room.id || rows[0].state !== 'ready') throw new Error();
+            held++; captured(); await gate;
+            await route.fulfill({ response }); delivered();
+          } finally { await response.dispose(); }
+        } catch { failed = true; captured(); delivered(); await route.abort().catch(() => {}); }
+      };
+      let monitor: Awaited<ReturnType<typeof monitorRendered>> | undefined;
+      await guest.page.route(matchesOld, hold, { times: 1 });
+      try {
+        await linkGuest(guest, old.room, old.invitation);
+        const participant = await ownParticipant(guest.page);
+        await transport.wait('readiness', 1); await capturedResponse;
+        expect(!failed && held === 1 && transport.stats.reads === 0).toBe(true);
+        // Actual SPA route change keeps the old fetch alive, unlike a document
+        // reload which would destroy the old JS generation instead of testing it.
+        await guest.page.getByRole('link', { name: 'Back to home', exact: true }).click();
+        await expect(guest.page.getByRole('button', { name: 'Join Room', exact: true })).toBeVisible();
+        const joined = guest.page.waitForResponse(response => response.url().endsWith('/rpc/join_room'));
+        await guest.page.getByLabel('Room code input', { exact: true }).fill(next.room.code);
+        await guest.page.getByRole('button', { name: 'Join Room', exact: true }).click();
+        await assertAccepted(await joined, next.room, 'joined', 'guest', 'ready');
+        await assertReady(guest.page, guest, next.room);
+        await transport.wait('leaveAcks', 1); transport.assertRetired(old.room.id);
+        await transport.wait('readiness', 2); await transport.wait('reads', 1);
+        monitor = await monitorRendered(guest.page, old.room.code);
+        const beforeOld = roomSnapshot(old.room), beforeNew = roomSnapshot(next.room);
+        const observed = guest.page.waitForResponse(response => matchesOld(new URL(response.url())));
+        release(); await deliveredResponse;
+        const stale = await observed; expect(await stale.finished() === null).toBe(true);
+        // Flush actual browser rendering turns after delivery, not a fixed sleep.
+        await guest.page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+        expect(!failed && !await monitor.violated()).toBe(true);
+        await assertReady(guest.page, guest, next.room);
+        expect((await ownParticipant(guest.page)) === participant && beforeOld.guest_user_id === participant && beforeNew.guest_user_id === participant).toBe(true);
+        expect(JSON.stringify(roomSnapshot(old.room)) === JSON.stringify(beforeOld) && JSON.stringify(roomSnapshot(next.room)) === JSON.stringify(beforeNew)).toBe(true);
+        await assertReady(page, diagnostics, old.room); await assertReady(otherHost.page, otherHost, next.room);
+        transport.assertHealthy();
+        await diagnostics.record({ scenario: 'E12', outcome: 'real old response held; authorized SPA navigation; old channel leave acknowledged; unchanged response released; only new room; same participant' });
+      } finally {
+        clearTimeout(deadline); release();
+        await guest.page.unroute(matchesOld, hold);
+        await monitor?.close(); await transport.close();
+      }
+    });
+  });
+});
+
+test('@us3 E12 direct writes and participant spoofing cannot change Ready membership', async ({ page, diagnostics, browser, baseURL, viewport }, info) => {
+  await safeBody(diagnostics, async () => {
+    const { api, room, invitation, participant } = await createWaiting(page, diagnostics);
+    await withParticipants(browser, { baseURL, viewport }, info, 2, async ([guest, outsider]) => {
+      await linkGuest(guest, room, invitation); await assertReady(page, diagnostics, room);
+      await startHost(outsider.page, outsider);
+      const guestId = await ownParticipant(guest.page), outsiderId = await ownParticipant(outsider.page);
+      expect(new Set([participant, guestId, outsiderId]).size === 3).toBe(true);
+      const before = roomSnapshot(room);
+      for (const caller of [diagnostics, guest, outsider]) {
+        const code = randomUUID().replaceAll('-', '').slice(0, 10).toUpperCase();
+        await assertDenied(caller.page, api, { method: 'POST', body: {
+          code, creation_request_id: randomUUID(), host_user_id: participant, guest_user_id: outsiderId,
+        } });
+        for (const body of [
+          { host_user_id: outsiderId }, { guest_user_id: outsiderId },
+          { guest_user_id: null },
+        ]) await assertDenied(caller.page, api, { method: 'PATCH', query: `id=eq.${room.id}`, body });
+        for (const state of ['waiting', 'ready']) await assertDenied(caller.page, api, { method: 'PATCH', query: `id=eq.${room.id}`, body: { state } }, 'generated-state');
+        await assertDenied(caller.page, api, { method: 'DELETE', query: `id=eq.${room.id}` });
+        expect(JSON.stringify(roomSnapshot(room)) === JSON.stringify(before)).toBe(true);
+        await caller.assertAuthAccounting(1, 1);
+      }
+      expect((await ownRooms(outsider.page, api)).length === 0 && before.host_user_id === participant && before.guest_user_id === guestId && before.state === 'ready').toBe(true);
+      await repeatJoin(page, api, room, 'host'); await repeatJoin(guest.page, api, room, 'guest');
+      for (const caller of [diagnostics, guest]) {
+        await assertReady(caller.page, caller, room);
+        expect((await ownRooms(caller.page, api)).length === 1).toBe(true);
+      }
+      expect(JSON.stringify(roomSnapshot(room)) === JSON.stringify(before)).toBe(true);
+      await diagnostics.record({ scenario: 'E12', outcome: 'host guest outsider ordinary credentials; 15 HTTP403 permission denials; 6 HTTP400 generated-state denials; UPDATE ACL separately proven in pgTAP; complete row unchanged' });
     });
   });
 });

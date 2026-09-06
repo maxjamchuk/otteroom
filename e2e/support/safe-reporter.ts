@@ -19,6 +19,7 @@ function scenarioFor(title: unknown): string {
   if (/^@us2-join E(?:02|04|10|11) /.test(title)) return 'us2-join';
   if (/^@us2-realtime E03 /.test(title)) return 'us2-realtime';
   if (/^@us4 E(?:07|08|09) /.test(title)) return 'us4';
+  if (/^@us3 E(?:05|06|12) /.test(title)) return 'us3';
   if (/^@capacity-smoke E(?:05|12) /.test(title)) return 'capacity-smoke';
   if (title.startsWith('@diagnostics-static A ')) return 'A';
   if (title.startsWith('@diagnostics-static B ')) return 'B';
@@ -26,7 +27,17 @@ function scenarioFor(title: unknown): string {
   return 'unclassified';
 }
 
-export function safeResult(test: { title?: unknown; expectedStatus?: unknown }, result: SafeInput) {
+function browserCaseFor(title: unknown): string {
+  if (typeof title !== 'string') return 'none';
+  for (const [prefix, label] of [
+    ['@us3 E05 ', 'E05'], ['@us3 E06 ', 'E06'],
+    ['@us3 E12 known-', 'E12-read'], ['@us3 E12 live ', 'E12-subscription'],
+    ['@us3 E12 delayed ', 'E12-navigation'], ['@us3 E12 direct ', 'E12-mutation'],
+  ]) if (title.startsWith(prefix)) return label;
+  return 'none';
+}
+
+export function safeResult(test: { title?: unknown; expectedStatus?: unknown; repeatEachIndex?: unknown }, result: SafeInput) {
   const errorMessage = typeof result.error?.message === 'string'
     ? result.error.message.replace(/\u001b\[[0-9;]*m/g, '') : '';
   const controlled = test.expectedStatus === 'passed' && result.errorCount === 1 &&
@@ -39,6 +50,8 @@ export function safeResult(test: { title?: unknown; expectedStatus?: unknown }, 
     .reduce((sum, item) => sum + Number(item.description), 0);
   return {
     scenario: scenarioFor(test.title),
+    browserCase: browserCaseFor(test.title),
+    repetition: typeof test.repeatEachIndex === 'number' && Number.isInteger(test.repeatEachIndex) && test.repeatEachIndex >= 0 && test.repeatEachIndex <= 2 ? test.repeatEachIndex + 1 : 0,
     context: receipt('safe-context-label', 'primary') ? 'primary' : 'none',
     status,
     category: controlled
@@ -91,7 +104,7 @@ export default class SafeReporter implements Reporter {
     // A loader/config error may prevent onBegin. Never fall back to repository CWD.
     if (!this.#directory) return;
     if (this.#runnerFailed) this.#results.push({
-      scenario: 'runner', context: 'none', status: 'failed', category: 'E2E_FAILURE',
+      scenario: 'runner', browserCase: 'none', repetition: 0, context: 'none', status: 'failed', category: 'E2E_FAILURE',
       cleanup: false, authSuccess: false, signups: 0, identities: 0, budgetFailure: false, capture: 'none', captureAttempts: 0, artifactsComplete: false, location: 'none', stage: 'none', ui: 'none', uiReason: 'none',
     });
     // Every field was projected to fixed vocabulary above; never serialize TestResult.

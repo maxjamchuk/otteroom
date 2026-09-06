@@ -178,11 +178,19 @@ describe('credential-safe diagnostics boundaries', () => {
 
   it('safe reporter drops raw fields, stdout, attachments and error causes', () => verify(prelude + `
     const { safeResult } = await import('./e2e/support/safe-reporter.ts');
-    for (const [title, expected] of [['@us2-join E02 link', 'us2-join'], ['@us2-realtime E03 binding', 'us2-realtime'], ['@us4 E07 reload', 'us4'], ['@capacity-smoke E12 isolation', 'capacity-smoke'], ['@us3 E12 future', 'unclassified']]) {
+    for (const [title, expected] of [['@us2-join E02 link', 'us2-join'], ['@us2-realtime E03 binding', 'us2-realtime'], ['@us4 E07 reload', 'us4'], ['@capacity-smoke E12 isolation', 'capacity-smoke'], ['@us3 E05 capacity', 'us3'], ['@us3 E06 race', 'us3'], ['@us3 E12 isolation', 'us3'], ['@us3 E13 unknown', 'unclassified']]) {
       assert.equal(safeResult({ title }, { status: 'passed' }).scenario, expected);
     }
     const secret = sentinel();
     const result = safeResult({ title: secret }, { status: 'failed', error: { message: secret, cause: secret }, stdout: [secret], attachments: [{ body: secret }] });
+    for (const [title, label] of [['@us3 E05 capacity', 'E05'], ['@us3 E06 race', 'E06'], ['@us3 E12 known-ID read', 'E12-read'], ['@us3 E12 live subscription', 'E12-subscription'], ['@us3 E12 delayed response', 'E12-navigation'], ['@us3 E12 direct write', 'E12-mutation']]) {
+      for (let repeatEachIndex = 0; repeatEachIndex < 3; repeatEachIndex++) {
+        const projected = safeResult({ title, repeatEachIndex }, { status: 'passed' });
+        assert.equal(projected.browserCase, label); assert.equal(projected.repetition, repeatEachIndex + 1);
+      }
+    }
+    assert.equal(safeResult({ title: secret, repeatEachIndex: secret }, {}).browserCase, 'none');
+    assert.equal(safeResult({ repeatEachIndex: 3 }, {}).repetition, 0);
     assert.equal(JSON.stringify(result).includes(secret), false);
     assert.equal(result.status, 'failed');
     assert.equal(Object.hasOwn(result, 'attachments'), false);
