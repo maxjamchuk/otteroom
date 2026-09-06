@@ -1,0 +1,3 @@
+# Preserve the pinned generator's exact bytes, including its final blank line.
+# Type correctness is checked by db:types:check, not by Git whitespace rules.
+src/types/database.generated.ts whitespace=-blank-at-eof

@@ -583,21 +583,148 @@ Stop before T035.
 
 **Minimum validation**: Full pgTAP under actual caller roles/claims, independent concurrent PostgreSQL sessions, fault rollback, generated types, and no type drift.
 
-- [ ] T035 Add exact RPC-signature/result-contract tests in `supabase/tests/database/room_session.test.sql` for `create_room(uuid)` and `join_room(text)`, their one-row return cardinality and ordered `TABLE(outcome text, room_id uuid, room_code text, room_state text, participant_role text, participant_count smallint)` definition; assert logical per-outcome nullability without inventing unsupported NOT NULL output parameters or a new application type/table.
-- [ ] T036 Add create behavior tests in `supabase/tests/database/room_session.test.sql` for `created`, canonical cryptographic code shape, host/Waiting/one seat, sequential same-request `already_created`, a new intentional request, same request scoped to different hosts, recovery after the room becomes Ready, null request rejection, and complete-row/no-result-on-error semantics. Retain the former T044 single-session cases for forced code collision followed by regeneration and five-collision exhaustion, using targeted rollback-contained test triggers after remote trials close; force real violations, assert the attempt bound and no partial row, and preserve pre-existing rows byte-for-byte.
-- [ ] T037 Implement `public.create_room(p_creation_request_id uuid)` in `supabase/migrations/20260905000001_room_rpcs.sql`: check `auth.uid()` then non-null input, lookup caller/request, generate uppercase hex from `extensions.gen_random_bytes(5)`, insert atomically, and handle unique violations using stacked `CONSTRAINT_NAME`; recover the committed host/request winner, recheck idempotency on a code-key collision before regeneration, rethrow an absent winner or unknown constraint, and stop after five true collision attempts with no partial row. Define the exact `RETURNS TABLE` shape from T035 with a complete body, owner `postgres`, PL/pgSQL `SECURITY DEFINER SET search_path = ''`, qualified objects, no dynamic SQL, owner-default PUBLIC EXECUTE revocation, and exact-signature revocation from all three public/client roles followed by the authenticated-only grant; create no throwaway function stub.
-- [ ] T038 Add join behavior tests in `supabase/tests/database/room_session.test.sql` for trim/uppercase, null/malformed `invalid_code`, canonical unknown `not_found`, host repeat in Waiting/Ready, guest `joined` and repeated `already_member`, third-user `full`, exact role/state/count/nullability, and unchanged membership/timestamps after every rejected or idempotent outcome. Retain the former T044 post-update failure case with a targeted rollback-contained test trigger after remote trials close; raise after attempted guest-seat assignment and assert rethrow/no result plus byte-for-byte preservation of the complete pre-operation row.
-- [ ] T039 Implement `public.join_room(p_room_code text)` in `supabase/migrations/20260905000001_room_rpcs.sql` with a null-identity guard, authoritative normalization/validation, unique-code `SELECT ... FOR UPDATE`, existing-member check before capacity, one null-guest claim plus `updated_at = pg_catalog.transaction_timestamp()`, and outcome-only rejection; never accept caller identity/state/room UUID or clear/replace an occupied seat. Add the complete exact `RETURNS TABLE` definition from T035 with owner `postgres`, empty-search-path SECURITY DEFINER containment, qualified objects, no dynamic SQL, and exact-signature revocations/authenticated-only EXECUTE in this same coherent function change, before any caller-role success test can pass.
-- [ ] T040 Add executable RPC security/disclosure assertions in `supabase/tests/database/room_session.test.sql`: inspect owner/config/ACLs, deny real `anon` execution, reject `authenticated` without a user claim inside both bodies, permit valid claimed users, verify accepted-only room projections, all-null non-outcome fields for `invalid_code`/`not_found`/`full`, and retained table-mutation denial; corroborate schema qualification/no dynamic SQL by a focused function-body review, not as the sole behavioral proof. Review the full authorization/disclosure body of each function independently of RLS, including owner-default execution revocation, and require both runtime ACL tests and this focused review to pass. Retain the former T044 unrecognized-unique-constraint case: install an exact targeted extra constraint only in the rolled-back test transaction after remote trials close, force a genuine violation through the real RPC, and assert the original exception is rethrown with no result/partial row and unchanged pre-existing rows; never weaken shipped constraints or authorization.
-- [ ] T041 Build the test-only asynchronous two-session harness in `supabase/tests/database/room_session.test.sql` using rollback-contained, immediately execution-restricted `dblink`; commit random namespaced Auth fixtures and, for join races only, the Waiting room through a separate owner setup connection, never through the enclosing uncommitted fixture transaction. Duplicate-create trials start without a room for the tested host/request; T044 additionally owns an unrelated collision-code room and the explicitly committed test-only fixture described below. For each remote session execute `SET ROLE authenticated` and use `set_config` with its fixture `sub`/role JSON in `request.jwt.claims` and `is_local = false`; test signed-out calls separately with `SET ROLE anon` and empty claims. Keep application calls non-owner, use Read Committed and bounded `statement_timeout`/`lock_timeout`, identify session PIDs for `pg_blocking_pids` observations, and run remote races before rollback-only fault DDL from T036/T038/T040. Reserve the lock-free runtime prelude and guaranteed cleanup required by T044's fixture contract below. Drain results, commit/rollback and close every caller connection before owner cleanup deletes only that trial's rooms then Auth fixtures; a clean reset is the interruption-recovery boundary, not normal cleanup.
-- [ ] T042 Add the controlled duplicate-create trial in `supabase/tests/database/room_session.test.sql`: session A begins a transaction and dispatches create asynchronously, retaining its uncommitted insert; after A's query is ready but before collecting its result, dispatch B with the same host/request and verify B is blocked by A through `pg_blocking_pids`. Only after both dispatches collect A's `created` result, commit A, then collect B's `already_created`; assert identical ID/code and exactly one complete committed row via the owner observer, with no privileged application call or lingering fixture.
-- [ ] T043 Add real final-seat, same-guest duplicate, and host-versus-guest trials in `supabase/tests/database/room_session.test.sql`: use a committed Waiting fixture, hold its row lock in an owner coordination connection, dispatch both claimed-session joins before collecting either result, observe both waiting on the controlled lock chain with bounded polling, release the lock, and collect/commit both outcomes. Assert distinct guests produce exactly `joined`/`full`, same guest produces `joined`/`already_member`, host repeat consumes no seat, and the committed row holds the expected winner/two distinct seats/Ready; no arbitrary sleep or two sequential calls counts as concurrency.
-- [ ] T044 Add the deterministic simultaneous code-collision/idempotency-winner recovery trial in `supabase/tests/database/room_session.test.sql` using T041's real independent authenticated sessions and the fixture contract below. Privileged setup temporarily commits a restricted test-only schema/function and BEFORE INSERT trigger on `public.rooms`, never a production migration or RPC hook. Select exact session PIDs and `otteroom.test.create_room_fault_mode` via `current_setting(..., true)`: A's `collision_wait` forces an occupied canonical code and waits on B's unique session-level advisory lock; B's `winner` forces a distinct unused canonical code without waiting. Dispatch real `create_room(R)` for A under H, prove its exact blocked lock state, then dispatch real `create_room(R)` for B under the same H/R, collect `created`, COMMIT, independently verify the committed winner, and only then unlock. Require A's real `rooms_code_key` recovery to return `already_created` with B's ID/code, exactly one complete H/R row, no extra A row, and unchanged unrelated collision fixture. Enforce bounded failure-safe session/lock/object/fixture cleanup and post-test absence; an equal result without branch/barrier evidence is not a pass.
-- [ ] T045 Add wrapper behavior tests in `__tests__/config/database-types.test.ts` for the planned `scripts/database-types.mjs` write/check interface: missing canonical target fails check, matching bytes pass without writes, mismatch fails, generator nonzero/empty output fails both modes without damaging the target, successful write atomically replaces only after generation, and every path cleans temporary files. Use isolated temporary fixture directories and synthetic subprocess stdout/exit fixtures; verify no Git calls, no dependence on `.git`/index, exact project-local CLI arguments, safe bounded diagnostics, and handled interruption cleanup. Do not substitute these unit fixtures for T049's real database generation/comparison.
-- [ ] T046 Implement shared generator execution and `write` in `scripts/database-types.mjs` using npm execution PATH's installed project-local `supabase gen types --lang typescript --local --schema public`; require a running fully migrated local database, capture output to a unique same-filesystem temporary file, require successful exit and nonempty bytes, close handles, then atomically rename over `src/types/database.generated.ts`. Preserve the prior canonical file on any failure and clean temporary output on all completion/error/handled-signal paths; report safe bounded failure diagnostics. Add `db:types` → `node scripts/database-types.mjs write` in `package.json`; no Git, global CLI, login, hosted lookup, or schema mutation.
-- [ ] T047 Implement `check` in the same `scripts/database-types.mjs` and `db:types:check` → `node scripts/database-types.mjs check` in `package.json`: require existing `src/types/database.generated.ts`, generate current bytes into a temporary file via the shared local generator, reject nonzero/empty output, compare byte-for-byte without canonical overwrite, and return nonzero on missing/unreadable/mismatched content. Emit a bounded actionable message with canonical path, lengths and first differing byte, always clean temporary output, and satisfy T045 for tracked/staged/modified/untracked semantics without reading Git metadata or staging anything; a matching check leaves repository contents unchanged.
-- [ ] T048 After the completed RPC migration is reset and its database tests pass, initially run `npm run db:types` then `npm run db:types:check` to create and verify `src/types/database.generated.ts`; inspect both function argument/result definitions against `specs/001-room-session/contracts/rpc.md`. Review the artifact with its migration/RPC change for the future committed implementation baseline. This is intentional artifact production, not the normal checkpoint sequence; later drift validation must not overwrite the target first.
-- [ ] T049 Checkpoint — run `npm run db:reset`, `npm run db:test`, `npm run test:client -- --runTestsByPath __tests__/config/database-types.test.ts`, and `npm run db:types:check` without preceding write; record all outcome, real-overlap, committed-winner, type-consistency and scenarios 1–4/6–14 database results in `specs/001-room-session/tasks.md`, with service cleanup. Require the canonical artifact produced by T048; missing/mismatch/empty/generator failure fails this gate regardless of tracked/staged/untracked state. Do not regenerate or stage to force green; no client integration through a failed prerequisite.
+- [X] T035 Add exact RPC-signature/result-contract tests in `supabase/tests/database/room_session.test.sql` for `create_room(uuid)` and `join_room(text)`, their one-row return cardinality and ordered `TABLE(outcome text, room_id uuid, room_code text, room_state text, participant_role text, participant_count smallint)` definition; assert logical per-outcome nullability without inventing unsupported NOT NULL output parameters or a new application type/table.
+- [X] T036 Add create behavior tests in `supabase/tests/database/room_session.test.sql` for `created`, canonical cryptographic code shape, host/Waiting/one seat, sequential same-request `already_created`, a new intentional request, same request scoped to different hosts, recovery after the room becomes Ready, null request rejection, and complete-row/no-result-on-error semantics. Retain the former T044 single-session cases for forced code collision followed by regeneration and five-collision exhaustion, using targeted rollback-contained test triggers after remote trials close; force real violations, assert the attempt bound and no partial row, and preserve pre-existing rows byte-for-byte.
+- [X] T037 Implement `public.create_room(p_creation_request_id uuid)` in `supabase/migrations/20260905000001_room_rpcs.sql`: check `auth.uid()` then non-null input, lookup caller/request, generate uppercase hex from `extensions.gen_random_bytes(5)`, insert atomically, and handle unique violations using stacked `CONSTRAINT_NAME`; recover the committed host/request winner, recheck idempotency on a code-key collision before regeneration, rethrow an absent winner or unknown constraint, and stop after five true collision attempts with no partial row. Define the exact `RETURNS TABLE` shape from T035 with a complete body, owner `postgres`, PL/pgSQL `SECURITY DEFINER SET search_path = ''`, qualified objects, no dynamic SQL, owner-default PUBLIC EXECUTE revocation, and exact-signature revocation from all three public/client roles followed by the authenticated-only grant; create no throwaway function stub.
+- [X] T038 Add join behavior tests in `supabase/tests/database/room_session.test.sql` for trim/uppercase, null/malformed `invalid_code`, canonical unknown `not_found`, host repeat in Waiting/Ready, guest `joined` and repeated `already_member`, third-user `full`, exact role/state/count/nullability, and unchanged membership/timestamps after every rejected or idempotent outcome. Retain the former T044 post-update failure case with a targeted rollback-contained test trigger after remote trials close; raise after attempted guest-seat assignment and assert rethrow/no result plus byte-for-byte preservation of the complete pre-operation row.
+- [X] T039 Implement `public.join_room(p_room_code text)` in `supabase/migrations/20260905000001_room_rpcs.sql` with a null-identity guard, authoritative normalization/validation, unique-code `SELECT ... FOR UPDATE`, existing-member check before capacity, one null-guest claim plus `updated_at = pg_catalog.transaction_timestamp()`, and outcome-only rejection; never accept caller identity/state/room UUID or clear/replace an occupied seat. Add the complete exact `RETURNS TABLE` definition from T035 with owner `postgres`, empty-search-path SECURITY DEFINER containment, qualified objects, no dynamic SQL, and exact-signature revocations/authenticated-only EXECUTE in this same coherent function change, before any caller-role success test can pass.
+- [X] T040 Add executable RPC security/disclosure assertions in `supabase/tests/database/room_session.test.sql`: inspect owner/config/ACLs, deny real `anon` execution, reject `authenticated` without a user claim inside both bodies, permit valid claimed users, verify accepted-only room projections, all-null non-outcome fields for `invalid_code`/`not_found`/`full`, and retained table-mutation denial; corroborate schema qualification/no dynamic SQL by a focused function-body review, not as the sole behavioral proof. Review the full authorization/disclosure body of each function independently of RLS, including owner-default execution revocation, and require both runtime ACL tests and this focused review to pass. Retain the former T044 unrecognized-unique-constraint case: install an exact targeted extra constraint only in the rolled-back test transaction after remote trials close, force a genuine violation through the real RPC, and assert the original exception is rethrown with no result/partial row and unchanged pre-existing rows; never weaken shipped constraints or authorization.
+- [X] T041 Build the test-only asynchronous two-session harness in `supabase/tests/database/room_session.test.sql` using rollback-contained, immediately execution-restricted `dblink`; commit random namespaced Auth fixtures and, for join races only, the Waiting room through a separate owner setup connection, never through the enclosing uncommitted fixture transaction. Duplicate-create trials start without a room for the tested host/request; T044 additionally owns an unrelated collision-code room and the explicitly committed test-only fixture described below. For each remote session execute `SET ROLE authenticated` and use `set_config` with its fixture `sub`/role JSON in `request.jwt.claims` and `is_local = false`; test signed-out calls separately with `SET ROLE anon` and empty claims. Keep application calls non-owner, use Read Committed and bounded `statement_timeout`/`lock_timeout`, identify session PIDs for `pg_blocking_pids` observations, and run remote races before rollback-only fault DDL from T036/T038/T040. Reserve the lock-free runtime prelude and guaranteed cleanup required by T044's fixture contract below. Drain results, commit/rollback and close every caller connection before owner cleanup deletes only that trial's rooms then Auth fixtures; a clean reset is the interruption-recovery boundary, not normal cleanup.
+- [X] T042 Add the controlled duplicate-create trial in `supabase/tests/database/room_session.test.sql`: session A begins a transaction and dispatches create asynchronously, retaining its uncommitted insert; after A's query is ready but before collecting its result, dispatch B with the same host/request and verify B is blocked by A through `pg_blocking_pids`. Only after both dispatches collect A's `created` result, commit A, then collect B's `already_created`; assert identical ID/code and exactly one complete committed row via the owner observer, with no privileged application call or lingering fixture.
+- [X] T043 Add real final-seat, same-guest duplicate, and host-versus-guest trials in `supabase/tests/database/room_session.test.sql`: use a committed Waiting fixture, hold its row lock in an owner coordination connection, dispatch both claimed-session joins before collecting either result, observe both waiting on the controlled lock chain with bounded polling, release the lock, and collect/commit both outcomes. Assert distinct guests produce exactly `joined`/`full`, same guest produces `joined`/`already_member`, host repeat consumes no seat, and the committed row holds the expected winner/two distinct seats/Ready; no arbitrary sleep or two sequential calls counts as concurrency.
+- [X] T044 Add the deterministic simultaneous code-collision/idempotency-winner recovery trial in `supabase/tests/database/room_session.test.sql` using T041's real independent authenticated sessions and the fixture contract below. Privileged setup temporarily commits a restricted test-only schema/function and BEFORE INSERT trigger on `public.rooms`, never a production migration or RPC hook. Select exact session PIDs and `otteroom.test.create_room_fault_mode` via `current_setting(..., true)`: A's `collision_wait` forces an occupied canonical code and waits on B's unique session-level advisory lock; B's `winner` forces a distinct unused canonical code without waiting. Dispatch real `create_room(R)` for A under H, prove its exact blocked lock state, then dispatch real `create_room(R)` for B under the same H/R, collect `created`, COMMIT, independently verify the committed winner, and only then unlock. Require A's real `rooms_code_key` recovery to return `already_created` with B's ID/code, exactly one complete H/R row, no extra A row, and unchanged unrelated collision fixture. Enforce bounded failure-safe session/lock/object/fixture cleanup and post-test absence; an equal result without branch/barrier evidence is not a pass.
+- [X] T045 Add wrapper behavior tests in `__tests__/config/database-types.test.ts` for the planned `scripts/database-types.mjs` write/check interface: missing canonical target fails check, matching bytes pass without writes, mismatch fails, generator nonzero/empty output fails both modes without damaging the target, successful write atomically replaces only after generation, and every path cleans temporary files. Use isolated temporary fixture directories and synthetic subprocess stdout/exit fixtures; verify no Git calls, no dependence on `.git`/index, exact project-local CLI arguments, safe bounded diagnostics, and handled interruption cleanup. Do not substitute these unit fixtures for T049's real database generation/comparison.
+- [X] T046 Implement shared generator execution and `write` in `scripts/database-types.mjs` using npm execution PATH's installed project-local `supabase gen types --lang typescript --local --schema public`; require a running fully migrated local database, capture output to a unique same-filesystem temporary file, require successful exit and nonempty bytes, close handles, then atomically rename over `src/types/database.generated.ts`. Preserve the prior canonical file on any failure and clean temporary output on all completion/error/handled-signal paths; report safe bounded failure diagnostics. Add `db:types` → `node scripts/database-types.mjs write` in `package.json`; no Git, global CLI, login, hosted lookup, or schema mutation.
+- [X] T047 Implement `check` in the same `scripts/database-types.mjs` and `db:types:check` → `node scripts/database-types.mjs check` in `package.json`: require existing `src/types/database.generated.ts`, generate current bytes into a temporary file via the shared local generator, reject nonzero/empty output, compare byte-for-byte without canonical overwrite, and return nonzero on missing/unreadable/mismatched content. Emit a bounded actionable message with canonical path, lengths and first differing byte, always clean temporary output, and satisfy T045 for tracked/staged/modified/untracked semantics without reading Git metadata or staging anything; a matching check leaves repository contents unchanged.
+- [X] T048 After the completed RPC migration is reset and its database tests pass, initially run `npm run db:types` then `npm run db:types:check` to create and verify `src/types/database.generated.ts`; inspect both function argument/result definitions against `specs/001-room-session/contracts/rpc.md`. Review the artifact with its migration/RPC change for the future committed implementation baseline. This is intentional artifact production, not the normal checkpoint sequence; later drift validation must not overwrite the target first.
+- [X] T049 Checkpoint — run `npm run db:reset`, `npm run db:test`, `npm run test:client -- --runTestsByPath __tests__/config/database-types.test.ts`, and `npm run db:types:check` without preceding write; record all outcome, real-overlap, committed-winner, type-consistency and scenarios 1–4/6–14 database results in `specs/001-room-session/tasks.md`, with service cleanup. Require the canonical artifact produced by T048; missing/mismatch/empty/generator failure fails this gate regardless of tracked/staged/untracked state. Do not regenerate or stage to force green; no client integration through a failed prerequisite.
+
+### Phase 4 execution evidence — 2026-09-06
+
+**T035–T049: GREEN.** Started on clean `main` at
+`8f5710bfa30a78e00a2d5f9f6cbb15a6f3148b13`, including the approved T044
+planning remediation above the Phase 3 baseline. Skill prerequisite check passed;
+requirements checklist 16/16; no configured extension hooks ran. Only Phase 4
+implementation, its evidence and T035–T049 checkbox states changed. Task text,
+protected normative/planning/contracts, Phase 3 migration and T050–T121 are unchanged.
+
+Runtime: persistent Node v24.20.0, npm 11.19.0, project-local Supabase CLI
+2.116.0, actual PostgreSQL 17.6. No dependencies or approved versions changed.
+
+| Command / evidence | Exit / observed result |
+|---|---|
+| `node --version`, `npm --version`, `./node_modules/.bin/supabase --version` | 0 each; v24.20.0 / 11.19.0 / 2.116.0 |
+| `npm run supabase:start` | 0; local CLI health checks completed |
+| `npm run supabase:status` | 0; running stack readiness confirmed |
+| Initial RPC pgTAP before migration | Expected 1; missing signature/function demonstrated RED |
+| `npm run db:reset` | 0; both versioned migrations recreate the exact schema and RPCs |
+| Final `npm run db:test` | 0; 285/285, including all 187 prior schema/ACL/RLS assertions |
+| T045 wrapper selection before implementation | Expected 1; all eight behavior tests RED |
+| `npm run test:client -- --runTestsByPath __tests__/config/database-types.test.ts` | 0; 8/8 |
+| `npm run db:types:check` before initial artifact | Expected 1; actionable MISSING error, no target created |
+| Initial `npm run db:types`, then `npm run db:types:check` | 0 / 0; canonical public-schema artifact created and compared |
+| T049 `npm run db:reset` → `npm run db:test` → targeted wrapper tests → `npm run db:types:check` | 0 / 0 / 0 / 0; 285 pgTAP, 8 wrapper tests, no preceding write |
+| `npm run lint` | 0 |
+| `npm run typecheck` | 0 |
+| `npm run test:client` | 0; 55/55 across 6 suites, including existing C1/runtime/config/route tests |
+| `npm run supabase:stop` | 0; EXIT/INT/TERM trap-owned stack lifecycle finished |
+| `npm run db:types:check` after shutdown | Expected 1; safe GENERATOR error; canonical bytes preserved, temporary file removed |
+| `git diff --check` and all versionable/untracked-file whitespace review | 0; narrowly scoped generated-file EOF policy below |
+
+Production migration: `supabase/migrations/20260905000001_room_rpcs.sql`.
+The database exposes exactly `create_room(p_creation_request_id uuid)` and
+`join_room(p_room_code text)` in `public`, with the six approved TABLE outputs.
+Both are complete postgres-owned PL/pgSQL SECURITY DEFINER bodies with empty
+search_path, qualified objects, explicit auth.uid() checks and no dynamic SQL.
+Actual ACL is owner EXECUTE plus authenticated EXECUTE, with no PUBLIC/anon
+entry. Real caller-role tests reject signed-out/missing-subject calls; table
+mutation privileges and all prior member-only RLS boundaries remain unchanged.
+Independent body review verified authorization/disclosure without relying on
+RLS to constrain the definer. No production helper, extra table or publication
+was introduced.
+
+Create evidence covers created/already_created, canonical server-generated
+ten-hex code, intentional new request, host-scoped request identity, current
+Ready recovery, null rejection, complete rows, actual first code collision and
+regeneration, exactly five failed collision attempts, and real unexpected
+`phase4_unexpected_unique` rethrow. Join covers every approved outcome, exact
+nullable rejection projection, host/guest idempotency before capacity, trim and
+uppercase, locked final-seat update, and byte-identical state after failures,
+including a genuine controlled AFTER UPDATE exception. Fault DDL is rollback-only
+and runs after all independent sessions close.
+
+The local CLI runs pg_prove in a separate container. Its ordinary `postgres`
+controller is not the owner of Supabase's dblink extension functions and cannot
+revoke their owner-issued PUBLIC grant. The test therefore reconnects using
+psql `-reuse-previous=on` with `user=supabase_admin` for privileged harness setup
+only, without embedded credentials or a different npm command. This permits
+immediate dblink ACL restriction, asserted for all 41 extension entries.
+The extension and controller helpers roll back. Remote owner fixtures still use
+`postgres`; all application calls explicitly use authenticated at Read Committed
+with only synthetic UUID claims. No privileged call substitutes for a caller test.
+
+Real asynchronous trials dispatch independent sessions and observe live locks,
+not sleeps: duplicate create yields created/already_created with one committed
+room; distinct guests yield joined/full; duplicate same-guest joins yield
+joined/already_member; host versus guest preserves the host and fills only the
+guest seat. The rejected/idempotent second commit leaves the winner's full row,
+including timestamps, unchanged.
+
+T044 runs before the controller touches rooms/Auth fixture relations. Exact PIDs
+and fault modes target its temporary committed trigger. A is observed waiting on
+B's exact session advisory key; B creates and commits the independent winner;
+a fresh owner read sees it while A remains blocked. A real rolled-back INSERT
+calibrates `rooms_code_key` on PostgreSQL 17.6 before B unlocks. A then returns
+already_created with B's exact projection. No extra room or collision-row change
+survives. A separate real pg_cancel_backend trial cancels A at that observed
+barrier and verifies the bounded cancellation cleanup path. Only that exact
+expected 57014 can pass the cleanup probe; unexpected failures fail the suite.
+Callers drain/rollback/disconnect before exact trigger/schema/room/Auth cleanup;
+session locks are released. Independent post-suite inspection found zero room
+rows, Auth fixtures, test schemas, test triggers or dblink extension.
+
+R01 uses `scripts/database-types.mjs`; write/check resolve only npm PATH's local
+CLI with `gen types --lang typescript --local --schema public`. Generation uses
+an exclusive same-filesystem temporary file and checks exit/nonempty output;
+only write atomically renames. Check compares raw bytes and never writes the
+canonical file or reads Git metadata. Missing/mismatch/empty/nonzero/spawn,
+timeout, interruption, unreadable-target and rename failures are tested, including
+temporary cleanup and bounded metadata-only diagnostics. CLI stderr is drained,
+not persisted. Checks passed with the canonical artifact still untracked.
+
+Canonical `src/types/database.generated.ts` SHA-256 before and after repeated
+clean reset/check and the stopped-generator failure:
+`46f41c3ca2a88d65a2604f449b17aa10c36b535c8ee0a67047683fb37f80fb4b`.
+The generated argument names and six return fields match the SQL signatures.
+Pinned CLI output does not encode all logical output nullability/literal unions;
+it is unedited generator output, not a substitute for the approved later runtime
+contract decoder. The CLI's final blank line is intentionally preserved.
+`.gitattributes` exempts only `blank-at-eof` for this exact generated path; all
+other whitespace checks and byte-for-byte type consistency remain active.
+
+Database acceptance evidence (not completed browser/story acceptance): A01/A02
+have atomic create/retry/failure preservation; A03/A04 share the code-based join
+contract; A06/A07 reject absent/malformed codes; A08 proves exceptional join
+rollback; A09/A10 prove full capacity and real final-seat arbitration; A11/A12
+retain isolation and deny direct mutation/spoofing; A13/A14 recover existing
+membership/current state through repeated RPC calls. Actual invitations, UI,
+persisted browser sessions, reconnect/Realtime delivery and A05 remain future
+client/browser work. SC-003/SC-004/SC-006/SC-007 have their database boundary
+evidence; complete end-to-end SC/story claims remain deferred.
+
+**Anonymous HTTP sign-ins: 0.** R02 remains N=47 and anonymous_users=150;
+94/141 acceptance and 48/144 security-plus-acceptance accounting is unchanged.
+C1 capture policy and Phase 1–3 application/runtime code are unchanged. No
+Auth client, room UI, Realtime publication, browser suite or Phase 5 work ran.
+
+Cleanup removed this project's nine containers and its network. API/DB/Studio/mail
+ports 55321–55324 were all bindable afterward, with no owned service process.
+All 18 pre-existing Docker containers retain identical IDs/names/states; unrelated
+containers, networks and volumes were not stopped, removed or pruned. CLI-owned
+local data volumes remain normal ignored runtime state, not schema authority.
+Eight versionable files were reviewed; no real env, credentials, dumps, caches,
+runtime or diagnostic artifacts are included. No staging, commit or push ran.
+Stop before T050.
 
 ### T044 fixture contract — test-only committed visibility, explicit cleanup
 

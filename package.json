@@ -54,6 +54,8 @@
     "supabase:stop": "node scripts/safe-process.mjs supabase:stop",
     "db:reset": "supabase db reset",
     "db:test": "supabase test db",
+    "db:types": "node scripts/database-types.mjs write",
+    "db:types:check": "node scripts/database-types.mjs check",
     "env:local": "node scripts/configure-local-env.mjs"
   },
   "private": true,

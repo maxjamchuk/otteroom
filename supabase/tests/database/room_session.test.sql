@@ -1,11 +1,349 @@
--- Phase 3 only: schema, constraints and direct-role read/write boundaries.
--- Fixtures contain UUIDs, not sessions/tokens; all setup is rolled back.
+-- Phase 3 schema/access regression plus Phase 4 RPC acceptance evidence.
+-- UUID-only fixtures: controller setup rolls back; committed race fixtures are
+-- explicitly cleaned through their separate owner connection on every path.
+-- Local-only harness setup needs the extension owner to revoke dblink's own
+-- default EXECUTE ACL. Reuse the pinned local CLI's connection parameters only;
+-- no password is embedded or printed. RPC calls still SET ROLE to
+-- authenticated/anon, and remote fixture ownership remains postgres.
+\connect -reuse-previous=on "user=supabase_admin"
 begin;
 set local search_path = pg_catalog, public, extensions;
 set local statement_timeout = '15s';
 set local lock_timeout = '5s';
 create extension if not exists pgtap with schema extensions;
 select no_plan();
+
+-- T041-T044 run before this controller touches rooms/Auth fixture relations.
+-- Remote fixture DDL must not wait on locks held by the surrounding test txn.
+create extension if not exists dblink with schema extensions;
+do $restrict$
+declare f regprocedure;
+begin
+  for f in select p.oid::regprocedure from pg_proc p join pg_depend d on d.objid = p.oid
+    where d.classid = 'pg_proc'::regclass and d.refclassid = 'pg_extension'::regclass
+      and d.refobjid = (select oid from pg_extension where extname = 'dblink') and d.deptype = 'e'
+  loop execute format('revoke all on function %s from public, anon, authenticated', f); end loop;
+end;
+$restrict$;
+select ok(not has_function_privilege('anon', p.oid, 'EXECUTE')
+    and not has_function_privilege('authenticated', p.oid, 'EXECUTE'),
+  'test-only dblink entry is inaccessible to clients: ' || p.proname)
+from pg_proc p join pg_depend d on d.objid = p.oid
+where d.classid = 'pg_proc'::regclass and d.refclassid = 'pg_extension'::regclass
+  and d.refobjid = (select oid from pg_extension where extname='dblink') and d.deptype='e';
+
+create function pg_temp.require(condition boolean, message text) returns void language plpgsql as $helper$
+begin
+  if not coalesce(condition, false) then raise exception using message = message; end if;
+end;
+$helper$;
+
+create function pg_temp.remote_json(connection text, query text) returns jsonb language plpgsql as $helper$
+declare result jsonb;
+begin
+  select j into strict result from extensions.dblink(connection, query) as t(j jsonb);
+  return result;
+end;
+$helper$;
+
+create function pg_temp.await_ready(connection text) returns void language plpgsql as $helper$
+declare deadline timestamptz := clock_timestamp() + interval '8 seconds';
+begin
+  while extensions.dblink_is_busy(connection) = 1 loop
+    if clock_timestamp() > deadline then raise exception 'async result deadline exceeded'; end if;
+  end loop;
+end;
+$helper$;
+
+create function pg_temp.collect(connection text) returns jsonb language plpgsql as $helper$
+declare result jsonb;
+begin
+  perform pg_temp.await_ready(connection);
+  select j into strict result from extensions.dblink_get_result(connection) as t(j jsonb);
+  -- libpq requires draining the terminal empty result before another command.
+  perform j from extensions.dblink_get_result(connection) as t(j jsonb);
+  return result;
+end;
+$helper$;
+
+create function pg_temp.caller(connection text, subject uuid) returns void language plpgsql as $helper$
+declare identity jsonb;
+begin
+  perform extensions.dblink_exec(connection, 'set role authenticated; begin isolation level read committed');
+  perform pg_temp.remote_json(connection, format(
+    'select to_jsonb(set_config(''request.jwt.claims'', %L, false))',
+    jsonb_build_object('sub', subject, 'role', 'authenticated')::text));
+  identity := pg_temp.remote_json(connection,
+    'select jsonb_build_object(''role'', current_user, ''uid'', auth.uid(), ''isolation'', current_setting(''transaction_isolation''))');
+  perform pg_temp.require(identity = jsonb_build_object('role','authenticated','uid',subject,'isolation','read committed'),
+    'remote RPC caller must be claimed authenticated at READ COMMITTED');
+end;
+$helper$;
+
+create function pg_temp.race(kind text, cancel_probe boolean default false) returns setof text language plpgsql as $trial$
+declare
+  ns text := 'phase4_' || encode(extensions.gen_random_bytes(8), 'hex');
+  own text; a text; b text;
+  conninfo text := 'dbname=postgres user=postgres connect_timeout=3';
+  h uuid := extensions.gen_random_uuid(); g uuid := extensions.gen_random_uuid(); u uuid := extensions.gen_random_uuid();
+  request uuid := extensions.gen_random_uuid(); fixture_request uuid := extensions.gen_random_uuid();
+  rid uuid := extensions.gen_random_uuid();
+  c text := upper(encode(extensions.gen_random_bytes(5), 'hex'));
+  w text := upper(encode(extensions.gen_random_bytes(5), 'hex'));
+  key integer := 1 + floor(random() * 2000000000)::integer;
+  apid integer; bpid integer; opid integer; dbid oid := (select oid from pg_database where datname = current_database());
+  ra jsonb; rb jsonb; rowdata jsonb; before_collision jsonb; before_second_commit jsonb;
+  deadline timestamptz; first_caller text; name text; failure text; cleanup_failure text;
+  outcome_a text; outcome_b text; violation text;
+  canceled_at_barrier boolean := false; failure_state text;
+begin
+  own := ns || '_owner'; a := ns || '_a'; b := ns || '_b';
+  begin
+    perform extensions.dblink_connect(own, conninfo);
+    perform extensions.dblink_exec(own, 'set statement_timeout = ''10s''; set lock_timeout = ''5s''');
+    opid := (pg_temp.remote_json(own, 'select to_jsonb(pg_backend_pid())'))::integer;
+    perform extensions.dblink_exec(own, format('insert into auth.users(id) values (%L), (%L), (%L)', h,g,u));
+    perform extensions.dblink_connect(a, conninfo);
+    perform extensions.dblink_connect(b, conninfo);
+    foreach name in array array[a,b] loop
+      perform extensions.dblink_exec(name, 'set statement_timeout = ''20s''; set lock_timeout = ''15s''');
+    end loop;
+    apid := (pg_temp.remote_json(a, 'select to_jsonb(pg_backend_pid())'))::integer;
+    bpid := (pg_temp.remote_json(b, 'select to_jsonb(pg_backend_pid())'))::integer;
+    perform pg_temp.require(apid <> bpid and apid <> opid and bpid <> opid, 'three independent backends required');
+
+    if kind = 'collision_winner' then
+      -- Exact per-trial manifest: namespace, trigger, PIDs, UUIDs, codes and lock.
+      -- The committed trigger is inert outside these PIDs AND explicit modes.
+      perform pg_temp.require(c <> w, 'fixture codes must differ');
+      perform extensions.dblink_exec(own, format($setup$
+        begin;
+        insert into public.rooms(id,code,creation_request_id,host_user_id) values (%1$L,%2$L,%3$L,%4$L);
+        create schema %5$I;
+        revoke all on schema %5$I from public, anon, authenticated;
+        create function %5$I.fault() returns trigger language plpgsql set search_path = '' as $body$
+        begin
+          if pg_catalog.pg_backend_pid() = %6$s and pg_catalog.current_setting('otteroom.test.create_room_fault_mode', true) = 'collision_wait' then
+            new.code := %2$L;
+            perform pg_catalog.pg_advisory_lock(44004, %8$s);
+            perform pg_catalog.pg_advisory_unlock(44004, %8$s);
+          elsif pg_catalog.pg_backend_pid() = %7$s and pg_catalog.current_setting('otteroom.test.create_room_fault_mode', true) = 'winner' then
+            new.code := %9$L;
+          end if;
+          return new;
+        end;
+        $body$;
+        revoke all on function %5$I.fault() from public, anon, authenticated;
+        create trigger %5$I before insert on public.rooms for each row execute function %5$I.fault();
+        commit;
+      $setup$, rid,c,fixture_request,u,ns,apid,bpid,key,w));
+      before_collision := pg_temp.remote_json(own, format('select to_jsonb(r) from public.rooms r where id = %L', rid));
+      perform pg_temp.require((pg_temp.remote_json(own, format(
+        'select to_jsonb(count(*)) from public.rooms where host_user_id = %L and creation_request_id = %L', h,request)))::integer = 0,
+        'T044 starts without the tested host/request');
+      perform pg_temp.require((pg_temp.remote_json(own, format('select to_jsonb(count(*)) from public.rooms where code = %L',w)))::integer = 0,
+        'winner code must be unused');
+      perform pg_temp.remote_json(b, format('select jsonb_build_object(''locked'',pg_advisory_lock(44004,%s))',key));
+    elsif kind <> 'duplicate_create' then
+      perform extensions.dblink_exec(own, format('insert into public.rooms(id,code,creation_request_id,host_user_id) values (%L,%L,%L,%L)',rid,c,fixture_request,h));
+      perform extensions.dblink_exec(own, 'begin');
+      perform pg_temp.remote_json(own, format('select to_jsonb(id) from public.rooms where id = %L for update',rid));
+    end if;
+
+    perform pg_temp.caller(a, case when kind in ('duplicate_create','collision_winner','host_guest') then h else g end);
+    perform pg_temp.caller(b, case when kind in ('duplicate_create','collision_winner') then h when kind = 'distinct_guests' then u else g end);
+    if kind in ('duplicate_create','collision_winner') then
+      if kind = 'collision_winner' then
+        perform extensions.dblink_exec(a, 'set otteroom.test.create_room_fault_mode = ''collision_wait''');
+        perform extensions.dblink_exec(b, 'set otteroom.test.create_room_fault_mode = ''winner''');
+      end if;
+      perform pg_temp.require(extensions.dblink_send_query(a, format('select to_jsonb(r) from public.create_room(%L) r',request)) = 1, 'A dispatched');
+      deadline := clock_timestamp() + interval '8 seconds';
+      if kind = 'duplicate_create' then
+        perform pg_temp.await_ready(a); -- Do not collect or commit A yet.
+        perform pg_temp.require(extensions.dblink_send_query(b, format('select to_jsonb(r) from public.create_room(%L) r',request)) = 1, 'B dispatched');
+        loop
+          exit when apid = any(pg_blocking_pids(bpid));
+          if clock_timestamp() > deadline then raise exception 'duplicate B never blocked by uncommitted A'; end if;
+        end loop;
+        ra := pg_temp.collect(a);
+        perform extensions.dblink_exec(a,'commit');
+        rb := pg_temp.collect(b);
+        perform extensions.dblink_exec(b,'commit');
+        perform pg_temp.require(ra->>'outcome' = 'created' and rb->>'outcome' = 'already_created', 'duplicate create must elect A and recover A');
+      else
+        loop
+          exit when bpid = any(pg_blocking_pids(apid)) and exists (
+            select 1 from pg_locks la join pg_locks lb using (locktype,database,classid,objid,objsubid)
+            where la.pid=apid and lb.pid=bpid and not la.granted and lb.granted
+              and la.locktype='advisory' and la.database=dbid and la.classid=44004 and la.objid=key and la.objsubid=2);
+          if clock_timestamp() > deadline then raise exception 'T044 exact advisory barrier not observed'; end if;
+        end loop;
+        if cancel_probe then
+          canceled_at_barrier := pg_cancel_backend(apid);
+          perform pg_temp.collect(a); -- Actual remote query_canceled, not a fake violation.
+          raise exception 'cancellation probe unexpectedly returned a result';
+        end if;
+        perform pg_temp.require(extensions.dblink_send_query(b, format('select to_jsonb(r) from public.create_room(%L) r',request)) = 1, 'B dispatched after observed barrier');
+        rb := pg_temp.collect(b);
+        perform extensions.dblink_exec(b,'commit');
+        perform pg_temp.require(rb->>'outcome'='created' and rb->>'room_code'=w, 'B creates the designated winner');
+        rowdata := pg_temp.remote_json(own, format('select to_jsonb(r) from public.rooms r where host_user_id=%L and creation_request_id=%L',h,request));
+        perform pg_temp.require(rowdata->>'id'=rb->>'room_id' and rowdata->>'code'=w
+          and bpid=any(pg_blocking_pids(apid)), 'fresh owner sees committed B while A is still blocked');
+        -- Both unique keys now conflict. Observe the real pinned-server arbiter
+        -- in a rolled-back INSERT subtransaction; never synthesize SQLSTATE.
+        perform extensions.dblink_exec(own, format($calibrate$
+          do $c$ declare name text; begin
+            begin
+              insert into public.rooms(code,creation_request_id,host_user_id) values (%L,%L,%L);
+              raise exception 'calibration unexpectedly inserted';
+            exception when unique_violation then get stacked diagnostics name=constraint_name;
+              perform set_config('otteroom.test.constraint_seen',name,false);
+            end;
+          end; $c$;
+        $calibrate$,c,request,h));
+        violation := pg_temp.remote_json(own, 'select to_jsonb(current_setting(''otteroom.test.constraint_seen''))') #>> '{}';
+        perform pg_temp.require(violation='rooms_code_key','T044 calibrated actual collision must be rooms_code_key');
+        perform pg_temp.require((pg_temp.remote_json(b, format('select to_jsonb(pg_advisory_unlock(44004,%s))',key)))::boolean,
+          'B explicitly releases its session lock after commit and calibration');
+        ra := pg_temp.collect(a);
+        perform extensions.dblink_exec(a,'commit');
+        perform pg_temp.require(ra->>'outcome'='already_created', 'A code-key handler recovers already committed B');
+        perform pg_temp.require(before_collision = pg_temp.remote_json(own, format('select to_jsonb(r) from public.rooms r where id=%L',rid)),
+          'unrelated collision owner row is byte-for-byte unchanged');
+      end if;
+      perform pg_temp.require((ra - 'outcome') = (rb - 'outcome') and ra->>'participant_role'='host'
+        and ra->>'room_state'='waiting' and ra->>'participant_count'='1', 'create outcomes share exact accepted projection');
+      perform pg_temp.require((pg_temp.remote_json(own, format(
+        'select to_jsonb(count(*)) from public.rooms where host_user_id=%L',h)))::integer=1, 'one complete winner, no extra A room');
+      rowdata := pg_temp.remote_json(own,format('select to_jsonb(r) from public.rooms r where host_user_id=%L',h));
+      perform pg_temp.require(rowdata->>'id'=ra->>'room_id' and rowdata->>'code'=ra->>'room_code'
+        and rowdata->>'creation_request_id'=request::text and rowdata->>'state'='waiting'
+        and rowdata->>'guest_user_id' is null and rowdata->>'created_at' is not null and rowdata->>'updated_at' is not null,
+        'committed create winner has every required authoritative field');
+    else
+      perform pg_temp.require(extensions.dblink_send_query(a,format('select to_jsonb(r) from public.join_room(%L) r',c))=1, 'join A dispatched');
+      perform pg_temp.require(extensions.dblink_send_query(b,format('select to_jsonb(r) from public.join_room(%L) r',c))=1, 'join B dispatched');
+      deadline := clock_timestamp()+interval '8 seconds';
+      loop
+        exit when cardinality(pg_blocking_pids(apid))>0 and cardinality(pg_blocking_pids(bpid))>0
+          and (opid=any(pg_blocking_pids(apid)) or bpid=any(pg_blocking_pids(apid)))
+          and (opid=any(pg_blocking_pids(bpid)) or apid=any(pg_blocking_pids(bpid)));
+        if clock_timestamp()>deadline then raise exception 'both joins must overlap on owner-controlled lock chain'; end if;
+      end loop;
+      perform extensions.dblink_exec(own,'commit');
+      deadline := clock_timestamp()+interval '8 seconds';
+      loop
+        if extensions.dblink_is_busy(a)=0 then first_caller:=a; exit; end if;
+        if extensions.dblink_is_busy(b)=0 then first_caller:=b; exit; end if;
+        if clock_timestamp()>deadline then raise exception 'no join winner completed'; end if;
+      end loop;
+      if first_caller=a then
+        ra:=pg_temp.collect(a); perform extensions.dblink_exec(a,'commit');
+        before_second_commit:=pg_temp.remote_json(own,format('select to_jsonb(r) from public.rooms r where id=%L',rid));
+        rb:=pg_temp.collect(b); perform extensions.dblink_exec(b,'commit');
+      else
+        rb:=pg_temp.collect(b); perform extensions.dblink_exec(b,'commit');
+        before_second_commit:=pg_temp.remote_json(own,format('select to_jsonb(r) from public.rooms r where id=%L',rid));
+        ra:=pg_temp.collect(a); perform extensions.dblink_exec(a,'commit');
+      end if;
+      outcome_a:=ra->>'outcome'; outcome_b:=rb->>'outcome';
+      if kind='distinct_guests' then
+        perform pg_temp.require((outcome_a='joined' and outcome_b='full') or (outcome_b='joined' and outcome_a='full'), 'distinct guests: exactly one joined and one full');
+        perform pg_temp.require((case when outcome_a='full' then ra else rb end) =
+          jsonb_build_object('outcome','full','room_id',null,'room_code',null,'room_state',null,'participant_role',null,'participant_count',null),
+          'concurrent full loser discloses only outcome');
+      elsif kind='same_guest' then
+        perform pg_temp.require((outcome_a='joined' and outcome_b='already_member') or (outcome_b='joined' and outcome_a='already_member'),
+          'same guest: exactly one joined and one already_member');
+        perform pg_temp.require((ra-'outcome')=(rb-'outcome'), 'same-guest concurrent projection is idempotent');
+      else
+        perform pg_temp.require(outcome_a='already_member' and ra->>'participant_role'='host' and outcome_b='joined', 'host repeat consumes no guest seat');
+      end if;
+      rowdata:=pg_temp.remote_json(own,format('select to_jsonb(r) from public.rooms r where id=%L',rid));
+      if kind <> 'host_guest' then
+        perform pg_temp.require(rowdata=before_second_commit, 'rejected/idempotent second commit preserves all winner fields and timestamps');
+      end if;
+      perform pg_temp.require(rowdata->>'guest_user_id'=(case when kind='distinct_guests' and outcome_b='joined' then u else g end)::text
+        and rowdata->>'host_user_id'=h::text and rowdata->>'state'='ready', 'committed final seat is correct, distinct and Ready');
+      perform pg_temp.require((case when outcome_a='joined' then ra else rb end)=jsonb_build_object(
+        'outcome','joined','room_id',rid,'room_code',c,'room_state','ready','participant_role','guest','participant_count',2),
+        'race winner returns exactly the six-field Ready projection');
+    end if;
+  exception when query_canceled or others then
+    failure_state := SQLSTATE;
+    failure := left(SQLSTATE || ': ' || SQLERRM,220);
+  end;
+
+  -- Always close/cancel callers before owner DDL/row cleanup. Only exact named
+  -- connections/PIDs and trial UUIDs are ever targeted; no global reset/prune.
+  foreach name in array array[a,b] loop
+    begin
+      if name=any(coalesce(extensions.dblink_get_connections(),array[]::text[])) then
+        if extensions.dblink_is_busy(name)=1 then
+          perform extensions.dblink_cancel_query(name);
+          begin perform pg_temp.await_ready(name); exception when query_canceled or others then
+            perform pg_terminate_backend(case when name=a then apid else bpid end);
+          end;
+        end if;
+        begin
+          perform j from extensions.dblink_get_result(name, false) as t(j jsonb);
+          perform j from extensions.dblink_get_result(name, false) as t(j jsonb);
+          perform extensions.dblink_exec(name,'rollback');
+        exception when query_canceled or others then
+          -- A terminated exact PID has no result/transaction left to drain.
+          perform pg_terminate_backend(case when name=a then apid else bpid end);
+        end;
+        -- Disconnect also releases session locks, including canceled trigger A.
+        perform extensions.dblink_disconnect(name);
+      end if;
+    exception when query_canceled or others then cleanup_failure := 'caller cleanup failed';
+    end;
+  end loop;
+  begin
+    if own=any(coalesce(extensions.dblink_get_connections(),array[]::text[])) then
+      perform extensions.dblink_exec(own,'rollback');
+      if kind='collision_winner' then
+        perform extensions.dblink_exec(own,format('begin; drop trigger if exists %1$I on public.rooms; drop schema if exists %1$I cascade; commit',ns));
+      end if;
+      perform extensions.dblink_exec(own,format('begin; delete from public.rooms where host_user_id in (%L,%L,%L); delete from auth.users where id in (%L,%L,%L); commit',h,g,u,h,g,u));
+      perform pg_temp.require((pg_temp.remote_json(own,format('select to_jsonb(count(*)) from public.rooms where host_user_id in (%L,%L,%L)',h,g,u)))::integer=0,'rooms cleaned');
+      perform pg_temp.require((pg_temp.remote_json(own,format('select to_jsonb(count(*)) from auth.users where id in (%L,%L,%L)',h,g,u)))::integer=0,'Auth fixtures cleaned');
+      perform pg_temp.require((pg_temp.remote_json(own,format('select to_jsonb(count(*)) from pg_namespace where nspname=%L',ns)))::integer=0,'test namespace/function cleaned');
+      perform pg_temp.require((pg_temp.remote_json(own,format('select to_jsonb(count(*)) from pg_trigger where tgname=%L',ns)))::integer=0,'test trigger cleaned');
+      perform pg_temp.require(not exists(select 1 from pg_locks where locktype='advisory' and database=dbid and classid=44004 and objid=key), 'advisory key cleaned');
+      perform extensions.dblink_disconnect(own);
+    end if;
+  exception when query_canceled or others then
+    cleanup_failure := 'owner cleanup failed: ' || left(SQLSTATE || ': ' || SQLERRM,180);
+    if own=any(coalesce(extensions.dblink_get_connections(),array[]::text[])) then perform extensions.dblink_disconnect(own); end if;
+  end;
+  deadline := clock_timestamp()+interval '5 seconds';
+  loop
+    perform pg_stat_clear_snapshot();
+    exit when not exists(select 1 from pg_stat_activity where pid in (apid,bpid));
+    if clock_timestamp()>deadline then cleanup_failure:='caller backend remained'; exit; end if;
+  end loop;
+  if cancel_probe then
+    return next ok(canceled_at_barrier and failure_state='57014', kind || ': actual canceled blocked RPC follows bounded cleanup path');
+  else
+    return next ok(failure is null, kind || ': actual caller roles, simultaneous dispatch, observed barrier, committed exact outcomes');
+    if failure is not null then return next diag(failure); end if;
+  end if;
+  return next ok(cleanup_failure is null and not exists(select 1 from pg_stat_activity where pid in (apid,bpid)),
+    kind || ': bounded caller/lock/trigger/schema/room/Auth cleanup');
+  if cleanup_failure is not null then return next diag(cleanup_failure); end if;
+end;
+$trial$;
+set local statement_timeout = '120s';
+select * from pg_temp.race('collision_winner');
+select * from pg_temp.race('collision_winner', true);
+select * from pg_temp.race('duplicate_create');
+select * from pg_temp.race('distinct_guests');
+select * from pg_temp.race('same_guest');
+select * from pg_temp.race('host_guest');
+set local statement_timeout = '15s';
 
 -- Privileged setup is deliberately separate from the caller-role tests below.
 insert into auth.users (id) values
@@ -648,6 +986,198 @@ select is(auth.uid(), null::uuid, 'authenticated without claims has no implied p
 select is((select count(id) from public.rooms), 0::bigint,
   'authenticated without subject can execute the readable projection but RLS returns zero rows');
 reset role;
+
+-- T035: exact catalog contract, before any client type generation.
+select results_eq(
+  $$select p.proname::text collate "default", p.proargnames collate "default", p.proargmodes,
+      p.proallargtypes::regtype[]::text collate "default", p.proretset,
+      p.prorettype::regtype::text collate "default"
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname in ('create_room', 'join_room') order by p.proname$$,
+  $$values ('create_room'::text,
+      array['p_creation_request_id','outcome','room_id','room_code','room_state','participant_role','participant_count'],
+      array['i','t','t','t','t','t','t']::"char"[], '{uuid,text,uuid,text,text,text,smallint}', true, 'record'),
+    ('join_room', array['p_room_code','outcome','room_id','room_code','room_state','participant_role','participant_count'],
+      array['i','t','t','t','t','t','t']::"char"[], '{text,text,uuid,text,text,text,smallint}', true, 'record')$$,
+  'RPCs have exactly one typed input and the ordered six physically nullable TABLE outputs'
+);
+
+-- T036: calls execute as authenticated; snapshots/fixtures execute as owner.
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-4000-a000-000000000001","role":"authenticated"}';
+create temporary table phase4_created on commit drop as
+  select * from public.create_room('40000000-0000-4000-a000-000000000001');
+select is((select count(*) from pg_temp.phase4_created), 1::bigint, 'create returns exactly one row');
+select results_eq($$select outcome, room_state, participant_role, participant_count from pg_temp.phase4_created$$,
+  $$values ('created'::text, 'waiting'::text, 'host'::text, 1::smallint)$$, 'new host is Waiting/1');
+select ok((select room_id is not null and room_code ~ '^[0-9A-F]{10}$' from pg_temp.phase4_created),
+  'server supplies UUID and canonical ten-character code');
+select results_eq($$select * from public.create_room('40000000-0000-4000-a000-000000000001')$$,
+  $$select 'already_created'::text, room_id, room_code, room_state, participant_role, participant_count from pg_temp.phase4_created$$,
+  'same request recovers identical room, exactly one six-field result');
+select is((select outcome from public.create_room('40000000-0000-4000-a000-000000000002')),
+  'created', 'intentional new request creates another room');
+select throws_ok($$select * from public.create_room(null)$$, '22004', null, 'null request raises, no result row');
+set local request.jwt.claims = '{"sub":"00000000-0000-4000-a000-000000000002","role":"authenticated"}';
+select is((select outcome from public.create_room('40000000-0000-4000-a000-000000000001')),
+  'created', 'same request under another host is a distinct logical operation');
+reset role;
+select is((select count(*) from public.rooms where creation_request_id::text like '40000000-%'),
+  3::bigint, 'all create operations leave exactly three complete rows');
+select ok((select bool_and(host_user_id is not null and guest_user_id is null and state = 'waiting'
+  and created_at is not null and updated_at is not null) from public.rooms where creation_request_id::text like '40000000-%'),
+  'create persists complete authoritative rows, not partial output placeholders');
+
+-- T038: member outcomes and non-member disclosure, all through the real RPC.
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-4000-a000-000000000001","role":"authenticated"}';
+select results_eq($$select * from public.join_room('  fedcba9876  ')$$,
+  $$values ('already_member'::text, '10000000-0000-4000-a000-000000000002'::uuid,
+    'FEDCBA9876'::text, 'waiting'::text, 'host'::text, 1::smallint)$$,
+  'trim+uppercase resolves host re-entry before capacity, Waiting stays Waiting');
+select results_eq($$select * from public.join_room('ABCDEF0123')$$,
+  $$select 'already_member'::text, id, code, state, 'host'::text, 2::smallint from public.rooms where code = 'ABCDEF0123'$$,
+  'host re-entry to Ready is not full');
+select results_eq($$select * from public.create_room('20000000-0000-4000-a000-000000000001')$$,
+  $$select 'already_created'::text, id, code, state, 'host'::text, 2::smallint from public.rooms where code = 'ABCDEF0123'$$,
+  'retry create recovers current Ready projection, not stale Waiting');
+select results_eq($$select * from public.join_room(null)$$,
+  $$values ('invalid_code'::text, null::uuid, null::text, null::text, null::text, null::smallint)$$,
+  'null join discloses no room');
+select results_eq(format('select * from public.join_room(%L)', bad),
+  $$values ('invalid_code'::text, null::uuid, null::text, null::text, null::text, null::smallint)$$,
+  'malformed code reveals no room: ' || quote_nullable(bad))
+from (values (''), ('ABCDE'), ('GGGGGGGGGG'), ('ABCDEF01234'), ('ABCDE F012'), (E'ABCDEF0123\n')) codes(bad);
+select results_eq($$select * from public.join_room('FFFFFFFFFF')$$,
+  $$values ('not_found'::text, null::uuid, null::text, null::text, null::text, null::smallint)$$,
+  'unknown canonical code reveals no room');
+set local request.jwt.claims = '{"sub":"00000000-0000-4000-a000-000000000002","role":"authenticated"}';
+select results_eq($$select * from public.join_room(' abcdef0123 ')$$,
+  $$select 'already_member'::text, id, code, state, 'guest'::text, 2::smallint from public.rooms where code = 'ABCDEF0123'$$,
+  'existing guest is idempotent in full Ready room');
+set local request.jwt.claims = '{"sub":"00000000-0000-4000-a000-000000000003","role":"authenticated"}';
+select results_eq($$select * from public.join_room('ABCDEF0123')$$,
+  $$values ('full'::text, null::uuid, null::text, null::text, null::text, null::smallint)$$,
+  'third distinct participant receives only full, not internal id/code/state/role/count');
+reset role;
+select results_eq($$select row_to_json(r)::text from public.rooms r where code in ('ABCDEF0123','FEDCBA9876','0123456789') order by code$$,
+  $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
+  'invalid/missing/full/repeated member/create results preserve original rows byte-for-byte');
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-4000-a000-000000000002","role":"authenticated"}';
+select results_eq($$select * from public.join_room(' fedcba9876 ')$$,
+  $$values ('joined'::text, '10000000-0000-4000-a000-000000000002'::uuid,
+    'FEDCBA9876'::text, 'ready'::text, 'guest'::text, 2::smallint)$$,
+  'guest seat claim returns exact authoritative Ready/2 projection');
+reset role;
+select ok((select r.guest_user_id = '00000000-0000-4000-a000-000000000002'
+    and r.updated_at = transaction_timestamp() and r.host_user_id = b.host_user_id
+    and r.created_at = b.created_at and r.creation_request_id = b.creation_request_id
+    from public.rooms r join pg_temp.phase3_rooms_before b using (id) where r.code = 'FEDCBA9876'),
+  'claim changes only guest, generated state and updated timestamp');
+
+-- T040: actual SQL grants and independent auth.uid() guards.
+select results_eq($$select proname::text collate "default", prosecdef,
+    pg_get_userbyid(proowner)::text collate "default", proconfig collate "default",
+    (select lanname::text collate "default" from pg_language where oid = prolang)
+    from pg_proc where oid in ('public.create_room(uuid)'::regprocedure, 'public.join_room(text)'::regprocedure) order by proname$$,
+  $$values ('create_room'::text, true, 'postgres'::text, array['search_path=""'], 'plpgsql'::text),
+    ('join_room', true, 'postgres', array['search_path=""'], 'plpgsql')$$,
+  'only contained postgres-owned PLpgSQL definers with empty pinned search_path');
+select ok(has_function_privilege('authenticated', fn, 'EXECUTE') and not has_function_privilege('anon', fn, 'EXECUTE'),
+  fn || ': authenticated execute, anon denied') from (values ('public.create_room(uuid)'), ('public.join_room(text)')) f(fn);
+select is((select count(*) from pg_proc p cross join lateral aclexplode(p.proacl) a
+  where p.oid in ('public.create_room(uuid)'::regprocedure, 'public.join_room(text)'::regprocedure)
+    and a.grantee = 0), 0::bigint, 'PUBLIC has no function execution ACL');
+select ok(prosrc !~* '\mexecute\M' and prosrc ~ 'auth.uid\(\)' and prosrc ~ 'public.rooms',
+  proname || ': supplemental containment source audit (not a replacement for role calls)')
+  from pg_proc where oid in ('public.create_room(uuid)'::regprocedure, 'public.join_room(text)'::regprocedure);
+set local request.jwt.claims = '{}';
+set local role anon;
+select throws_ok($$select * from public.create_room(null)$$, '42501', null, 'anon cannot execute create');
+select throws_ok($$select * from public.join_room('ABCDEF0123')$$, '42501', null, 'anon cannot execute join');
+set local role authenticated;
+select throws_ok($$select * from public.create_room(null)$$, '42501', null, 'create auth guard precedes invalid input');
+select throws_ok($$select * from public.join_room(null)$$, '42501', null, 'join auth guard precedes invalid input');
+reset role;
+
+-- Single-session rollback-only fault fixtures run after all remote trials.
+-- nextval is deliberately nontransactional: a failed INSERT subtransaction must
+-- not erase the observed attempt count. Sequence/function/trigger DDL rolls back.
+create temporary sequence phase4_attempts;
+create temporary table phase4_before_collision on commit drop as select * from public.rooms;
+create function pg_temp.phase4_fault() returns trigger language plpgsql as $fault$
+begin
+  if new.creation_request_id = '40000000-0000-4000-a000-000000000003' then
+    if nextval('pg_temp.phase4_attempts') = 1 then new.code := 'ABCDEF0123'; end if;
+  elsif new.creation_request_id = '40000000-0000-4000-a000-000000000004' then
+    perform nextval('pg_temp.phase4_attempts'); new.code := 'ABCDEF0123';
+  end if;
+  return new;
+end;
+$fault$;
+create trigger phase4_fault before insert on public.rooms for each row execute function pg_temp.phase4_fault();
+grant usage, select on sequence pg_temp.phase4_attempts to authenticated;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-4000-a000-000000000001","role":"authenticated"}';
+select is((select outcome from public.create_room('40000000-0000-4000-a000-000000000003')), 'created',
+  'real rooms_code_key collision regenerates and succeeds');
+select is((select last_value from pg_temp.phase4_attempts), 2::bigint, 'collision recovery made exactly two insert attempts');
+reset role;
+select results_eq(
+  $$select row_to_json(r)::text from public.rooms r where creation_request_id <> '40000000-0000-4000-a000-000000000003' order by id$$,
+  $$select row_to_json(r)::text from pg_temp.phase4_before_collision r order by id$$,
+  'successful collision regeneration preserves all pre-existing rows byte-for-byte'
+);
+alter sequence pg_temp.phase4_attempts restart with 1;
+-- Distinct fixture timestamps permit the later extra unique-constraint trial.
+with times as (select id, row_number() over (order by id) as n from public.rooms)
+update public.rooms r set created_at = '2020-01-01 UTC'::timestamptz + times.n * interval '1 second'
+  from times where times.id = r.id;
+create temporary table phase4_before_failures on commit drop as select * from public.rooms;
+set local role authenticated;
+select throws_ok($$select * from public.create_room('40000000-0000-4000-a000-000000000004')$$,
+  'P0001', 'Room code allocation exhausted', 'five real code collisions are bounded and return no result');
+select is((select last_value from pg_temp.phase4_attempts), 5::bigint, 'exhaustion performs exactly five insert attempts');
+reset role;
+drop trigger phase4_fault on public.rooms;
+select results_eq($$select row_to_json(r)::text from public.rooms r order by id$$,
+  $$select row_to_json(r)::text from pg_temp.phase4_before_failures r order by id$$,
+  'exhaustion preserves every field/row, including collision owner');
+
+-- A real, unrelated unique constraint must propagate its own diagnostics.
+alter table public.rooms add constraint phase4_unexpected_unique unique (created_at);
+create or replace function pg_temp.phase4_fault() returns trigger language plpgsql as $fault$
+begin
+  if new.creation_request_id = '40000000-0000-4000-a000-000000000005' then
+    select created_at into new.created_at from public.rooms where code = 'ABCDEF0123';
+  end if;
+  return new;
+end;
+$fault$;
+create trigger phase4_fault before insert on public.rooms for each row execute function pg_temp.phase4_fault();
+set local role authenticated;
+select throws_ok($$select * from public.create_room('40000000-0000-4000-a000-000000000005')$$,
+  '23505', 'duplicate key value violates unique constraint "phase4_unexpected_unique"', 'unknown unique constraint is rethrown unchanged, not code collision');
+reset role;
+drop trigger phase4_fault on public.rooms;
+alter table public.rooms drop constraint phase4_unexpected_unique;
+
+create or replace function pg_temp.phase4_fault() returns trigger language plpgsql as $fault$
+begin
+  if new.code = '0123456789' then raise exception using errcode = 'P0001', message = 'controlled post-update failure'; end if;
+  return new;
+end;
+$fault$;
+create trigger phase4_fault after update on public.rooms for each row execute function pg_temp.phase4_fault();
+set local role authenticated;
+select throws_ok($$select * from public.join_room('0123456789')$$,
+  'P0001', 'controlled post-update failure', 'post-seat-update exception returns no business result');
+reset role;
+drop trigger phase4_fault on public.rooms;
+select results_eq($$select row_to_json(r)::text from public.rooms r order by id$$,
+  $$select row_to_json(r)::text from pg_temp.phase4_before_failures r order by id$$,
+  'unknown-constraint and post-UPDATE exceptions leave no partial row/seat or timestamp change');
 
 -- finish() and rollback leave neither room fixtures nor Auth fixture rows behind.
 select * from finish();
