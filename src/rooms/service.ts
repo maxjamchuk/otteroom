@@ -16,7 +16,7 @@ export async function createRoom(requestId: Database['public']['Functions']['cre
   } catch { throw new RoomServiceError(); }
 }
 
-// Shared code-based transport; Phase 6 consumes it only for host recovery.
+// Both invitation paths and existing-member recovery use this one transport.
 export async function joinRoom(code: Database['public']['Functions']['join_room']['Args']['p_room_code']) {
   try {
     await bootstrapAnonymousSession();

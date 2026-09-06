@@ -178,6 +178,9 @@ describe('credential-safe diagnostics boundaries', () => {
 
   it('safe reporter drops raw fields, stdout, attachments and error causes', () => verify(prelude + `
     const { safeResult } = await import('./e2e/support/safe-reporter.ts');
+    for (const [title, expected] of [['@us2-join E02 link', 'us2-join'], ['@capacity-smoke E12 isolation', 'capacity-smoke'], ['@us3 E12 future', 'unclassified']]) {
+      assert.equal(safeResult({ title }, { status: 'passed' }).scenario, expected);
+    }
     const secret = sentinel();
     const result = safeResult({ title: secret }, { status: 'failed', error: { message: secret, cause: secret }, stdout: [secret], attachments: [{ body: secret }] });
     assert.equal(JSON.stringify(result).includes(secret), false);

@@ -1,6 +1,6 @@
 import { Platform } from 'react-native';
 import * as Linking from 'expo-linking';
-import { invitationLink, normalizeRoomCode } from '../../src/rooms/code';
+import { invitationLink, normalizeRoomCode, parseRoomSegment } from '../../src/rooms/code';
 jest.mock('expo-linking', () => ({ ...jest.requireActual('expo-linking'), createURL: jest.fn((path: string) => `otteroom:/${path}`) }));
 it.each(['ABCDEF0123', 'abcdef0123', ' \tabCdEf0123\n'])('normalizes valid input %#', input => {
   expect(normalizeRoomCode(input)).toBe('ABCDEF0123');
@@ -25,4 +25,10 @@ it('refuses to publish a malformed or noncanonical invitation', () => {
 });
 it.each([undefined, null, [], ['ABCDEF0123'], '', 'ABCDEF012', 'ABCDEF01234', 'GBCDEF0123', 'ABCD EF0123', '/room/ABCDEF0123'])('rejects malformed input %#', input => {
   expect(normalizeRoomCode(input)).toBeNull();
+});
+it.each([undefined, null, [], ['ABCDEF0123'], ['ABCDEF0123', '012345ABCD'], '', 'bad', 123])('rejects unsafe route segment %#', input => {
+  expect(parseRoomSegment(input)).toBeNull();
+});
+it.each(['ABCDEF0123', 'abcdef0123', ' abcdef0123 '])('returns one canonical logical route for input %#', input => {
+  expect(parseRoomSegment(input)).toEqual({ code: 'ABCDEF0123', path: '/room/ABCDEF0123', replace: input !== 'ABCDEF0123' });
 });

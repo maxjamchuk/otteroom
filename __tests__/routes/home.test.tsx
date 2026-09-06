@@ -104,6 +104,7 @@ describe('mounted Auth boundary', () => {
     const view = await mount();
     expect(screen.getByText('Restoring local session…')).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Create Room' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Join Room' })).toBeNull();
     expect(mockUuid).not.toHaveBeenCalled(); expect(mockCreate).not.toHaveBeenCalled();
     expect(view.getPathname()).toBe('/');
     await act(async () => { resolve({ user: { id: 'private-participant' } }); });
@@ -123,5 +124,69 @@ describe('mounted Auth boundary', () => {
     view.unmount();
     await waitFor(() => expect(mockUnsubscribe).toHaveBeenCalled());
     expect(mockStopRefresh).toHaveBeenCalled();
+  });
+});
+
+describe('manual invitation entry', () => {
+  it('normalizes once and leaves the sole join call to the shared room route', async () => {
+    mockJoin.mockResolvedValue({ ...row, outcome: 'joined', participant_role: 'guest', room_state: 'ready', participant_count: 2 });
+    const replace = jest.spyOn(router, 'replace');
+    const view = await mount();
+    fireEvent.changeText(screen.getByLabelText('Room code input'), ' \tabcdef0123\n');
+    await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'Join Room' })); });
+    expect(replace.mock.calls).toEqual([['/room/ABCDEF0123']]);
+    expect(view.getPathname()).toBe('/room/ABCDEF0123');
+    expect(mockJoin.mock.calls).toEqual([['ABCDEF0123']]);
+    expect(mockCreate).not.toHaveBeenCalled(); expect(mockUuid).not.toHaveBeenCalled();
+    expect(screen.getByText('Ready')).toBeVisible();
+  });
+  it.each(['', 'bad', 'ABCD EF0123', 'ABCDEF01234'])('rejects malformed manual input %# locally', async input => {
+    const replace = jest.spyOn(router, 'replace');
+    await mount();
+    fireEvent.changeText(screen.getByLabelText('Room code input'), input);
+    fireEvent.press(screen.getByRole('button', { name: 'Join Room' }));
+    expect(screen.getByText('Malformed invitation. Enter a valid room code.')).toBeVisible();
+    expect(replace).not.toHaveBeenCalled(); expect(mockJoin).not.toHaveBeenCalled();
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+  it('guards duplicate navigation and cross-action create before disabled render', async () => {
+    const replace = jest.spyOn(router, 'replace').mockImplementation(() => {});
+    await mount();
+    fireEvent.changeText(screen.getByLabelText('Room code input'), 'abcdef0123');
+    function handler(name: string) {
+      let button = screen.getByRole('button', { name });
+      while (typeof button.props.onPress !== 'function' && button.parent) button = button.parent;
+      return button.props.onPress;
+    }
+    const join = handler('Join Room'), create = handler('Create Room');
+    act(() => { join(); join(); create(); });
+    expect(replace.mock.calls).toEqual([['/room/ABCDEF0123']]);
+    expect(mockJoin).not.toHaveBeenCalled(); expect(mockCreate).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Opening room…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Create Room' })).toBeDisabled();
+    expect(screen.getByLabelText('Room code input').props.editable).toBe(false);
+  });
+  it('blocks manual navigation during create and safely retries failed navigation', async () => {
+    const replace = jest.spyOn(router, 'replace').mockImplementationOnce(() => { throw new Error('private navigation data'); });
+    await mount();
+    fireEvent.changeText(screen.getByLabelText('Room code input'), 'abcdef0123');
+    fireEvent.press(screen.getByRole('button', { name: 'Join Room' }));
+    expect(screen.getByText('Unable to open this room. Please try again.')).toBeVisible();
+    expect(screen.queryByText('private navigation data')).toBeNull();
+    await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'Retry join' })); });
+    expect(replace).toHaveBeenCalledTimes(2);
+    expect(mockJoin).toHaveBeenCalledTimes(1);
+  });
+  it('manual submit cannot overtake an in-flight create', async () => {
+    mockCreate.mockReturnValue(new Promise(() => {}));
+    const replace = jest.spyOn(router, 'replace');
+    await mount();
+    fireEvent.changeText(screen.getByLabelText('Room code input'), 'abcdef0123');
+    let button = screen.getByRole('button', { name: 'Join Room' });
+    while (typeof button.props.onPress !== 'function' && button.parent) button = button.parent;
+    const join = button.props.onPress;
+    act(() => { fireEvent.press(screen.getByRole('button', { name: 'Create Room' })); join(); });
+    expect(replace).not.toHaveBeenCalled(); expect(mockJoin).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Join Room' })).toBeDisabled();
   });
 });

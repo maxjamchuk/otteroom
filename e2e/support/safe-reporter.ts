@@ -16,6 +16,8 @@ function scenarioFor(title: unknown): string {
   if (title.startsWith('@baseline ')) return 'baseline';
   if (title.startsWith('@auth ')) return 'auth';
   if (title.startsWith('@us1 E01 ')) return 'us1';
+  if (/^@us2-join E(?:02|04|10|11) /.test(title)) return 'us2-join';
+  if (/^@capacity-smoke E(?:05|12) /.test(title)) return 'capacity-smoke';
   if (title.startsWith('@diagnostics-static A ')) return 'A';
   if (title.startsWith('@diagnostics-static B ')) return 'B';
   if (title.startsWith('@credential-probe C ')) return 'C';

@@ -51,3 +51,12 @@ it('closes shared join role/count/nullability without guest UI', () => {
   }
   expect(() => narrowJoinResult([{ ...accepted, outcome: 'future' }])).toThrow(RoomContractError);
 });
+it.each(['joined', 'already_member'])('rejects each missing or null accepted join field for %s', outcome => {
+  const guest = { ...accepted, outcome, participant_role: 'guest', room_state: 'ready', participant_count: 2 };
+  for (const field of Object.keys(guest)) {
+    const missing: Record<string, unknown> = { ...guest };
+    delete missing[field];
+    expect(() => narrowJoinResult([missing])).toThrow(RoomContractError);
+    expect(() => narrowJoinResult([{ ...guest, [field]: null }])).toThrow(RoomContractError);
+  }
+});

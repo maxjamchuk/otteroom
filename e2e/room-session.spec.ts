@@ -1,8 +1,10 @@
-import { expect, type Page, type Route } from '@playwright/test';
+import { randomUUID } from 'node:crypto';
+import { expect, type Page, type Route, type Browser, type BrowserContextOptions, type TestInfo, type Response } from '@playwright/test';
 import { test, safeBody, SafeDiagnostics } from './support/safe-diagnostics';
 
 // Binding allocation from quickstart; later cases consume these trials, not
-// additional fixture/bootstrap identities. Phase 6 implements only the E01 trials alongside the existing Auth row.
+// additional fixture/bootstrap identities. Phase 7 adds entry and bounded
+// capacity/isolation smoke, not full US2 convergence or full US3 acceptance.
 export const anonymousBudget = Object.freeze({
   E01: 3, E02: 2, E03: 4, E04: 4, E05: 3, E06: 3,
   E07: 5, E08: 4, E09: 2, E10: 2, E11: 1, E12: 11, auth: 3,
@@ -27,19 +29,20 @@ async function startHost(page: Page, diagnostics: SafeDiagnostics): Promise<Publ
   return { origin: new URL(signup.url()).origin, publicKey };
 }
 
-async function ownRooms(page: Page, api: PublicApi): Promise<RoomProjection[]> {
+async function ownRooms(page: Page, api: PublicApi, targetId?: string): Promise<RoomProjection[]> {
   // A real member-authorized Data API read, never an owner/service-role oracle.
   // Session access stays inside this browser context and only id/code/state return.
-  const rows: unknown = await page.evaluate(async ({ origin, publicKey }) => {
+  const rows: unknown = await page.evaluate(async ({ origin, publicKey, targetId }) => {
     const key = Object.keys(localStorage).find(name => /^sb-.+-auth-token$/.test(name));
     const session = key ? JSON.parse(localStorage.getItem(key) ?? 'null') : null;
     if (!session?.access_token) throw new Error('E2E_SAFE_FAILURE');
-    const response = await fetch(`${origin}/rest/v1/rooms?select=id,code,state`, {
+    const filter = targetId ? `&id=eq.${encodeURIComponent(targetId)}` : '';
+    const response = await fetch(`${origin}/rest/v1/rooms?select=id,code,state${filter}`, {
       headers: { apikey: publicKey, Authorization: `Bearer ${session.access_token}` },
     });
     if (!response.ok) throw new Error('E2E_SAFE_FAILURE');
     return response.json();
-  }, api);
+  }, { ...api, targetId });
   if (!Array.isArray(rows) || rows.length > 10 || rows.some(row => !row ||
     Object.keys(row).sort().join(',') !== 'code,id,state' || typeof row.id !== 'string' ||
     typeof row.code !== 'string' || !/^[0-9A-F]{10}$/.test(row.code) || !['waiting', 'ready'].includes(row.state))) {
@@ -235,5 +238,266 @@ test('@auth persisted participant and isolated identity without room actions', a
     } finally {
       if (fresh) await fresh.close(); else await context.close();
     }
+  });
+});
+
+const joinEndpoint = '**/rest/v1/rpc/join_room';
+const malformedMessage = 'Malformed invitation. Enter a valid room code.';
+const missingMessage = 'Room not found. Check your invitation.';
+const fullMessage = 'Room Full. This room already has two participants.';
+
+// Test-only ownership: every extra isolated context gets the same registry,
+// capture policy, one-signup cap and finally cleanup as the primary fixture.
+async function withParticipants(browser: Browser, options: BrowserContextOptions, info: TestInfo,
+  count: number, body: (participants: SafeDiagnostics[]) => Promise<void>) {
+  const participants: SafeDiagnostics[] = [];
+  try {
+    for (let index = 0; index < count; index++) {
+      const context = await browser.newContext({ ...options, serviceWorkers: 'block' });
+      try {
+        const participant = await SafeDiagnostics.create(context, { ...options, serviceWorkers: 'block' }, info);
+        participant.allowAnonymousSignups(1);
+        participants.push(participant);
+      } catch { await context.close(); throw new Error('E2E_SAFE_FAILURE'); }
+    }
+    async function guarded(index: number): Promise<void> {
+      if (index === participants.length) return body(participants);
+      await safeBody(participants[index], () => guarded(index + 1));
+    }
+    await guarded(0);
+  } finally {
+    const closed = await Promise.allSettled(participants.map(participant => participant.close()));
+    if (closed.some(result => result.status === 'rejected')) throw new Error('E2E_SAFE_FAILURE');
+  }
+}
+
+async function assertAccepted(response: Response, room: RoomProjection, outcome: 'joined' | 'already_member', role: 'host' | 'guest', state: 'waiting' | 'ready') {
+  const rows: unknown = await response.json();
+  const valid = response.ok() && Array.isArray(rows) && rows.length === 1 && rows[0] &&
+    Object.keys(rows[0]).sort().join(',') === 'outcome,participant_count,participant_role,room_code,room_id,room_state' &&
+    rows[0].outcome === outcome && rows[0].room_id === room.id && rows[0].room_code === room.code &&
+    rows[0].participant_role === role && rows[0].room_state === state && rows[0].participant_count === (state === 'waiting' ? 1 : 2);
+  expect(!!valid).toBe(true);
+}
+
+async function assertRejected(response: Response, outcome: 'not_found' | 'full') {
+  const rows: unknown = await response.json();
+  expect(response.ok() && Array.isArray(rows) && rows.length === 1 && rows[0] &&
+    Object.keys(rows[0]).sort().join(',') === 'outcome,participant_count,participant_role,room_code,room_id,room_state' &&
+    rows[0].outcome === outcome && ['room_id', 'room_code', 'room_state', 'participant_role', 'participant_count'].every(key => rows[0][key] === null)).toBe(true);
+}
+
+async function createWaiting(page: Page, diagnostics: SafeDiagnostics) {
+  const api = await startHost(page, diagnostics);
+  const created = page.waitForResponse(response => response.url().endsWith('/rpc/create_room'));
+  const recovered = page.waitForResponse(response => response.url().endsWith('/rpc/join_room'));
+  await page.getByRole('button', { name: 'Create Room' }).click();
+  const rows = await (await created).json();
+  expect(Array.isArray(rows) && rows.length === 1 && rows[0].outcome === 'created').toBe(true);
+  const rooms = await ownRooms(page, api);
+  expect(rooms.length === 1 && rooms[0].id === rows[0].room_id && rooms[0].code === rows[0].room_code).toBe(true);
+  const room = rooms[0];
+  await assertAccepted(await recovered, room, 'already_member', 'host', 'waiting');
+  await assertWaiting(page, diagnostics, room);
+  const invitation = await page.getByLabel('Invitation link', { exact: true }).innerText();
+  expect(invitation === new URL(`/room/${room.code}`, page.url()).href).toBe(true);
+  return { api, room, invitation, participant: await ownParticipant(page) };
+}
+
+async function assertReady(page: Page, diagnostics: SafeDiagnostics, room: RoomProjection) {
+  await expect(page).toHaveURL(new URL(`/room/${room.code}`, page.url()).href);
+  await expect(page.getByRole('heading', { name: 'Ready', exact: true })).toBeVisible();
+  await expect(page.getByText('2 of 2', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Room code', { exact: true })).toHaveText(room.code);
+  await expect(page.getByLabel('Invitation link', { exact: true })).toHaveCount(0);
+  const participant = await ownParticipant(page);
+  expect(await page.evaluate(({ id, participant }) => !document.body.innerText.includes(id) && !document.body.innerText.includes(participant), { id: room.id, participant })).toBe(true);
+  await diagnostics.assertAuthAccounting(1, 1);
+  await diagnostics.assertNoCredentialUi();
+}
+
+async function assertNoRoomDetails(page: Page, diagnostics: SafeDiagnostics, message: string) {
+  await expect(page.getByText(message, { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Room code', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('Invitation link', { exact: true })).toHaveCount(0);
+  await expect(page.getByText(/^[12] of 2$/)).toHaveCount(0);
+  await diagnostics.assertAuthAccounting(1, 1);
+  await diagnostics.assertNoCredentialUi();
+}
+
+async function linkGuest(guest: SafeDiagnostics, room: RoomProjection, invitation: string) {
+  const joined = guest.page.waitForResponse(response => response.url().endsWith('/rpc/join_room'));
+  expect((await guest.page.goto(invitation))?.status() === 200).toBe(true);
+  await assertAccepted(await joined, room, 'joined', 'guest', 'ready');
+  await assertReady(guest.page, guest, room);
+}
+
+async function repeatReady(page: Page, diagnostics: SafeDiagnostics, api: PublicApi, room: RoomProjection, role: 'host' | 'guest') {
+  const participant = await ownParticipant(page);
+  const joined = page.waitForResponse(response => response.url().endsWith('/rpc/join_room'));
+  expect((await page.reload())?.status() === 200).toBe(true);
+  await assertAccepted(await joined, room, 'already_member', role, 'ready');
+  await assertReady(page, diagnostics, room);
+  const rooms = await ownRooms(page, api);
+  expect(rooms.length === 1 && rooms[0].id === room.id && rooms[0].code === room.code && rooms[0].state === 'ready' &&
+    (await ownParticipant(page)) === participant).toBe(true);
+}
+
+test('@us2-join E02 actual invitation and same-member host guest re-entry', async ({ page, diagnostics, browser, baseURL, viewport }, info) => {
+  await safeBody(diagnostics, async () => {
+    const { api, room, invitation, participant } = await createWaiting(page, diagnostics);
+    await withParticipants(browser, { baseURL, viewport }, info, 1, async ([guest]) => {
+      await linkGuest(guest, room, invitation);
+      expect((await ownParticipant(guest.page)) !== participant).toBe(true);
+      // Phase 7 has no subscription. The authoritative DB is Ready, not this
+      // host's unchanged initial UI; explicit re-entry below is intentional.
+      await expect(page.getByRole('heading', { name: 'Waiting', exact: true })).toBeVisible();
+      expect((await ownRooms(page, api))[0].state === 'ready').toBe(true);
+      await repeatReady(page, diagnostics, api, room, 'host');
+      await repeatReady(guest.page, guest, api, room, 'guest');
+      expect(diagnostics.signupAttempts + guest.signupAttempts === anonymousBudget.E02).toBe(true);
+      await diagnostics.record({ scenario: 'E02', outcome: 'joined guest ready; repeated host/guest already_member; two seats; host refreshed explicitly' });
+    });
+  });
+});
+
+test('@us2-join E04 manual whitespace lowercase converges on shared join', async ({ page, diagnostics, browser, baseURL, viewport }, info) => {
+  await safeBody(diagnostics, async () => {
+    const { api, room, participant } = await createWaiting(page, diagnostics);
+    await withParticipants(browser, { baseURL, viewport }, info, 1, async ([guest]) => {
+      await startHost(guest.page, guest); // Home readiness only; this caller never creates.
+      const joined = guest.page.waitForResponse(response => response.url().endsWith('/rpc/join_room'));
+      const request = guest.page.waitForRequest(request => request.url().endsWith('/rpc/join_room'));
+      await guest.page.getByLabel('Room code input', { exact: true }).fill(`  ${room.code.toLowerCase()}  `);
+      await guest.page.getByRole('button', { name: 'Join Room', exact: true }).click();
+      expect((await request).postDataJSON()?.p_room_code === room.code).toBe(true);
+      await assertAccepted(await joined, room, 'joined', 'guest', 'ready');
+      await assertReady(guest.page, guest, room);
+      expect((await ownParticipant(guest.page)) !== participant).toBe(true);
+      expect((await ownRooms(page, api))[0].state === 'ready').toBe(true);
+      await expect(page.getByRole('heading', { name: 'Waiting', exact: true })).toBeVisible();
+      expect(diagnostics.signupAttempts + guest.signupAttempts === 2).toBe(true);
+      await diagnostics.record({ scenario: 'E04', outcome: 'manual canonical join; guest ready; two seats' });
+    });
+  });
+});
+
+test('@us2-join E10 malformed manual code performs no RPC', async ({ page, diagnostics }) => {
+  await safeBody(diagnostics, async () => {
+    const api = await startHost(page, diagnostics);
+    let calls = 0;
+    const observe = (request: import('@playwright/test').Request) => { if (/\/rpc\/(?:create_room|join_room)$/.test(request.url())) calls++; };
+    page.on('request', observe);
+    try {
+      await page.getByLabel('Room code input', { exact: true }).fill('not-an-invitation');
+      await page.getByRole('button', { name: 'Join Room', exact: true }).click();
+      await assertNoRoomDetails(page, diagnostics, malformedMessage);
+      expect(new URL(page.url()).pathname === '/' && calls === 0 && (await ownRooms(page, api)).length === 0).toBe(true);
+    } finally { page.removeListener('request', observe); }
+  });
+});
+
+test('@us2-join E10 malformed direct invitation performs no RPC', async ({ page, diagnostics }) => {
+  await safeBody(diagnostics, async () => {
+    diagnostics.allowAnonymousSignups(1);
+    const signup = page.waitForRequest(request => request.url().endsWith('/auth/v1/signup'));
+    let calls = 0;
+    const observe = (request: import('@playwright/test').Request) => { if (/\/rpc\/(?:create_room|join_room)$/.test(request.url())) calls++; };
+    page.on('request', observe);
+    try {
+      expect((await page.goto('/room/invalid'))?.status() === 200).toBe(true);
+      await assertNoRoomDetails(page, diagnostics, malformedMessage);
+      const request = await signup, publicKey = await request.headerValue('apikey');
+      expect(!!publicKey && calls === 0).toBe(true);
+      expect((await ownRooms(page, { origin: new URL(request.url()).origin, publicKey: publicKey! })).length === 0).toBe(true);
+    } finally { page.removeListener('request', observe); }
+  });
+});
+
+test('@us2-join E11 random unknown canonical code returns real not_found', async ({ page, diagnostics }) => {
+  await safeBody(diagnostics, async () => {
+    const api = await startHost(page, diagnostics);
+    const code = randomUUID().replaceAll('-', '').slice(0, 10).toUpperCase();
+    const rejected = page.waitForResponse(response => response.url().endsWith('/rpc/join_room'));
+    await page.goto(`/room/${code}`);
+    // A random collision fails this trial; no privileged existence oracle or retry.
+    await assertRejected(await rejected, 'not_found');
+    await assertNoRoomDetails(page, diagnostics, missingMessage);
+    expect((await ownRooms(page, api)).length === 0).toBe(true);
+  });
+});
+
+test('@us2-join E04 pre-acceptance failure preserves Waiting then same-code retry joins', async ({ page, diagnostics, browser, baseURL, viewport }, info) => {
+  await safeBody(diagnostics, async () => {
+    const { api, room } = await createWaiting(page, diagnostics);
+    await withParticipants(browser, { baseURL, viewport }, info, 1, async ([guest]) => {
+      await startHost(guest.page, guest);
+      const participant = await ownParticipant(guest.page);
+      let aborted = 0, interceptionFailed = false;
+      const abort = async (route: Route) => {
+        try { aborted++; await route.abort('failed'); } catch { interceptionFailed = true; }
+      };
+      await guest.page.route(joinEndpoint, abort, { times: 1 });
+      try {
+        await guest.page.getByLabel('Room code input', { exact: true }).fill(room.code);
+        await guest.page.getByRole('button', { name: 'Join Room', exact: true }).click();
+        await assertNoRoomDetails(guest.page, guest, 'Unable to open this room. Please try again.');
+        expect(aborted === 1 && !interceptionFailed).toBe(true);
+        const before = await ownRooms(page, api);
+        expect(before.length === 1 && before[0].id === room.id && before[0].code === room.code && before[0].state === 'waiting').toBe(true);
+        expect((await ownRooms(guest.page, api)).length === 0).toBe(true);
+        await guest.page.unroute(joinEndpoint, abort);
+        const retry = guest.page.waitForResponse(response => response.url().endsWith('/rpc/join_room'));
+        const request = guest.page.waitForRequest(request => request.url().endsWith('/rpc/join_room'));
+        await guest.page.getByRole('button', { name: 'Retry room', exact: true }).click();
+        expect((await request).postDataJSON()?.p_room_code === room.code).toBe(true);
+        await assertAccepted(await retry, room, 'joined', 'guest', 'ready');
+        await assertReady(guest.page, guest, room);
+        expect((await ownParticipant(guest.page)) === participant && (await ownRooms(page, api))[0].state === 'ready').toBe(true);
+        await diagnostics.record({ scenario: 'E04', outcome: 'pre-acceptance abort; Waiting unchanged; same-code retry joined guest ready' });
+      } finally { await guest.page.unroute(joinEndpoint, abort); }
+    });
+  });
+});
+
+test('@capacity-smoke E05 minimal third identity rejection preserves admitted seats', async ({ page, diagnostics, browser, baseURL, viewport }, info) => {
+  await safeBody(diagnostics, async () => {
+    const { api, room, invitation, participant } = await createWaiting(page, diagnostics);
+    await withParticipants(browser, { baseURL, viewport }, info, 2, async ([guest, third]) => {
+      await linkGuest(guest, room, invitation);
+      const guestId = await ownParticipant(guest.page);
+      const rejected = third.page.waitForResponse(response => response.url().endsWith('/rpc/join_room'));
+      await third.page.goto(invitation);
+      await assertRejected(await rejected, 'full');
+      await assertNoRoomDetails(third.page, third, fullMessage);
+      const thirdId = await ownParticipant(third.page);
+      expect(new Set([participant, guestId, thirdId]).size === 3 && (await ownRooms(third.page, api)).length === 0).toBe(true);
+      await expect(page.getByRole('heading', { name: 'Waiting', exact: true })).toBeVisible();
+      await repeatReady(page, diagnostics, api, room, 'host');
+      await repeatReady(guest.page, guest, api, room, 'guest');
+      expect((await ownParticipant(page)) === participant && (await ownParticipant(guest.page)) === guestId).toBe(true);
+      expect(diagnostics.signupAttempts + guest.signupAttempts + third.signupAttempts === anonymousBudget.E05).toBe(true);
+      await diagnostics.record({ scenario: 'E05', outcome: 'minimal full smoke; third rejected; same admitted host guest' });
+    });
+  });
+});
+
+test('@capacity-smoke E12 minimal known-ID RLS read preserves two own rooms', async ({ page, diagnostics, browser, baseURL, viewport }, info) => {
+  await safeBody(diagnostics, async () => {
+    const owner = await createWaiting(page, diagnostics);
+    await withParticipants(browser, { baseURL, viewport }, info, 1, async ([unrelated]) => {
+      const other = await createWaiting(unrelated.page, unrelated);
+      expect(owner.participant !== other.participant && owner.room.id !== other.room.id).toBe(true);
+      const beforeOwner = await ownRooms(page, owner.api), beforeOther = await ownRooms(unrelated.page, other.api);
+      // Internal ID came only from its owner's accepted real create/re-entry.
+      // This request uses the unrelated browser's own ordinary Auth and RLS.
+      expect((await ownRooms(unrelated.page, other.api, owner.room.id)).length === 0).toBe(true);
+      expect(JSON.stringify(await ownRooms(page, owner.api)) === JSON.stringify(beforeOwner)).toBe(true);
+      expect(JSON.stringify(await ownRooms(unrelated.page, other.api)) === JSON.stringify(beforeOther)).toBe(true);
+      await assertWaiting(page, diagnostics, owner.room);
+      await assertWaiting(unrelated.page, unrelated, other.room);
+      expect(diagnostics.signupAttempts + unrelated.signupAttempts === 2).toBe(true);
+      await diagnostics.record({ scenario: 'E12', outcome: 'minimal known-id exact-column read zero rows; both own rooms unchanged; not full US3' });
+    });
   });
 });

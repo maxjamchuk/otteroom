@@ -1,4 +1,5 @@
 import { createRoom, joinRoom, RoomServiceError } from '../../src/rooms/service';
+import { normalizeRoomCode } from '../../src/rooms/code';
 const mockBootstrap = jest.fn();
 const mockRpc = jest.fn();
 jest.mock('../../src/auth/anonymous-session', () => ({ bootstrapAnonymousSession: () => mockBootstrap() }));
@@ -39,4 +40,31 @@ it.each(['bootstrap', 'transport', 'rpc', 'contract'])('maps %s failure generica
     await expect(action()).rejects.toEqual(new RoomServiceError());
   }
   expect(mockRpc).toHaveBeenCalledTimes(boundary === 'bootstrap' ? 0 : 2);
+});
+
+const guest = { ...row, outcome: 'joined', participant_role: 'guest', room_state: 'ready', participant_count: 2 };
+it.each([
+  guest, { ...guest, outcome: 'already_member' },
+  { ...row, outcome: 'already_member' },
+  { ...guest, outcome: 'already_member', participant_role: 'host' },
+  ...['invalid_code', 'not_found', 'full'].map(outcome => ({ outcome, room_id: null, room_code: null, room_state: null, participant_role: null, participant_count: null })),
+])('shared join preserves the closed server outcome %#', async result => {
+  mockRpc.mockResolvedValue({ data: [result], error: null });
+  expect(await joinRoom(row.room_code)).toEqual(result);
+  expect(mockBootstrap).toHaveBeenCalledTimes(1);
+  expect(mockRpc.mock.calls).toEqual([['join_room', { p_room_code: row.room_code }]]);
+});
+it.each([null, [], [guest, guest], [{ ...guest, room_id: null }], [{ ...guest, extra: 'private' }]])('join rejects invalid response %# without retry or partial data', async data => {
+  mockRpc.mockResolvedValue({ data, error: null });
+  await expect(joinRoom(row.room_code)).rejects.toEqual(new RoomServiceError());
+  expect(mockRpc).toHaveBeenCalledTimes(1);
+});
+it('link and normalized manual entry use the identical gated transport', async () => {
+  let resolve!: () => void;
+  mockBootstrap.mockReturnValue(new Promise<void>(done => { resolve = done; }));
+  mockRpc.mockResolvedValue({ data: [guest], error: null });
+  const calls = [joinRoom(row.room_code), joinRoom(normalizeRoomCode(' abcdef0123 ')!)];
+  await Promise.resolve(); expect(mockRpc).not.toHaveBeenCalled();
+  resolve(); await Promise.all(calls);
+  expect(mockRpc.mock.calls).toEqual(Array(2).fill(['join_room', { p_room_code: row.room_code }]));
 });
