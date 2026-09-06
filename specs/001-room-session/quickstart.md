@@ -1,11 +1,11 @@
-# Quickstart Plan: Create and Join a Two-Person Room
+# Quickstart: Create and Join a Two-Person Room
 
 **Feature**: `001-room-session`
 **Host environment**: Linux
-**Status**: Planned workflow for the future implementation
+**Status**: Implemented local browser workflow; execution receipts are in `tasks.md`.
 
-The commands below describe the reproducible interface the implementation must
-provide. They are not claimed to work in the current planning-only repository.
+These are the repository's actual commands. This guide and checkboxes are not
+runtime evidence: execute the full validation sequence below.
 There are no Dashboard schema steps, manually executed SQL files, copied
 production secrets, hosted Supabase dependency, mobile emulator requirements, or
 globally installed Supabase CLI requirements.
@@ -13,7 +13,7 @@ globally installed Supabase CLI requirements.
 ## Environment Prerequisites
 
 - Git.
-- Node.js `24.20.0` LTS with its bundled npm.
+- Node.js `24.20.0` LTS with bundled npm `11.19.0`.
 - Docker Engine with a running daemon and Docker Compose support.
 - A supported native Playwright OS, or the automatic official Docker runtime on
   unsupported Linux (including AlmaLinux), as defined below.
@@ -21,9 +21,9 @@ globally installed Supabase CLI requirements.
   available.
 
 The project-local stable Supabase CLI `2.116.0` is installed by `npm ci`; its
-committed generated configuration uses local PostgreSQL major `17`. Stable
-`@playwright/test` `1.63.0` is also locked; its official release was published
-2026-09-04 and is not a prerelease. Do not install or invoke a global Supabase or
+committed configuration uses PostgreSQL major `17` (observed `17.6`).
+Playwright `1.63.0`, supabase-js `2.115.0` and Expo `57.0.20` are locked;
+local Realtime is `v2.129.3`. Do not install or invoke a global Supabase or
 Playwright CLI.
 
 Prerequisite checks:
@@ -35,10 +35,33 @@ docker version
 docker compose version
 ```
 
-The Node command must report `v24.20.0`. Docker commands must reach the local
-daemon.
+Node/npm must report `v24.20.0` / `11.19.0`. Docker commands must reach the
+local daemon. Use the normal version manager (`.nvmrc`), not a temporary runtime.
 
-### Phase 1 Playwright runtime amendment
+## Implemented Root Layout
+
+```text
+app/_layout.tsx             mounted Auth gate
+app/index.tsx               / — create and manual-code entry
+app/room/[code].tsx         /room/[code] — authoritative recovery
+src/auth/                   retained single-flight participant bootstrap
+src/config/ + src/lib/      public env, typed client, web/native storage
+src/rooms/                  code/contracts/services/state/subscription
+src/types/database.generated.ts  committed canonical public types
+supabase/config.toml        local project/ports/Auth policy
+supabase/migrations/        schema/access, RPCs, rooms-only publication
+supabase/tests/database/    real-role pgTAP and real-session races
+__tests__/                  client/config/scheduling behavior tests
+e2e/                        real browser acceptance and C1 diagnostics
+scripts/                    safe env/types/process/browser controllers
+.agents/ + .specify/ + specs/ preserved specification baseline
+```
+
+One root universal Expo app, two routes, one application table (`public.rooms`),
+two mutation RPCs. The feature stops at Ready. Android/iOS share the codebase;
+this acceptance workflow claims web evidence only.
+
+### Repository-owned Playwright runtime
 
 `scripts/playwright-runtime.mjs` owns automatic runtime selection and preparation.
 For pinned Playwright 1.63.0, native Chromium is used on supported x64/arm64
@@ -68,7 +91,7 @@ loopback traffic through the runner-owned connection, so host firewall rules for
 bridge-to-host traffic do not become an undocumented prerequisite. The host
 mapping is still explicit, but gateway HTTP is not required. No application
 source hardcodes `hostmachine`, and unchanged local-service URLs need no backend
-work or firewall changes in Phase 1.
+work or firewall changes.
 
 Container stop/remove runs in finally after success, test/startup failure, SIGINT
 or SIGTERM, without touching unrelated containers. Preserve original test exit
@@ -82,14 +105,11 @@ C1 capture-off defaults, safe reporter, sanitizer, registry and scanner stay int
 `__tests__/config/playwright-runtime.test.ts` proves selection, exact image,
 preparation, readiness, unavailable Docker diagnostics, exit preservation,
 success/failure/interrupt cleanup, and absence of runtime environment injection.
-T020 additionally requires real Docker navigation on AlmaLinux to `/` and
-`/room/ABCDEF0123`, direct navigation/reload, static C1 A/B, fresh `npm ci`,
-Expo dependency checks, and no remaining owned container/Expo process or port.
-This amendment supersedes only the native-only install mapping in completed
-T009; T001–T019 remain untouched, and T008's host/browser URL agreement remains.
-It does not authorize T021 or change C1/R01/R02, product behavior or versions.
+Historical T020 runtime amendment/evidence remains in `tasks.md`/`research.md`.
+Current routes require actual Auth and RPC state; an arbitrary valid-looking
+code is not a fabricated room fixture.
 
-## Implemented Phase 2: Local Infrastructure Only (T021–T029)
+## Local Supabase Configuration and Safe Environment
 
 Use Node `24.20.0` with bundled npm `11.19.0` and the committed npm lockfile.
 Supabase CLI `2.116.0` is already a project dev dependency; npm scripts resolve
@@ -104,26 +124,24 @@ Its dedicated ports avoid the existing unrelated local stack on 5432x:
 | Local service | URL / port |
 |---|---|
 | Supabase API (Auth, Data API, Realtime, Storage) | `http://127.0.0.1:55321` |
-| PostgreSQL 17 | `127.0.0.1:55322` (no connection credential in documentation) |
+| PostgreSQL 17.6 | `127.0.0.1:55322` (no connection credential in documentation) |
 | Studio (optional inspection, not a setup step) | `http://127.0.0.1:55323` |
 | Local mail inspection | `http://127.0.0.1:55324` |
-| Shadow database | 55320 reserved; not a running Phase 2 service |
+| Shadow database | 55320 reserved for schema tooling |
 | Pooler / analytics | 55329 / 55327 reserved; disabled |
 
-Check these ports are free before starting. Expo remains on 8081; it need not run
-for this infrastructure checkpoint. Edge runtime and analytics are disabled;
-Studio has no external AI key. Other platform defaults remain CLI-managed, with
-no application tables/functions or new product behavior. Seeds are disabled
-with an empty seed path list. The PostgreSQL major remains 17 and
-`api.auto_expose_new_tables = false` is explicit. RLS/schema work starts only at
-T030, not here.
+Check these ports and Expo 8081 are free before starting. Edge runtime and
+analytics are disabled; Studio has no external AI key. Platform defaults stay
+CLI-managed. Seeds are disabled with an empty path list; PostgreSQL major is 17
+and `api.auto_expose_new_tables = false` is explicit. The three versioned
+migrations create only schema/access, the two RPCs and rooms-only publication.
 
 The committed local Auth configuration explicitly enables
 `auth.enable_anonymous_sign_ins = true` and `auth.rate_limit.anonymous_users = 150`;
 all other Auth rate limits retain their pinned-template values. N = 47 acceptance
-sign-ins; two runs cost at most 94, three at most 141. A later security probe adds
-one (48 per security/acceptance pair, 144 for three pairs). Phase 2 makes **zero**
-anonymous sign-ins and validates config loading, not application Auth behavior.
+sign-ins; two runs cost at most 94, three at most 141. The separate security probe adds
+one (48 per security/acceptance pair, 144 for three pairs). Infrastructure
+start/reset/env/type commands perform zero anonymous sign-ins.
 This is local-only configuration, not a production recommendation.
 
 After any `supabase/config.toml` change, run `npm run supabase:stop` then
@@ -131,30 +149,9 @@ After any `supabase/config.toml` change, run `npm run supabase:stop` then
 Neither `db:reset` nor fixture cleanup resets the hourly Auth allowance; never
 restart services to evade it. Stop/start applies configuration only.
 
-The schema-free Phase 2 checkpoint is separate from the future full-feature
-fresh-clone sequence below:
-
-```bash
-set -eu
-cleanup_otteroom_services() { npm run supabase:stop; }
-trap cleanup_otteroom_services EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-
-node --version
-npm --version
-docker version
-docker compose version
-./node_modules/.bin/supabase --version
-npm run supabase:start
-npm run supabase:status
-npm run env:local
-npm run env:local
-npm run db:reset
-npm run test:client -- --runTestsByPath __tests__/config/configure-local-env.test.ts __tests__/config/local-supabase-config.test.ts
-npm run supabase:stop
-trap - EXIT INT TERM
-```
+Use the complete trap-managed validation below. `npm run supabase:status`
+provides an additional safe readiness check. Historical schema-free Phase 2
+evidence remains in `tasks.md`, not as the current full-feature checkpoint.
 
 Startup waits for the CLI's actual service health checks; status is an additional
 readiness check, not a timed sleep. The start/status/stop wrappers suppress raw
@@ -166,11 +163,10 @@ stop, or operation on another project's containers/volumes is permitted.
 `supabase:stop` removes this project's containers while preserving its local
 Docker data volumes; `db:reset` reconstructs the database without relying on them.
 
-At this phase, reset rebuilds only Supabase-managed infrastructure with **no
-application migrations or seeds**. Later phases supply the complete versioned
-schema/RPC/publication replay. `db:test` is available but the application pgTAP
-suite does not yet exist. `db:types` / `db:types:check` remain deferred to
-T046–T047 and must not run in Phase 2.
+Reset replays all three committed application migrations from a clean database.
+`db:test` exercises actual schema, grants/RLS, atomic RPCs, real concurrent sessions
+and publication. Test fixtures roll back or are explicitly cleaned by their
+owned SQL sessions. `db:types:check` checks the existing committed artifact.
 
 `scripts/configure-local-env.mjs` captures `supabase status --output env` in
 bounded memory (64 KiB, 30-second timeout); no raw status reaches diagnostics.
@@ -183,7 +179,7 @@ file has mode 0600, is atomically renamed only after complete successful
 generation, and is cleaned on success/error/handled interruption. Previous valid
 `.env.local` survives failure. There is no Git-index dependency.
 
-Both env executions must yield byte-identical two-line files; compare in memory
+Repeated env executions must yield byte-identical two-line files; compare in memory
 and report only the field names/nonempty booleans, never contents. Check that
 `git check-ignore .env.local` succeeds and `.env.example` stays versionable.
 The committed example contains placeholders only. The wrapper tests exercise
@@ -192,9 +188,9 @@ values, bounded subprocess failure, partial write/rename failure, interruption,
 file permissions, cleanup and repeated execution. A stopped real stack must make
 `env:local` fail safely without damaging its previous file.
 
-## Planned Fresh-Clone Setup
+## Fresh-Clone Setup
 
-After the feature is implemented and committed, a new checkout will use:
+From the source checkout, clone the published implemented baseline:
 
 ```bash
 OTTEROOM_REMOTE_URL="$(git remote get-url origin)"
@@ -207,7 +203,18 @@ Then run the complete trap-managed normal validation sequence below. It uses
 `npm run db:types:check` only; the committed artifact must already exist.
 Do not regenerate it while verifying a fresh clone.
 
-The planned `env:local` Node wrapper invokes the project-local CLI as
+For pre-commit T120/T121 only, use a real clone of current `origin/main` plus an
+explicit allowlisted overlay of the uncommitted Phase 10 versionable files.
+Record cloned SHA, overlay filenames and SHA-256 equality to the source; do not
+call the overlay committed or create a commit/branch/tag. Do not copy ignored
+state: node_modules, .expo, .env.local, dist, Supabase .temp and test-results must
+be absent before `npm ci`. Only normal Node/npm/Docker and download/image caches
+are machine prerequisites; no installed dependencies, temporary runtime libraries
+or browser storage are shared. Stop the source stack before starting the clone;
+keep project ID/ports unchanged and remove only the owned disposable checkout
+after validation cleanup.
+
+The `env:local` Node wrapper invokes the project-local CLI as
 `supabase status --output env`, captures stdout without echoing it, and parses an
 allowlist. It requires `API_URL` and chooses `PUBLISHABLE_KEY` when present,
 otherwise the legacy client-safe `ANON_KEY`. It writes exactly one assignment
@@ -236,9 +243,9 @@ Expected results:
 - `db:types:check` verifies the existing committed TypeScript schema artifact
   byte-for-byte without modifying it; missing or stale content fails.
 
-## Planned npm Script Interface
+## npm Script Interface
 
-The future root `package.json` will expose these commands:
+The root `package.json` exposes these commands:
 
 | Script | Underlying command / responsibility |
 |---|---|
@@ -267,7 +274,7 @@ implementation and reviewed with each intentional migration/RPC schema change.
 Its source is the complete local database rebuilt by `npm run db:reset` from
 versioned migrations, using project-local Supabase CLI `2.116.0`.
 
-One planned script, `scripts/database-types.mjs`, exposes exactly:
+One script, `scripts/database-types.mjs`, exposes exactly:
 
 | npm command | Package script | Purpose |
 |---|---|---|
@@ -352,8 +359,8 @@ outer validation trap owns its cleanup.
 
 ### Credential-safe E2E diagnostics (C1 resolved)
 
-This is a planning-level security contract, not evidence of an actual leak or
-a completed runtime check. For pinned Playwright `1.63.0`, both projects use
+This implemented policy is revalidated by the unfiltered C1 gate; historical
+execution receipts are in `tasks.md`. For pinned Playwright `1.63.0`, both projects use
 `trace: 'off'`, `video: 'off'`, and automatic `screenshot: 'off'`.
 No HAR recorder, explicit tracing API, raw network/request/response/WebSocket
 dump, cookie/session dump, or disk `storageState` export/import is allowed.
@@ -370,7 +377,7 @@ keys, or database passwords. No unrestricted HTML/JSON/blob reporter, API step
 arguments, browser-console object serialization, unrestricted source/DOM dump, or debug logging
 is enabled. Ignore rules and eventual deletion do not authorize initial capture.
 
-Planned support is deliberately test-only; it introduces no application API:
+Support is deliberately test-only; it introduces no application API:
 
 - `e2e/support/sanitize-diagnostics.ts`: one shared pure sanitizer for strings
   or explicitly selected structured diagnostic fields, never raw object dumps.
@@ -405,9 +412,15 @@ Planned support is deliberately test-only; it introduces no application API:
   first assert in memory that known credentials and token-like values are absent
   from rendered text, input values and visible attributes. Use boolean-only
   assertions with generic errors, never assertion diffs of secrets/DOM.
-  Capture only the checked application viewport with animations disabled;
-  if inspection fails, is incomplete, or the page changed during capture,
-  discard the in-memory PNG without writing it and fail the safety check.
+  The sole PNG retention path is the exact controlled C1 failure: first validate
+  the application UI, then replace only the test page with static `about:blank`
+  diagnostic content. Wait for document/font readiness and a MutationObserver /
+  animation-frame quiet window; fingerprint, independently rescan, capture in
+  memory and immediately fingerprint again. Changed captures are zeroed and
+  rejected; at most three complete stabilization/safety attempts are permitted.
+  Unsafe/incomplete UI, exhaustion or invalid PNG fails closed. Exactly one
+  verified PNG is registered by digest and persisted. Ordinary failures retain
+  only safe error/location/summary, not screenshots of dynamic app state.
   No unverified page, third-party frame, canvas, debug overlay, or video is
   captured. Normal tests separately check the no-credential UI rule; it changes
   no product behavior.
@@ -467,8 +480,11 @@ preventing sensitive network/session capture, not cleaning it after writing.
 `e2e/room-session.spec.ts`). Both use `playwright.config.ts`, Chromium,
 `retries: 0`, `repeatEach: 1`, the same capture policy/collector/reporter,
 and `workers: 1` / `fullyParallel: false` for the credential-safety project;
-its A/B checks precede C. Later acceptance multi-worker evidence changes only
-the acceptance project, never the security project's order or one-signup cap.
+its A/B checks precede C. Acceptance uses project-scoped `fullyParallel: true`
+with a default of one worker; T114 explicitly runs `--workers=2` to prove
+single-file fixture independence. Security stays serial with a one-signup cap.
+Reporter E01–E12 case labels and bounded worker indices are fixed safe metadata,
+not raw titles/objects. Each E01–E12 selection owns its allocation below.
 Both retain managed web readiness URL and guaranteed cleanup. No automatic project
 dependency causes the security probe to run inside the N = 47 acceptance suite.
 
@@ -508,10 +524,9 @@ not the retained invocation artifact tree; clean them after the negative check.
    `test.fail()` masking of scanner errors, or fabricated Auth success.
    The probe is excluded from normal acceptance discovery.
 
-Implement the policy/helper/controller and synthetic runtime checks before any
-retained browser diagnostics; run the complete real-Auth safety gate after the
-mounted Auth bootstrap exists but **before the first ordinary @auth checkpoint
-and every subsequent Auth acceptance gate**. The safety probe itself is the only
+The policy/helper/controller and synthetic checks are implemented. Run the
+complete real-Auth safety gate **before every ordinary Auth acceptance gate**.
+The safety probe itself is the only
 pre-gate authenticated exception and uses the same fail-closed capture policy.
 Fresh-clone order is browser install → `npm run test:e2e:security` →
 `npm run test:e2e`; no generated-type overwrite is introduced.
@@ -526,7 +541,7 @@ between suites. Count failed probes, targeted retries and prior hourly usage;
 429 remains test-environment budget failure. Stop/start applies config changes,
 never bypasses quota; db reset is not an Auth counter reset.
 
-## Planned Local Web Startup
+## Local Web Startup
 
 With setup complete:
 
@@ -560,7 +575,7 @@ versions. The Phase 8 evidence covers guest UPDATE after system readiness and
 guest commit before readiness, plus a new system-ok/refetch after real reconnect.
 See research section 10 and the Realtime contract for pinned official sources.
 
-This is the manual observable check after implementation:
+This optional manual check consumes additional counted identities:
 
 1. Open `http://127.0.0.1:8081/` in one fresh browser context.
 2. Select Create Room. Confirm a path matching `/room/[0-9A-F]{10}`, Waiting,
@@ -580,7 +595,7 @@ This is the manual observable check after implementation:
 Each isolated context owns different browser storage and therefore a distinct
 anonymous Auth identity. A reload in the same context preserves its identity.
 
-## Complete Planned Automated Validation
+## Complete Automated Validation
 
 From a fresh clone, after verifying prerequisites:
 
@@ -588,7 +603,13 @@ From a fresh clone, after verifying prerequisites:
 set -eu
 
 cleanup_otteroom_services() {
-  npm run supabase:stop || true
+  validation_exit=$?
+  trap - EXIT INT TERM
+  set +e
+  npm run supabase:stop
+  stop_exit=$?
+  if [ "$validation_exit" -ne 0 ]; then exit "$validation_exit"; fi
+  exit "$stop_exit"
 }
 
 trap cleanup_otteroom_services EXIT
@@ -619,6 +640,15 @@ after a failed reset, build, browser install, or E2E command as well as after an
 interrupt. On success the explicit stop runs and the trap is removed. Playwright
 itself terminates the managed Expo web server on pass or failure.
 
+Never tee raw CLI/reset/database output into diagnostics. For retained automated
+evidence, invoke unchanged npm commands through the existing safe managed-process
+boundary: drain reset output and project database output only to bounded TAP
+totals/status. Failures remain nonzero. The EXIT trap preserves the original
+failure, or a shutdown failure after successful validation. T115 separately
+injects external exit 23 after successful unfiltered C1 to prove failure cleanup;
+this is not part of normal validation. It never changes the expected inner C
+failure or converts an unexpected failure to success.
+
 Expected evidence:
 
 - lint and strict typecheck pass;
@@ -646,11 +676,12 @@ Only C1-approved failure artifacts are retained below the controller's isolated
 `test-results/` invocation directory after capture guards and the recursive scan.
 Never enable `--trace`, UI/debug recording, HAR or storage exports to diagnose a
 failure. Ordinary checks use security then acceptance; raw credentials must never
-be stored, even temporarily or in ignored outputs. No runtime gate ran here.
+be stored, even temporarily or in ignored outputs. Actual gate receipts and
+per-invocation counts are recorded in `tasks.md`, never inferred from this guide.
 
 ## Playwright Acceptance Matrix
 
-The future E2E suite must cover:
+The implemented E2E suite covers:
 
 1. host creates and sees Waiting;
 2. guest opens the generated absolute invitation link;
@@ -691,7 +722,7 @@ The following allocation is binding on test design, not a measured result:
 | Auth infrastructure smoke | original context 1 + fresh context 1 + explicitly cleared original storage 1; reload adds zero | 3 |
 | Standard full suite | E01–E12 plus Auth smoke; no uncounted setup identities | 47 |
 
-Phase 5 executes only the Auth row with `npm run test:e2e -- --grep @auth`:
+The targeted Auth selection executes only the Auth row with `npm run test:e2e -- --grep @auth`:
 original context = 1, retained reload = 0, fresh context = 1, explicitly cleared
 original storage followed by reload = 1. It does not execute E01–E12 or call room
 RPCs. `anonymousBudget` in `e2e/room-session.spec.ts` mirrors the table above;
@@ -700,7 +731,7 @@ credential registration before navigation. Per-context bounds are enforced befor
 forwarding real Auth traffic; attempts and successful identities are recorded as
 numbers only. HTTP 429 aborts with environment-budget guidance, without retries.
 Every context and observer closes in `finally`. The separate unfiltered security
-gate must pass first and costs one additional sign-in, so one Phase 5 checkpoint
+gate must pass first and costs one additional sign-in, so one targeted Auth checkpoint
 costs at most four. T061 is a separate security checkpoint; count its one-signup
 cost too when executing T061 and T063 independently. No reset or restart is quota
 recovery, and the local limit remains 150.
@@ -713,8 +744,8 @@ actual usage may be lower; adding trials requires recalculating this table and
 all four artifacts before claiming the existing budget. No test retries or
 extra suite repetition are hidden in a standard run.
 
-Commit only the following local-development Auth choices in the future
-`supabase/config.toml`, retaining all other Auth rate limits unchanged:
+The committed local-development `supabase/config.toml` explicitly contains
+these Auth choices; all other Auth rate limits retain pinned defaults:
 
 ```toml
 [auth]
@@ -793,7 +824,13 @@ runs is database reconstruction only. This is separate from daily validation:
 set -eu
 
 cleanup_otteroom_services() {
-  npm run supabase:stop || true
+  validation_exit=$?
+  trap - EXIT INT TERM
+  set +e
+  npm run supabase:stop
+  stop_exit=$?
+  if [ "$validation_exit" -ne 0 ]; then exit "$validation_exit"; fi
+  exit "$stop_exit"
 }
 
 trap cleanup_otteroom_services EXIT

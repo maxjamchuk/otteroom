@@ -25,6 +25,16 @@ const prelude = `
 `;
 
 describe('credential-safe diagnostics boundaries', () => {
+  it('parallelizes only acceptance while keeping the security gate serial and capture off', () => verify(prelude + `
+    const { default: config } = await import('./playwright.config.ts');
+    assert.equal(config.fullyParallel, false); assert.equal(config.workers, 1);
+    assert.equal(config.retries, 0); assert.equal(config.repeatEach, 1);
+    assert.equal(config.projects.find(p => p.name === 'acceptance').fullyParallel, true);
+    const security = config.projects.find(p => p.name === 'credential-safety');
+    assert.equal(security.fullyParallel, false); assert.equal(security.workers, 1);
+    for (const field of ['trace', 'video', 'screenshot']) assert.equal(config.use[field], 'off');
+  `));
+
   it('registers real-shape Auth responses before delivery, counts only signups and fails closed on 429 or excess attempts', () => verify(prelude + `
     const { SafeDiagnostics } = await import('./e2e/support/safe-diagnostics.ts');
     const { CredentialRegistry, startRegistryServer } = await import('./e2e/support/credential-registry.ts');
@@ -191,6 +201,13 @@ describe('credential-safe diagnostics boundaries', () => {
     }
     assert.equal(safeResult({ title: secret, repeatEachIndex: secret }, {}).browserCase, 'none');
     assert.equal(safeResult({ repeatEachIndex: 3 }, {}).repetition, 0);
+    for (const [title, label] of [['@us1 E01 create', 'E01'], ['@us2-join E02 link', 'E02'], ['@us2-realtime E03 binding', 'E03'], ['@us2-join E04 manual', 'E04'], ['@us4 E07 reload', 'E07'], ['@us4 E08 reconnect', 'E08'], ['@us4 E09 repeat', 'E09'], ['@us2-join E10 malformed', 'E10'], ['@us2-join E11 absent', 'E11']]) {
+      for (let parallelIndex = 0; parallelIndex < 2; parallelIndex++) {
+        const projected = safeResult({ title }, { status: 'passed', parallelIndex });
+        assert.equal(projected.browserCase, label); assert.equal(projected.worker, parallelIndex);
+      }
+    }
+    for (const parallelIndex of [secret, -1, 4, 0.5]) assert.equal(safeResult({}, { parallelIndex }).worker, -1);
     assert.equal(JSON.stringify(result).includes(secret), false);
     assert.equal(result.status, 'failed');
     assert.equal(Object.hasOwn(result, 'attachments'), false);

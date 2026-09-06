@@ -34,6 +34,10 @@ function browserCaseFor(title: unknown): string {
     ['@us3 E12 known-', 'E12-read'], ['@us3 E12 live ', 'E12-subscription'],
     ['@us3 E12 delayed ', 'E12-navigation'], ['@us3 E12 direct ', 'E12-mutation'],
   ]) if (title.startsWith(prefix)) return label;
+  const scenario = scenarioFor(title);
+  if (['us1', 'us2-join', 'us2-realtime', 'us4'].includes(scenario)) {
+    return title.match(/^@[^ ]+ (E(?:0[1-9]|1[0-2])) /)?.[1] ?? 'none';
+  }
   return 'none';
 }
 
@@ -51,6 +55,7 @@ export function safeResult(test: { title?: unknown; expectedStatus?: unknown; re
   return {
     scenario: scenarioFor(test.title),
     browserCase: browserCaseFor(test.title),
+    worker: typeof result.parallelIndex === 'number' && Number.isInteger(result.parallelIndex) && result.parallelIndex >= 0 && result.parallelIndex < 4 ? result.parallelIndex : -1,
     repetition: typeof test.repeatEachIndex === 'number' && Number.isInteger(test.repeatEachIndex) && test.repeatEachIndex >= 0 && test.repeatEachIndex <= 2 ? test.repeatEachIndex + 1 : 0,
     context: receipt('safe-context-label', 'primary') ? 'primary' : 'none',
     status,
@@ -91,6 +96,7 @@ export default class SafeReporter implements Reporter {
     if (this.#results.length >= 256) { this.#runnerFailed = true; return; }
     this.#results.push(safeResult(test, {
       status: result.status,
+      parallelIndex: result.parallelIndex,
       error: result.error ? { message: result.error.message } : undefined,
       errorCount: result.errors.length,
       annotations: result.annotations,
@@ -104,7 +110,7 @@ export default class SafeReporter implements Reporter {
     // A loader/config error may prevent onBegin. Never fall back to repository CWD.
     if (!this.#directory) return;
     if (this.#runnerFailed) this.#results.push({
-      scenario: 'runner', browserCase: 'none', repetition: 0, context: 'none', status: 'failed', category: 'E2E_FAILURE',
+      scenario: 'runner', browserCase: 'none', worker: -1, repetition: 0, context: 'none', status: 'failed', category: 'E2E_FAILURE',
       cleanup: false, authSuccess: false, signups: 0, identities: 0, budgetFailure: false, capture: 'none', captureAttempts: 0, artifactsComplete: false, location: 'none', stage: 'none', ui: 'none', uiReason: 'none',
     });
     // Every field was projected to fixed vocabulary above; never serialize TestResult.

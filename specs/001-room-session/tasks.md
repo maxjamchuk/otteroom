@@ -1869,24 +1869,270 @@ creation or Phase 10 work occurred. Phase 9 complete; stop before T114.
 
 **Minimum validation**: The complete quickstart sequence, all twelve required browser scenarios, all phase/story checkpoints, generated-type consistency, failure cleanup, and a clean final scope/security review. Android Emulator and iOS Simulator are not acceptance prerequisites.
 
-- [ ] T114 Audit `e2e/room-session.spec.ts` and `playwright.config.ts` against E01–E12: every trial owns its allowed fresh identities/rooms and `finally` teardown, no reset occurs inside per-test/worker hooks, and readiness uses observable assertions. Budget each E01–E12 independent selection (at most 44 collectively), then explicitly enable single-file parallel execution for the acceptance project only with `fullyParallel: true` and run `npm run test:e2e -- --workers=2` from a suite-level reset baseline (at most N = 47); multiple workers alone do not parallelize a single default-serial spec. Keep retries = 0 and repeatEach = 1 for this full run, record counts against the remaining hourly 150 allowance, and schedule extra runs after allowance recovery when needed. Retain only approved test files and report actual fixture-order independence. Run unfiltered `npm run test:e2e:security` first; retain the credential-safety project's serial order and one-signup cap.
-- [ ] T115 Revalidate C1 failure diagnostics and cleanup in `e2e/diagnostics/credential-safety.spec.ts`, `scripts/run-e2e.mjs`, `playwright.config.ts`, and the traps in `specs/001-room-session/quickstart.md` after T061: run unfiltered `npm run test:e2e:security`, recording the controlled inner nonzero and successful outer gate separately, with guarded PNG/sanitized error/log evidence and a finalized clean artifact scan. Then use a separate trap-owned validation invocation with a controlled nonzero after the probe to prove failure-path Supabase/Expo/context shutdown; unexpected controller/scan failures must never be converted to success. Restore that external failure condition, not the intentionally failing probe design. Run `__tests__/config/e2e-diagnostics.test.ts` and `__tests__/auth/anonymous-session.test.ts` for unexpected-exit and actionable 429 handling without exhausting live quota or fabricating Auth success. Account for each one-signup probe and all partial attempts under 150; no trace/HAR/video/session dump or raw service output may be retained.
-- [ ] T116 Align `specs/001-room-session/quickstart.md` with the implemented root layout, exact Node/bundled npm/CLI versions, local URLs/ports, safe env generation, tracked lockfile/migrations/types, fresh-checkout prerequisites, two-browser procedure, known diagnostics, and cleanup ownership; retain local-only Linux/browser acceptance and no Dashboard SQL/global CLI/hosted dependency/emulator requirement. Preserve the write/check distinction, N = 47 allocation table, anonymous_users = 150, bounded retries/429 diagnostics, restart-after-config-change procedure and separate two-full-run checkpoint. Document C1's trace/HAR/video/storage-export prohibition, helper/scanner/controller paths, unfiltered `test:e2e:security` before authenticated acceptance, guarded PNG/sanitized logs, and separate one-signup security accounting; update no product behavior.
-- [ ] T117 Check the exact script surface in `package.json` against `specs/001-room-session/quickstart.md`, including `supabase:status`, `web`, `web:e2e`, `env:local`, `db:types`, `db:types:check`, `playwright:install`, and `test:e2e:security`; verify C1's controller, scanner and safe-process boundaries via `__tests__/config/e2e-diagnostics.test.ts`, plus the two existing wrappers `scripts/configure-local-env.mjs` and `scripts/database-types.mjs` fail safely through their behavior tests. Require initial/intentional write followed by check, but check only in normal and fresh-clone sequences; no Git-based gate or automatic drift repair.
-- [ ] T118 Checkpoint — follow the separate two-run procedure in `specs/001-room-session/quickstart.md` against `e2e/room-session.spec.ts` with at least 95 hourly signup allowance remaining (security 1 plus two full suites 94): start one local Supabase stack under cleanup traps, configure env, reset/check, run unfiltered `npm run test:e2e:security` once, then run the complete suite, close its contexts, then reset/check and run the complete suite again with fresh contexts. Never stop/start Supabase between runs. Record both full exits and observed sign-in counts (each at most N = 47, combined at most 94, or 95 including security, within local limit 150), no Auth 429, no hidden sign-ins on reload/reconnect, and final cleanup in `specs/001-room-session/tasks.md`; any failure leaves this repeatability gate incomplete. This separate evidence does not double the ordinary daily suite.
-- [ ] T119 Perform a final bounded scope/security review of `app/`, `src/`, `supabase/config.toml`, `supabase/migrations/`, `.env.example`, `.gitignore`, `package.json`, and `e2e/room-session.spec.ts`: confirm exactly two routes, one application table, two contained RPCs, no app-side table mutation, no privileged client key or private-ID UI, no speculative dependency, and no post-Ready behavior; corroborate each security claim with the existing pgTAP/browser evidence and record results in `specs/001-room-session/tasks.md`.
-- [ ] T120 Prepare a genuinely fresh checkout containing the implemented, versioned `package-lock.json`, `supabase/config.toml`, `supabase/migrations/`, `src/types/database.generated.ts`, and `specs/001-room-session/quickstart.md`; verify `node --version`, `npm --version`, `docker version`, `docker compose version`, and free local ports, record the actual checkout/environment in `specs/001-room-session/tasks.md`, and do not create commits/pushes as part of this task or claim the current untracked planning worktree is a fresh clone of implemented code.
-- [ ] T121 Checkpoint — in the fresh checkout, execute the exact normal command/trap sequence below from `specs/001-room-session/quickstart.md`, including `npm run db:types:check` without a preceding write and unfiltered `npm run test:e2e:security` before one full E01–E12/regression/Auth suite with at most N = 47 sign-ins. Verify T077/T106/T107/T113 and T118 remain evidenced, with every SC-001–SC-008 mapping covered, then record actual command exits, scenario/count/429/cleanup results and shutdown in `specs/001-room-session/tasks.md`; any required failure or unavailable tracked implementation baseline leaves final acceptance incomplete, with no emulator requirement or advance success claim.
+- [X] T114 Audit `e2e/room-session.spec.ts` and `playwright.config.ts` against E01–E12: every trial owns its allowed fresh identities/rooms and `finally` teardown, no reset occurs inside per-test/worker hooks, and readiness uses observable assertions. Budget each E01–E12 independent selection (at most 44 collectively), then explicitly enable single-file parallel execution for the acceptance project only with `fullyParallel: true` and run `npm run test:e2e -- --workers=2` from a suite-level reset baseline (at most N = 47); multiple workers alone do not parallelize a single default-serial spec. Keep retries = 0 and repeatEach = 1 for this full run, record counts against the remaining hourly 150 allowance, and schedule extra runs after allowance recovery when needed. Retain only approved test files and report actual fixture-order independence. Run unfiltered `npm run test:e2e:security` first; retain the credential-safety project's serial order and one-signup cap.
+- [X] T115 Revalidate C1 failure diagnostics and cleanup in `e2e/diagnostics/credential-safety.spec.ts`, `scripts/run-e2e.mjs`, `playwright.config.ts`, and the traps in `specs/001-room-session/quickstart.md` after T061: run unfiltered `npm run test:e2e:security`, recording the controlled inner nonzero and successful outer gate separately, with guarded PNG/sanitized error/log evidence and a finalized clean artifact scan. Then use a separate trap-owned validation invocation with a controlled nonzero after the probe to prove failure-path Supabase/Expo/context shutdown; unexpected controller/scan failures must never be converted to success. Restore that external failure condition, not the intentionally failing probe design. Run `__tests__/config/e2e-diagnostics.test.ts` and `__tests__/auth/anonymous-session.test.ts` for unexpected-exit and actionable 429 handling without exhausting live quota or fabricating Auth success. Account for each one-signup probe and all partial attempts under 150; no trace/HAR/video/session dump or raw service output may be retained.
+- [X] T116 Align `specs/001-room-session/quickstart.md` with the implemented root layout, exact Node/bundled npm/CLI versions, local URLs/ports, safe env generation, tracked lockfile/migrations/types, fresh-checkout prerequisites, two-browser procedure, known diagnostics, and cleanup ownership; retain local-only Linux/browser acceptance and no Dashboard SQL/global CLI/hosted dependency/emulator requirement. Preserve the write/check distinction, N = 47 allocation table, anonymous_users = 150, bounded retries/429 diagnostics, restart-after-config-change procedure and separate two-full-run checkpoint. Document C1's trace/HAR/video/storage-export prohibition, helper/scanner/controller paths, unfiltered `test:e2e:security` before authenticated acceptance, guarded PNG/sanitized logs, and separate one-signup security accounting; update no product behavior.
+- [X] T117 Check the exact script surface in `package.json` against `specs/001-room-session/quickstart.md`, including `supabase:status`, `web`, `web:e2e`, `env:local`, `db:types`, `db:types:check`, `playwright:install`, and `test:e2e:security`; verify C1's controller, scanner and safe-process boundaries via `__tests__/config/e2e-diagnostics.test.ts`, plus the two existing wrappers `scripts/configure-local-env.mjs` and `scripts/database-types.mjs` fail safely through their behavior tests. Require initial/intentional write followed by check, but check only in normal and fresh-clone sequences; no Git-based gate or automatic drift repair.
+- [X] T118 Checkpoint — follow the separate two-run procedure in `specs/001-room-session/quickstart.md` against `e2e/room-session.spec.ts` with at least 95 hourly signup allowance remaining (security 1 plus two full suites 94): start one local Supabase stack under cleanup traps, configure env, reset/check, run unfiltered `npm run test:e2e:security` once, then run the complete suite, close its contexts, then reset/check and run the complete suite again with fresh contexts. Never stop/start Supabase between runs. Record both full exits and observed sign-in counts (each at most N = 47, combined at most 94, or 95 including security, within local limit 150), no Auth 429, no hidden sign-ins on reload/reconnect, and final cleanup in `specs/001-room-session/tasks.md`; any failure leaves this repeatability gate incomplete. This separate evidence does not double the ordinary daily suite.
+- [X] T119 Perform a final bounded scope/security review of `app/`, `src/`, `supabase/config.toml`, `supabase/migrations/`, `.env.example`, `.gitignore`, `package.json`, and `e2e/room-session.spec.ts`: confirm exactly two routes, one application table, two contained RPCs, no app-side table mutation, no privileged client key or private-ID UI, no speculative dependency, and no post-Ready behavior; corroborate each security claim with the existing pgTAP/browser evidence and record results in `specs/001-room-session/tasks.md`.
+- [X] T120 Prepare a genuinely fresh checkout containing the implemented, versioned `package-lock.json`, `supabase/config.toml`, `supabase/migrations/`, `src/types/database.generated.ts`, and `specs/001-room-session/quickstart.md`; verify `node --version`, `npm --version`, `docker version`, `docker compose version`, and free local ports, record the actual checkout/environment in `specs/001-room-session/tasks.md`, and do not create commits/pushes as part of this task or claim the current untracked planning worktree is a fresh clone of implemented code.
+- [X] T121 Checkpoint — in the fresh checkout, execute the exact normal command/trap sequence below from `specs/001-room-session/quickstart.md`, including `npm run db:types:check` without a preceding write and unfiltered `npm run test:e2e:security` before one full E01–E12/regression/Auth suite with at most N = 47 sign-ins. Verify T077/T106/T107/T113 and T118 remain evidenced, with every SC-001–SC-008 mapping covered, then record actual command exits, scenario/count/429/cleanup results and shutdown in `specs/001-room-session/tasks.md`; any required failure or unavailable tracked implementation baseline leaves final acceptance incomplete, with no emulator requirement or advance success claim.
+
+### Phase 10 execution evidence — 2026-09-07
+
+T114–T121 are GREEN; complete feature acceptance passed in the fresh checkout
+described below. Started on clean main at
+`7e1957f89baa4f5c079b47c5970374af5e5cd123`. Required artifacts were read
+completely, implementation/harness inspected, prerequisite check passed and the
+requirements checklist was 16/16. No extension hooks are configured.
+
+T114 changed only acceptance-project `fullyParallel: true` and bounded safe
+reporter/controller case/worker metadata, with executable configuration and
+projection tests. Security remains serial, one worker, retries 0, repeatEach 1,
+capture off. Every browser trial owns isolated contexts and random rooms; no
+per-test/worker reset or shared fixture exists. Extra participants use the same
+registry/guards and finally cleanup. No scenario body or acceptance assertion
+was removed or weakened.
+
+| T114 command | Exit / result |
+|---|---|
+| Focused `test:client` for `__tests__/config/e2e-diagnostics.test.ts` | 0; 14/14 |
+| `npm run typecheck`, `npm run lint` after configuration-test correction | 0 each |
+| `npm run supabase:start`, `npm run supabase:status`, `npm run env:local` | 0 each; actual health/status readiness |
+| `npm run db:reset` through existing safe process capture | 0 |
+| `npm run db:types:check` | 0; no preceding write |
+| Unfiltered `npm run test:e2e:security` | Outer 0, exact expected inner 1; one PNG on attempt 1; zero findings |
+| `npm run test:e2e -- --workers=2` | 0; 24/24, both worker indices 0/1 observed, 47 sign-ins/identities |
+| `npm run supabase:stop` and owner cleanup | 0; ports free, 18 unrelated containers unchanged |
+
+T114 independent selection allocations, also measured in the full two-worker
+run: E01=3, E02=2, E03=4, E04=4, E05=3, E06=3, E07=5, E08=4,
+E09=2, E10=2, E11=1, E12=11; subtotal 44, plus Auth=3, total 47.
+All twelve scenario families passed; order differed between workers without
+shared rooms/users. The accepted fixture budget is unchanged, not multiplied by
+worker count. C1 consumed one additional identity. No retry or Auth 429.
+
+T115 used a separate trap-owned stack invocation: start/status/env/reset/check
+all 0; focused diagnostics/Auth suites 29/29 (exit 0); unfiltered security outer
+0 / inner 1, one verified PNG on attempt 1, zero scanner findings. A separate
+external `process.exit(23)` after that successful probe forced validation failure.
+The EXIT trap ran `supabase:stop` (0), and the driver retained **23**, not success.
+No failure injection was added to repository code or normal commands. Both
+controlled browser failures finalized contexts before scanning/registry cleanup.
+The updated documented trap preserves original errors and shutdown failures;
+the former `supabase:stop || true` is removed from the reference sequence.
+
+T114/T115 finalized invocations: `run-fjFFgp` (C1, 6 files, 1 sign-in),
+`run-zscADP` (acceptance, 3 files, 47 sign-ins), `run-h5OOnr` (C1, 6 files,
+1 sign-in). Every controller scan ran with the live registry and reported zero
+findings. All context cleanup receipts are complete; registry IPC was removed.
+Total so far **49** attempts / identities (security 2, acceptance 47).
+
+T116 aligns quickstart with the actual implemented root layout, versions, ports,
+commands, failure-only static diagnostic surface, bounded capture stabilization,
+and current full-feature workflow. Historical schema-free phase instructions no
+longer masquerade as current setup. The pre-commit fresh-copy method explicitly
+records an allowlisted Phase 10 overlay onto a real origin/main clone without
+altering history or copying ignored state. No product/contract/version change.
+
+T117 exact npm mappings and matching normal/fresh command/trap blocks were
+verified. C1/env/types behavior selection passed 30/30 (exit 0); subsequent full
+client suite passed **276/276 across 16 suites**, lint/typecheck both 0.
+`npm run web` actually served HTTP 200 under bounded HTTP readiness probes;
+owned SIGTERM shutdown returned expected 143, wrapper check 0, no browser/Auth
+navigation. Actual `env:local` against the stopped stack returned expected 1,
+preserved the previous file bytes and left no temporary output. R01 write mode
+ran only against isolated synthetic wrapper fixtures, never the canonical DB
+artifact; no `npm run db:types` command ran. The new config test initially used
+non-public FullProject properties; that test-only error was corrected and all
+required static checks rerun. A one-off command-audit regex initially omitted
+digits in e2e names; its correction passed without changing package scripts.
+
+Before reserving T118's 95 allowance, wait outside the harness until the previous
+Phase 9 usage ages out. Conservatively use its published commit timestamp
+2026-09-06 19:24:48 UTC as an upper bound; admit T118 after 20:24:48 UTC.
+The present 49 plus the reserved 95 equals 144 within 150. No counter recovery
+is inferred from reset/stop/start; no quota or Auth retry settings change.
+
+**T118 GREEN:** admitted after 20:24:49 UTC, actual start 20:25 UTC. One
+continuously started Supabase lifecycle ran start/env/reset/check/security/full
+acceptance/reset/check/full acceptance/stop, each outer command exit 0. No
+stop/start occurred between runs. C1 `run-Ozu9wp` consumed 1, outer 0 / inner 1,
+one PNG on attempt 1, zero findings. Run 1 `run-6IA5PB` (20:26:31–20:27:40 UTC)
+and run 2 `run-B6ei7J` (20:28:18–20:29:27 UTC) each passed 24/24 and consumed
+47 signup attempts / distinct identities: acceptance total 94, block total 95.
+Every family/variant passed independently with fresh contexts and the same
+allocation as T114. Retained reload/reconnect/repeated join added zero; no 429,
+automatic Auth retry or quota workaround. All six main-worktree invocation
+directories so far scanned cleanly with their live registries; contexts closed,
+owned browser containers/Expo/Supabase stopped, credential IPC removed, ports
+free and all 18 unrelated container snapshots unchanged. Phase 10 total so far
+144 sign-ins (C1 3, acceptance 141), within the reserved hourly allowance.
+
+**T119 GREEN:** complete application and migration/harness source inspection
+confirms only `/` and `/room/[code]`, one `public.rooms` table and two explicit
+authenticated mutation RPCs. App table access is the exact RLS-protected
+id/code/state read; it has no direct writes, privileged key, raw diagnostic log,
+private-ID UI or post-Ready action. Definers are postgres-owned, schema-qualified,
+empty-search_path, no dynamic SQL; PUBLIC/anon execution revoked independently
+of table RLS. Locks, constraint routing, role/nullability/idempotency, publication
+and non-mutating failure coverage remain in the unchanged previously passed
+287-test pgTAP suite, to be rerun from the fresh checkout at T121. T114/T118
+full real E05/E06/E12 trials corroborate capacity, true dispatch overlap,
+ordinary-credential RLS/Realtime isolation, denial of 21 direct attacks, stale
+navigation protection and exact-row preservation; client/C1 gates corroborate
+safe UI and artifact boundaries. This source review is not substituted for those
+executable boundaries. All 95 versioned files outside the six Phase 10 targets
+retain starting SHA-256, including app/src, migrations/tests, package/lockfile,
+config and normative/contracts inputs. No suspicious credential literal or
+versionable runtime path was found; no scope expansion or architecture change.
+
+**T120 GREEN:** a real shallow `origin/main` clone was created at
+`/tmp/otteroom-phase10-8mVgab/otteroom`, HEAD
+`7e1957f89baa4f5c079b47c5970374af5e5cd123`. Only six explicit Phase 10 paths
+were overlaid: `__tests__/config/e2e-diagnostics.test.ts`,
+`e2e/support/safe-reporter.ts`, `playwright.config.ts`, `scripts/run-e2e.mjs`,
+`specs/001-room-session/quickstart.md`, and this task document. All 101 versioned
+files matched the source byte-for-byte before runtime preparation; later task
+checkbox/receipt updates are documentation only. This is an uncommitted overlay,
+not a claim that Phase 10 was already published. No commit, staging, branch/tag
+creation, package-copy shortcut or history rewrite occurred.
+
+Fresh preflight proved no `node_modules`, `.expo`, `.env.local`, `dist`,
+`supabase/.temp` or `test-results` existed. Node 24.20.0, bundled npm 11.19.0,
+Docker client/server 28.5.1 and Compose v2.40.3-desktop.1 were actually checked.
+Main-checkout services were stopped; all contracted ports were free and the
+18 unrelated containers unchanged. The clone uses the unchanged Otteroom project
+ID/ports and only normal machine-level Node/npm/Docker/image caches.
+
+**T121 GREEN:** the complete normal sequence actually ran in the fresh
+origin/main clone plus the T120 overlay, never the main installed working tree.
+The enclosing trap-owned driver exited 0. No manual SQL/Dashboard setup, hosted
+project, emulator, copied dependency/env/build/browser state, or custom runtime
+library was needed. Only the task-document receipt subsequently differs; the
+other 100 versioned files still matched the source after execution.
+
+| Fresh checkout command / check | Actual exit / result |
+|---|---|
+| `npm ci` | 0; 1082 packages installed from the unchanged lockfile |
+| `npm run supabase:start` | 0; actual CLI health readiness |
+| `npm run env:local` | 0; only the two public names, values withheld; file Git-ignored |
+| `npm run db:reset` via the existing safe process capture | 0; all three versioned migrations, no manual setup |
+| `npm run db:types:check` | 0; canonical bytes unchanged, no preceding write |
+| `npm run lint` | 0 |
+| `npm run typecheck` | 0 |
+| `npm run test:client` | 0; 276/276, 16/16 suites |
+| `npm run db:test` via bounded result-only capture | 0; pgTAP 287/287 PASS |
+| `npm run web:export` | 0; fresh production dist and both application routes |
+| `npm run playwright:install` | 0; official Docker v1.63.0-noble prepared |
+| Unfiltered `npm run test:e2e:security` | Outer 0, expected inner 1; one verified PNG, attempt 1, zero findings |
+| Unfiltered `npm run test:e2e` | 0; 24/24, E01–E12 plus Auth, 47 sign-ins |
+| `npm run supabase:stop` | 0; owned resources closed |
+| `git diff --check` | 0 |
+| Additional `CI=1 ./node_modules/.bin/expo install --check` | 0; Dependencies are up to date |
+| Additional `npm ls --depth=0` | 0; declared installed graph valid |
+
+Actual fresh tools: Node 24.20.0, npm 11.19.0, Expo 57.0.20, Supabase CLI
+2.116.0, supabase-js 2.115.0, Playwright 1.63.0. The stack used PostgreSQL
+17.6 (`postgres:17.6.1.165`) and Realtime v2.129.3. Docker acceptance used
+`mcr.microsoft.com/playwright:v1.63.0-noble`; no temporary Chromium libraries
+or LD_LIBRARY_PATH. Web readiness used the existing observable HTTP/DOM barriers,
+not delay-based assertions. Expo's generated sitemap/not-found output is
+framework routing infrastructure, not an additional application/product route.
+
+Fresh C1 `run-bMdyNM` finalized at 20:45:51 UTC: A/B passed, only C produced
+the exact controlled failure, one PNG on attempt 1, no capture retry, all six
+allowed files scanned with the live registry, zero findings. Fresh acceptance
+`run-m0mL4p` finalized at 20:47:05 UTC: all 24 passed, its three finalized
+files scanned cleanly, all context cleanup receipts true. Its case counts were
+E01 3, E02 1, E03 2, E04 2, E05 1, E06 1, E07 3, E08 2, E09 1,
+E10 2, E11 1, E12 4, plus Auth 1. All four stories remain evidenced:
+US1 3/3, US2 8/8, US3 6/6, US4 6/6; Auth 1/1. Real Realtime tests
+again proved system-ok readiness, lost-initial-event recovery and retained
+host/guest transport reconnect without polling or an extra identity.
+
+| Success criterion | Fresh executable evidence, all passing |
+|---|---|
+| SC-001 | E01 creation plus E02 link / E04 manual entry to the same Ready room |
+| SC-002 | E02/E03/E04 automatic two-browser Ready and 2 of 2, no refresh |
+| SC-003 | E05 third denial, E06 true final-seat race, E12 mutation denial; real pgTAP constraints |
+| SC-004 | E06 overlapping dispatch, exactly one joined and one full; pgTAP concurrent sessions |
+| SC-005 | E07/E08 reload and actual reconnect, E09 repeated joins, unchanged identities/seats |
+| SC-006 | E04 failed join/retry, E05/E06 rejection, E10 malformed, E11 missing; exact unchanged DB state |
+| SC-007 | All four E12 read/subscription/stale-navigation/direct-write variants with ordinary Auth/RLS |
+| SC-008 | E01–E05/E10/E11 visible Waiting/Ready/malformed/not-found/full/generic outcome assertions; route components |
+
+The existing 22 FR, 4 NFR, 14 acceptance, 8 SC, 12 browser-family and 4 story
+mappings remain covered by the actual fresh client/database/browser gates;
+source review or checkboxes are not substitutes. T077/T106/T107/T113 and T118
+remain evidenced. No scope, product contract, schema/RPC/Auth/Realtime behavior,
+dependency version or C1 policy changed in Phase 10.
+
+R01 canonical SHA-256 before and after every real check:
+`46f41c3ca2a88d65a2604f449b17aa10c36b535c8ee0a67047683fb37f80fb4b`.
+No canonical write ran. No generation temporary file became versionable.
+R02 stayed N = 47 and anonymous_users = 150. Fresh Auth admission waited
+**outside the harness** until 20:45:26 UTC, conservatively after T114's 48
+identities aged out. T115 1 + T118 95 + fresh reservation 48 = 144 within 150.
+The stack remained running during this external wait; reset/restart did not
+replenish the accounting. No HTTP 429, Auth retry or hidden signup occurred.
+
+| Phase 10 validation block | C1 sign-ins | Acceptance sign-ins | Total |
+|---|---:|---:|---:|
+| T114 two-worker independence | 1 | 47 | 48 |
+| T115 controlled outer failure / cleanup | 1 | 0 | 1 |
+| T118 one-stack two full runs | 1 | 47 + 47 | 95 |
+| T121 fresh checkout | 1 | 47 | 48 |
+| Entire Phase 10, scheduled across recovered hourly allowance | 4 | 188 | 192 |
+
+Every signup attempt produced its counted identity; reload/reconnect/repeated
+join added zero. All four C1 probes produced exactly one guarded PNG and zero
+findings, all four full suites passed 24/24 without automatic retry.
+
+Cleanup verified project ports 8081, 55320–55324, 55327, 55329 free; no owned
+Expo/Metro/browser/controller process, Realtime channel, credential IPC,
+Playwright container or `otteroom-room-session` network remains. All 18
+unrelated container ID/state/start-time/restart-count snapshots are unchanged.
+A one-off cleanup audit initially matched any network containing 'otteroom';
+it was corrected to the actual project ID, leaving the pre-existing, empty
+`supabase_network_otteroom` of a different CLI project untouched. No Docker
+prune or unrelated resource mutation occurred.
+
+After finalized live-registry scans, the six main Phase 10 invocation directories
+and the two fresh invocation directories were deleted (36 disposable diagnostic
+files total, including four verified PNGs), together with the entire owned
+temporary clone. They were never versioned; rerunning validation creates new
+evidence, not recovery of the deleted bytes. The nine pre-existing main test
+artifact directories were preserved exactly.
+
+Non-gate dependency notice: the unchanged lockfile's `npm ci`/read-only
+`npm audit --json` reported 13 moderate entries, zero high/critical, driven by
+decode-uri-component and uuid advisories in dependency chains. Audit's exit 1
+is recorded separately from passing required commands; no claim of an
+advisory-free dependency graph is made. The proposed automatic fixes change
+the approved Expo/Router SDK line, so no audit fix, upgrade or package decision
+was applied. Package/lockfile hashes are unchanged.
+
+T114–T121 and T001–T121 are now all [X], backed by the above actual evidence.
+The later planning-review/analysis-readiness sections are retained historical
+design records, not a contradictory current execution status. Final feature
+acceptance is GREEN; no commit/push was performed and no extension hooks ran.
 
 ## Exact Final Validation Sequence
 
-This is the exact normal/fresh-clone sequence from `quickstart.md`, planned but not executed here. It verifies the existing canonical artifact using check only, then runs one complete suite including regressions/Auth with at most N = 47 sign-ins, preceded by the separate one-signup security gate (48 combined). The separate T118 checkpoint supplies two-run evidence in one continuously started local stack; it is not inserted into the daily sequence.
+This is the exact normal/fresh-clone reference sequence from `quickstart.md`; actual Phase 10 execution receipts are recorded separately above. It verifies the existing canonical artifact using check only, then runs one complete suite including regressions/Auth with at most N = 47 sign-ins, preceded by the separate one-signup security gate (48 combined). The separate T118 checkpoint supplies two-run evidence in one continuously started local stack; it is not inserted into the daily sequence.
 
 ```bash
 set -eu
 
 cleanup_otteroom_services() {
-  npm run supabase:stop || true
+  validation_exit=$?
+  trap - EXIT INT TERM
+  set +e
+  npm run supabase:stop
+  stop_exit=$?
+  if [ "$validation_exit" -ne 0 ]; then exit "$validation_exit"; fi
+  exit "$stop_exit"
 }
 
 trap cleanup_otteroom_services EXIT
