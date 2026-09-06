@@ -536,7 +536,7 @@ SQL surface. It never invokes behavior as `service_role`. True duplicate-create
 and final-seat races use two asynchronous, independent PostgreSQL sessions via
 test-only `dblink_send_query`, dispatch both calls before collecting either
 result, and assert both outcomes plus the single committed row/guest. The
-`dblink` extension and any fault-only constraint live inside the enclosing
+`dblink` extension and single-session fault-only constraints live inside the enclosing
 rolled-back pgTAP transaction, not application migrations; setup immediately
 revokes their default execution from `PUBLIC`, `anon`, and `authenticated`
 before dispatch. Because independent sessions cannot see the enclosing
@@ -547,6 +547,33 @@ remote connection changes to `anon` or `authenticated` with its own claims. A
 subsequent clean reset is the interruption recovery boundary. The temporary
 extra unique constraint forces an unrecognized unique violation to prove it is
 rethrown and leaves the prior row unchanged.
+
+T044 is an explicit exception to rollback-only fault-fixture lifetime: its
+simultaneous code-collision/idempotency-winner trial requires a privileged,
+temporarily committed test schema/function and BEFORE INSERT trigger visible
+to both real caller sessions. As specified in `tasks.md` under **T044 fixture
+contract**, select exact session PIDs plus
+`current_setting('otteroom.test.create_room_fault_mode', true)`, not user identity.
+A's `collision_wait` forces occupied canonical code C and waits on B's
+session-level advisory lock; B's `winner` forces unused canonical W for the same
+H/R. Observe A's actual lock barrier, commit and independently observe B's
+winner, then unlock A and require real `rooms_code_key` recovery to
+`already_created`. The rollback-contained diagnostic INSERT verifies the actual
+constraint name when both keys conflict; the production RPC is not instrumented.
+Run the complete fixture lifecycle before the controller's ordinary room/Auth
+fixture access, so its transaction cannot block remote trigger DDL. Revoke
+PUBLIC/anon/authenticated access before fixture commit, keep all definitions
+in the SQL test, and explicitly clean up owned sessions, locks, objects and
+rows on success/failure, preserving the original failure. No fixture ships in
+migrations or survives test cleanup/reset; reset is not normal cleanup.
+
+Correction sources checked 2026-09-06: PostgreSQL 17 documents
+[session-level advisory-lock lifetime and table-lock conflicts](https://www.postgresql.org/docs/17/explicit-locking.html),
+[exception-block rollback](https://www.postgresql.org/docs/17/plpgsql-control-structures.html#PLPGSQL-ERROR-TRAPPING)
+and [Read Committed visibility](https://www.postgresql.org/docs/17/transaction-iso.html#XACT-READ-COMMITTED).
+The old single-transaction-only mechanism cannot retain an independently
+committed winner across A's failed INSERT; sleeps, random collisions and a
+production test hook are not acceptable substitutes.
 
 ### Alternative rejected
 
