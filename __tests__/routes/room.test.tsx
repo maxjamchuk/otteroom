@@ -3,9 +3,25 @@ import { router } from 'expo-router';
 import { StrictMode, useEffect } from 'react';
 import RoomRouteScreen from '../../app/room/[code]';
 const mockJoin = jest.fn();
-jest.mock('../../src/rooms/service', () => ({ joinRoom: (code: string) => mockJoin(code) }));
+const mockRefetch = jest.fn(), mockBootstrap = jest.fn(), mockRemove = jest.fn();
+type TestChannel = { on: jest.Mock; subscribe: jest.Mock; status: (value: string) => void; update: () => void; system: (payload: unknown) => void };
+const channels: TestChannel[] = [];
+const mockChannel = jest.fn(() => {
+  const channel: TestChannel = { on: jest.fn(), subscribe: jest.fn(), status: () => {}, update: () => {}, system: () => {} };
+  channel.on.mockImplementation((type, _filter, cb) => { if (type === 'system') channel.system = cb; else channel.update = cb; return channel; });
+  channel.subscribe.mockImplementation(cb => { channel.status = cb; return channel; });
+  channels.push(channel); return channel;
+});
+jest.mock('../../src/rooms/service', () => ({ joinRoom: (code: string) => mockJoin(code), refetchRoom: (id: string) => mockRefetch(id) }));
+jest.mock('../../src/auth/anonymous-session', () => ({ bootstrapAnonymousSession: () => mockBootstrap() }));
+jest.mock('../../src/lib/supabase', () => ({ getSupabase: () => ({ channel: mockChannel, removeChannel: mockRemove }) }));
 const host = { outcome: 'already_member', room_id: '11111111-1111-4111-8111-111111111111', room_code: 'ABCDEF0123', room_state: 'waiting', participant_role: 'host', participant_count: 1 };
-beforeEach(() => { jest.resetAllMocks(); mockJoin.mockResolvedValue(host); });
+beforeEach(() => {
+  jest.clearAllMocks(); channels.length = 0; mockJoin.mockReset().mockResolvedValue(host);
+  mockBootstrap.mockReset().mockResolvedValue({ user: { id: 'retained' } });
+  mockRefetch.mockReset().mockResolvedValue({ id: host.room_id, code: host.room_code, state: 'ready' });
+  mockRemove.mockReset().mockImplementation(async (channel: TestChannel) => { channel.status('CLOSED'); return 'ok'; });
+});
 afterEach(() => jest.restoreAllMocks());
 async function mount(initialUrl = '/room/ABCDEF0123') {
   const view = renderRouter({ 'room/[code]': RoomRouteScreen }, { initialUrl });
@@ -153,4 +169,53 @@ it('a new A generation does not reuse the pending result from an earlier A', asy
   await act(async () => { old(host); });
   expect(mockJoin.mock.calls).toEqual([['ABCDEF0123'], ['012345ABCD'], ['ABCDEF0123']]);
   expect(screen.getByText('Ready')).toBeVisible(); expect(screen.queryByText('Waiting')).toBeNull();
+});
+
+it('subscribes only after accepted join, then reaches Ready without navigation or another join', async () => {
+  const replace = jest.spyOn(router, 'replace');
+  await mount(); expect(channels).toHaveLength(1);
+  expect(screen.getByText('Waiting')).toBeVisible();
+  await act(async () => { channels[0].status('SUBSCRIBED'); channels[0].system({ extension: 'postgres_changes', status: 'ok' }); });
+  expect(screen.getByText('Ready')).toBeVisible(); expect(screen.getByText('2 of 2')).toBeVisible();
+  expect(screen.queryByLabelText('Invitation link')).toBeNull(); expect(mockJoin).toHaveBeenCalledTimes(1);
+  expect(replace).not.toHaveBeenCalled(); expect(screen.queryByText(host.room_id)).toBeNull();
+});
+it('sync failure preserves the accepted UI and retry repairs subscription, never join RPC', async () => {
+  await mount(); await act(async () => { channels[0].status('CHANNEL_ERROR'); });
+  expect(screen.getByText('Waiting')).toBeVisible();
+  expect(screen.getByText('Unable to synchronize this room. Please try again.')).toBeVisible();
+  await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'Retry synchronization' })); });
+  expect(mockRemove).toHaveBeenCalledWith(channels[0]); expect(channels).toHaveLength(2);
+  await act(async () => { channels[1].status('SUBSCRIBED'); channels[1].system({ extension: 'postgres_changes', status: 'ok' }); });
+  expect(screen.getByText('Ready')).toBeVisible(); expect(mockJoin).toHaveBeenCalledTimes(1);
+  expect(screen.queryByText('Unable to synchronize this room. Please try again.')).toBeNull();
+});
+it('old refetch/channel cannot contaminate a new code and unmount removes its channel', async () => {
+  let resolve!: (value: unknown) => void;
+  mockRefetch.mockReturnValueOnce(new Promise(done => { resolve = done; }));
+  const view = await mount(); await act(async () => { channels[0].status('SUBSCRIBED'); channels[0].system({ extension: 'postgres_changes', status: 'ok' }); });
+  const next = { ...host, room_id: '22222222-2222-4222-8222-222222222222', room_code: '012345ABCD' };
+  mockJoin.mockResolvedValueOnce(next);
+  await act(async () => { router.setParams({ code: next.room_code }); });
+  expect(mockRemove).toHaveBeenCalledWith(channels[0]);
+  await act(async () => { resolve({ id: host.room_id, code: host.room_code, state: 'ready' }); channels[0].status('CLOSED'); channels[0].update(); });
+  expect(screen.getByText(next.room_code)).toBeVisible(); expect(screen.getByText('Waiting')).toBeVisible();
+  expect(screen.queryByText(host.room_code)).toBeNull(); expect(screen.queryByRole('button', { name: 'Retry synchronization' })).toBeNull();
+  view.unmount(); await act(async () => {}); expect(mockRemove).toHaveBeenCalledWith(channels[1]);
+});
+it.each(['invalid_code', 'not_found', 'full'])('creates no channel on %s', async outcome => {
+  mockJoin.mockResolvedValue({ outcome, room_id: null, room_code: null, room_state: null, participant_role: null, participant_count: null });
+  await mount(); expect(mockChannel).not.toHaveBeenCalled();
+});
+
+it('transport-only join keeps Waiting; system-error is generic and system-ok recovers without another join', async () => {
+  await mount();
+  await act(async () => { channels[0].status('SUBSCRIBED'); });
+  expect(screen.getByText('Waiting')).toBeVisible(); expect(mockRefetch).not.toHaveBeenCalled();
+  await act(async () => { channels[0].system({ extension: 'postgres_changes', status: 'error', message: 'private server details' }); });
+  expect(screen.getByText('Waiting')).toBeVisible(); expect(screen.queryByText('private server details')).toBeNull();
+  expect(screen.getByText('Unable to synchronize this room. Please try again.')).toBeVisible();
+  await act(async () => { channels[0].system({ extension: 'postgres_changes', status: 'ok' }); });
+  expect(screen.getByText('Ready')).toBeVisible(); expect(mockJoin).toHaveBeenCalledTimes(1);
+  expect(screen.queryByText('Unable to synchronize this room. Please try again.')).toBeNull();
 });

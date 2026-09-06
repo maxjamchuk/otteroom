@@ -1,4 +1,4 @@
-import { acceptedRoomState, createErrorState, joinRoomState, joinErrorState, malformedInvitationState } from '../../src/rooms/state';
+import { acceptedRoomState, applyRoomRefetch, createErrorState, joinRoomState, joinErrorState, malformedInvitationState } from '../../src/rooms/state';
 import { narrowCreateResult, narrowJoinResult } from '../../src/rooms/contracts';
 
 const row = { outcome: 'created', room_id: '11111111-1111-4111-8111-111111111111', room_code: 'ABCDEF0123', participant_role: 'host', room_state: 'waiting', participant_count: 1 };
@@ -31,4 +31,21 @@ it.each([
 it('distinguishes local malformed input from generic infrastructure failure', () => {
   expect(malformedInvitationState()).toEqual({ kind: 'malformed', message: 'Malformed invitation. Enter a valid room code.' });
   expect(joinErrorState()).toEqual({ kind: 'error', message: 'Unable to open this room. Please try again.' });
+});
+
+const waiting = acceptedRoomState(narrowCreateResult([row]));
+it('authoritative refetch derives seats/title while retaining the RPC role', () => {
+  const ready = applyRoomRefetch(waiting, { id: row.room_id, code: row.room_code, state: 'ready' });
+  expect(ready).toEqual({ ...waiting, state: 'ready', title: 'Ready', count: 2 });
+  expect(applyRoomRefetch({ ...ready, role: 'guest' }, { id: row.room_id, code: row.room_code, state: 'ready' }).role).toBe('guest');
+  expect(applyRoomRefetch(waiting, { id: row.room_id, code: row.room_code, state: 'waiting' })).toEqual(waiting);
+});
+it('never rolls the same Ready room back to Waiting, even for a guest', () => {
+  const ready = { ...waiting, state: 'ready' as const, title: 'Ready', count: 2 as const, role: 'guest' as const };
+  expect(applyRoomRefetch(ready, { id: ready.id, code: ready.code, state: 'waiting' })).toBe(ready);
+});
+it.each(['id', 'code'])('rejects a refetch for a different %s without changing the last room', key => {
+  const before = { ...waiting };
+  expect(() => applyRoomRefetch(waiting, { id: row.room_id, code: row.room_code, state: 'ready', [key]: 'other' })).toThrow();
+  expect(waiting).toEqual(before);
 });

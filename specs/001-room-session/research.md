@@ -179,7 +179,8 @@ participant. Reloading web or native restores the same participant.
 
 Auth and Realtime use the same Supabase client. The client's refresh lifecycle
 updates the Realtime access token; after any reconnect the room lifecycle waits
-for `SUBSCRIBED` and refetches authoritatively. Refresh or recovery failure is a
+for a new postgres_changes system-ok and refetches authoritatively; SUBSCRIBED
+only confirms transport join. Refresh or recovery failure is a
 recoverable client error, never a reason to invent a new participant while an
 existing session is still recoverable.
 
@@ -497,21 +498,50 @@ startup, full reset, and check only, followed by the other quickstart gates.
 Add only `public.rooms` to the `supabase_realtime` publication in the migration.
 After an allowed RPC result, subscribe to UPDATE events filtered by exact
 internal room ID and select only the primary-key `id` in the change payload. In
-the selected client version the filter uses `select: ['id']`; the channel sets
-`config.postgres_changes_options.wait = true`, so `SUBSCRIBED` means the database
-change binding is active. Treat every event as invalidation and perform an
-authoritative RLS-protected exact-column refetch immediately after the first and
-every later `SUBSCRIBED`, as well as after each UPDATE. Ignore event payload
+the selected client version the filter uses `select: ['id']`. Register exactly
+one UPDATE binding and `.on('system', {}, callback)` before subscribe.
+SUBSCRIBED is transport-only; it cannot establish DB readiness or trigger its
+refetch. Only current-channel/generation system `extension=postgres_changes`,
+`status=ok` marks the actual binding ready. Immediately refetch after each such
+event, first and after reconnect, and after each matching UPDATE while ready.
+The mandatory readiness read recovers a guest commit missed before installation.
+Ignore event payload
 state, coalesce overlapping refetches, and apply results only while their
 room/subscription generation is current, so duplicate, delayed, or missed
-events cannot roll back or cross-contaminate route state.
+events cannot roll back or cross-contaminate route state. Postgres system-error
+clears DB readiness, invalidates pending reads and preserves the last room with
+generic synchronization failure. Do not log raw messages or suppress applicable
+server retries; later current system-ok may recover, explicit retry rebuilds.
+
+### Pinned readiness verification — 2026-09-06
+
+- [supabase-js v2.115.0 RealtimeChannel](https://github.com/supabase/supabase-js/blob/v2.115.0/packages/core/realtime-js/src/RealtimeChannel.ts):
+  system listener overload and extension/status payload; its wait option requires
+  compatible server behavior, not merely client typing or join-ack binding IDs.
+- [Realtime v2.129.3 channel](https://github.com/supabase/realtime/blob/v2.129.3/lib/realtime_web/channels/realtime_channel.ex):
+  join returns before asynchronous PostgreSQL subscription; successful
+  PostgresCdc.after_connect emits postgres_changes system-ok. Error paths emit
+  system-error, with retries where applicable to that pinned server.
+- [v2.129.3 config schema](https://github.com/supabase/realtime/blob/v2.129.3/lib/realtime_web/channels/payloads/config.ex)
+  has no postgres_changes_options/wait support. CLI 2.116.0 selects this server;
+  sending the newer client's wait flag cannot hold this server's join reply.
+- [Official Realtime protocol](https://supabase.com/docs/guides/realtime/protocol#system)
+  identifies postgres_changes system-ok as live subscription confirmation.
+  Pinned tests may check its human message `Subscribed to PostgreSQL`, but
+  application correctness depends on extension/status/current channel generation,
+  not the English string. Generic replication-connection readiness is weaker.
 
 ### Alternatives rejected
 
 Broadcast is recommended by Supabase for some higher-scale workloads, but was
 rejected here because the approved small slice explicitly selects Postgres
 Changes. Presence, polling as the primary mechanism, custom WebSockets, and
-trusting event payloads as authoritative state were also rejected.
+trusting event payloads as authoritative state were also rejected. Fixed delay,
+polling fallback, warm-up mutation, treating SUBSCRIBED as readiness, and upgrading
+the server merely to obtain wait semantics are rejected. No wait option or
+replication_ready/Broadcast opt-in is sent. Both sides of the initial race and
+reconnect require real-stack evidence; raw WebSocket/system payload persistence
+remains forbidden under C1.
 
 ## 11. Database Tests
 

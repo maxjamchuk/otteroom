@@ -1305,22 +1305,363 @@ changed. No commit or push. Stop before T092.
 
 **Independent tests**: US2 uses separate fresh link/manual trials and observes both pages become Ready without host refresh, including a guest commit before subscription readiness. US4 starts from accepted host/guest sessions, repeats joins and reloads/reconnects them, and verifies unchanged identity/seats plus current authoritative Waiting or Ready.
 
-- [ ] T092 [US2] Create `supabase/migrations/20260905000002_rooms_realtime.sql` to add only `public.rooms` to `supabase_realtime` after catalog inspection, without Dashboard configuration, a second application table, or broad publication of unrelated objects. This is the concrete schema publication deliverable for the shared US2/US4 convergence boundary, not a new product subsystem.
-- [ ] T093 [US2] Extend `supabase/tests/database/room_session.test.sql` with actual publication-catalog assertions for the `public.rooms` entry and retained exact-column grants/RLS after replay, tying publication evidence back to the phase-3 schema inventory.
-- [ ] T094 [US2] Validate `supabase/migrations/20260905000002_rooms_realtime.sql` with `npm run db:reset`, `npm run db:test`, and `npm run db:types:check` against existing `src/types/database.generated.ts`, without preceding regeneration; record publication/grants/RLS/type results in `specs/001-room-session/tasks.md`. Publication-only changes should not alter row/function types; an unexpected mismatch fails this gate and must be investigated. A separately approved type-relevant schema update uses write/check/review outside normal validation. Failed prerequisites prevent client subscription work.
-- [ ] T095 [P] [US2] Add authoritative refetch and monotonic-state tests in `__tests__/rooms/service.test.ts` and `__tests__/rooms/state.test.ts` for exact `id, code, state` projection by accepted ID, zero/invalid rows, count derivation, retained accepted role, rejection of cross-room responses, and no same-room Ready-to-Waiting regression.
-- [ ] T096 [P] [US4] Add lifecycle behavior tests in `__tests__/rooms/use-room-subscription.test.ts` for first/repeated `SUBSCRIBED` refetch, a completely missed initial event, UPDATE invalidation only, duplicate coalescing, newer-request/room-generation guards, reconnect after missed changes, cleanup, unexpected CLOSED/CHANNEL_ERROR/TIMED_OUT, refetch denial, retry, and shared-client token refresh; use unit doubles only for these isolated scheduling cases.
-- [ ] T097 [US2] Add the member-authorized room refetch to `src/rooms/service.ts` using the shared client, exact `id, code, state` projection and immutable accepted room ID with at-most-one-row validation; return recoverable errors on absent/invalid data, never query private participant columns or install event payload state.
-- [ ] T098 [US2] Extend `src/rooms/state.ts` with authoritative-refetch application that derives counts from state, retains RPC role, requires matching room identity, and refuses a same-room Ready-to-Waiting rollback while preserving the last known room during transient recovery errors.
-- [ ] T099 [US4] Implement `src/rooms/use-room-subscription.ts` using the shared Auth client only after an accepted RPC room ID: channel `room:<id>`, `config.postgres_changes_options.wait = true`, UPDATE filter `id=eq.<id>` on `public.rooms`, and `select: ['id']`; first and every repeated `SUBSCRIBED` plus each matching UPDATE must schedule authoritative refetch, with no channel for rejection outcomes and no primary polling.
-- [ ] T100 [US4] Complete `src/rooms/use-room-subscription.ts` with single-active/one-pending refetch coalescing, monotonically increasing lifecycle/request guards, matching room checks, invalidate-before-`removeChannel` cleanup, ignored self-induced CLOSED, recoverable current-generation errors, and retry that removes the failed channel, recovers Auth without replacement identity, creates a new generation, and refetches after binding readiness.
-- [ ] T101 [US2] Wire the subscription hook, authoritative state application, preserved-state connection error/retry display, and deterministic unmount/code-change cleanup into `app/room/[code].tsx`; extend `__tests__/routes/room.test.tsx` to prove old joins/refetches cannot contaminate a newly selected room and no Ready transition initiates later behavior.
-- [ ] T102 [US2] Add E03 `@us2-realtime` in `e2e/room-session.spec.ts` and extend E02/E04 with both-client convergence assertions: guest reaches Ready from committed join, host reaches Ready/two seats without refresh; include a real-stack variant delaying the host's real Realtime binding until after guest commit, then releasing it to prove first-SUBSCRIBED refetch recovers the missed event without fabricated payloads. In the missed-event variant, register `browserContext.routeWebSocket` before navigation, connect to the real server with `connectToServer()`, hold only the actual outbound room-binding frame until the guest's real join response confirms commit, then forward that unchanged frame and all real server frames; do not synthesize SUBSCRIBED or a change payload. This tests binding timing, not merely late UI observation.
-- [ ] T103 [US4] Add E07/E08 `@us4` host/guest reload cases in `e2e/room-session.spec.ts`, retaining each context's storage and comparing its own identity before/after reload; assert host recovery in Waiting and Ready, guest recovery in Ready, identical room code, recovered role through the real RPC result, and no additional seat. Assert zero additional anonymous signup requests for the retained contexts throughout reload/reconnect/repeated operations using T059; new identities are limited to the documented fresh-fixture allocation.
-- [ ] T104 [US4] Add E09 `@us4` repeated-join evidence in `e2e/room-session.spec.ts`: repeat each admitted role's real join, dispatch overlapping duplicate guest requests before awaiting either result, and assert `already_member` for an existing seat, the same identity/code/role and no duplicate membership. Keep this idempotency case separate from the network-reconnect case. Assert zero additional anonymous signup requests for the retained contexts throughout reload/reconnect/repeated operations using T059; new identities are limited to the documented fresh-fixture allocation.
-- [ ] T105 [US4] Add real `@us4` disconnect/reconnect variants in `e2e/room-session.spec.ts`: retain the accepted context/storage, explicitly interrupt both sides of its real WebSocket and temporarily gate replacement connections, let a guest commit while the host is disconnected, then restore unchanged real transport and observe automatic subscription/refetch recovery to Ready without host reload. Also exercise a guest's Ready recovery; assert actual socket loss/rebinding and identity preservation rather than assuming `setOffline` alone closed an established socket, and close interceptors/connections in `finally`. Assert zero additional anonymous signup requests for the retained contexts throughout reload/reconnect/repeated operations using T059; new identities are limited to the documented fresh-fixture allocation.
-- [ ] T106 [US2] Checkpoint — from a clean reset run `npm run db:test`, `npm run lint`, `npm run typecheck`, `npm run test:client`, `npm run web:export`, and `npm run test:e2e -- --grep '@us2-join|@us2-realtime'`; prove scenarios 3–8 and E02/E03/E04/E10/E11 including both independent invitation flows, missed-initial-event recovery, all distinguishable failures, and no post-Ready behavior, record results in `specs/001-room-session/tasks.md`, and leave US2 incomplete on any failure. Normal validation also requires `npm run db:types:check` after the phase reset, without preceding `db:types`. Before this ordinary Auth acceptance selection, run unfiltered `npm run test:e2e:security` after reset/check and account for its separate one-signup cost.
-- [ ] T107 [US4] Checkpoint — run `npm run test:client -- --runTestsByPath __tests__/auth/anonymous-session.test.ts __tests__/rooms/use-room-subscription.test.ts __tests__/routes/room.test.tsx` and, after reset/env setup, `npm run db:test` plus `npm run test:e2e -- --grep @us4`; independently prove scenarios 13–14 and E07/E08/E09 with real reload/offline recovery, record results in `specs/001-room-session/tasks.md`, and block phase 9 until both T106 and T107 pass. Normal validation also requires `npm run db:types:check` after the phase reset, without preceding `db:types`. Before this ordinary Auth acceptance selection, run unfiltered `npm run test:e2e:security` after reset/check and account for its separate one-signup cost.
+- [X] T092 [US2] Create `supabase/migrations/20260905000002_rooms_realtime.sql` to add only `public.rooms` to `supabase_realtime` after catalog inspection, without Dashboard configuration, a second application table, or broad publication of unrelated objects. This is the concrete schema publication deliverable for the shared US2/US4 convergence boundary, not a new product subsystem.
+- [X] T093 [US2] Extend `supabase/tests/database/room_session.test.sql` with actual publication-catalog assertions for the `public.rooms` entry and retained exact-column grants/RLS after replay, tying publication evidence back to the phase-3 schema inventory.
+- [X] T094 [US2] Validate `supabase/migrations/20260905000002_rooms_realtime.sql` with `npm run db:reset`, `npm run db:test`, and `npm run db:types:check` against existing `src/types/database.generated.ts`, without preceding regeneration; record publication/grants/RLS/type results in `specs/001-room-session/tasks.md`. Publication-only changes should not alter row/function types; an unexpected mismatch fails this gate and must be investigated. A separately approved type-relevant schema update uses write/check/review outside normal validation. Failed prerequisites prevent client subscription work.
+
+### T094 execution evidence — 2026-09-06
+
+Started on clean main at 6a97e8d45c5de8f50b7b811153a9ada56073d2c4.
+Node 24.20.0 / npm 11.19.0, project CLI 2.116.0. Under EXIT/INT/TERM
+cleanup ownership: supabase:start, supabase:status, env:local, db:reset,
+db:test, db:types:check and supabase:stop all exited 0. Reset ran through
+the existing safe process helper; test output was bounded in memory.
+pgTAP 287/287: exactly public.rooms in supabase_realtime, UPDATE enabled,
+no all-tables publication; all former real-role ACL/RLS/RPC assertions pass.
+Canonical generated types match without any write command. Zero sign-ins.
+This closes T092–T094 only; client subscription work follows this green gate.
+
+- [X] T095 [P] [US2] Add authoritative refetch and monotonic-state tests in `__tests__/rooms/service.test.ts` and `__tests__/rooms/state.test.ts` for exact `id, code, state` projection by accepted ID, zero/invalid rows, count derivation, retained accepted role, rejection of cross-room responses, and no same-room Ready-to-Waiting regression.
+- [X] T096 [P] [US4] Add lifecycle behavior tests in `__tests__/rooms/use-room-subscription.test.ts` for handler registration before subscribe, transport-only `SUBSCRIBED` with no readiness/refetch, first/repeated current-channel `system(extension=postgres_changes, status=ok)` readiness/refetch, ignored unrelated/stale system events, system-error degradation and later-ok recovery, a completely missed initial event, UPDATE invalidation only, duplicate coalescing, newer-request/room-generation guards, reconnect after missed changes, cleanup, unexpected CLOSED/CHANNEL_ERROR/TIMED_OUT, refetch denial, retry, and shared-client token refresh, and absence of wait options/polling/fixed-delay readiness; use unit doubles only for these isolated scheduling cases.
+- [X] T097 [US2] Add the member-authorized room refetch to `src/rooms/service.ts` using the shared client, exact `id, code, state` projection and immutable accepted room ID with at-most-one-row validation; return recoverable errors on absent/invalid data, never query private participant columns or install event payload state.
+- [X] T098 [US2] Extend `src/rooms/state.ts` with authoritative-refetch application that derives counts from state, retains RPC role, requires matching room identity, and refuses a same-room Ready-to-Waiting rollback while preserving the last known room during transient recovery errors.
+- [X] T099 [US4] Implement `src/rooms/use-room-subscription.ts` using the shared Auth client only after an accepted RPC room ID: channel `room:<id>`, UPDATE filter `id=eq.<id>` on `public.rooms`, and `select: ['id']`; register both UPDATE and system handlers before subscribe; SUBSCRIBED is transport-only, never DB readiness/refetch. First and every repeated current-generation `system(extension=postgres_changes, status=ok)` establishes DB readiness and schedules authoritative refetch, as does each matching UPDATE while ready, with no channel for rejection outcomes and no wait option, polling, fixed delay, warm-up mutation, Broadcast or generic replication-ready substitute.
+- [X] T100 [US4] Complete `src/rooms/use-room-subscription.ts` with single-active/one-pending refetch coalescing, monotonically increasing lifecycle/request guards, matching room checks, invalidate-before-`removeChannel` cleanup, ignored self-induced CLOSED, recoverable current-generation channel/system errors that clear DB readiness and invalidate pending reads while preserving the authoritative room; ignore old-channel system events and allow later current postgres_changes system-ok recovery without suppressing server retries, and retry that removes the failed channel, recovers Auth without replacement identity, creates a new generation, and refetches only after new postgres_changes system-ok readiness, never SUBSCRIBED alone.
+- [X] T101 [US2] Wire the subscription hook, authoritative state application, preserved-state connection error/retry display, and deterministic unmount/code-change cleanup into `app/room/[code].tsx`; extend `__tests__/routes/room.test.tsx` to prove SUBSCRIBED alone cannot establish readiness, system-error UI exposes no raw details, and old joins/system events/refetches cannot contaminate a newly selected room and no Ready transition initiates later behavior.
+- [X] T102 [US2] Add E03 `@us2-realtime` in `e2e/room-session.spec.ts` and extend E02/E04 with both-client convergence assertions: guest reaches Ready from committed join, host reaches Ready/two seats without refresh; include a real-stack variant delaying the host's real Realtime binding until after guest commit, then releasing it to prove first postgres_changes system-ok refetch recovers the missed event without fabricated payloads. In the missed-event variant, register `browserContext.routeWebSocket` before navigation, connect to the real server with `connectToServer()`, hold only the actual outbound room-binding frame until the guest's real join response confirms commit, then forward that unchanged frame and all real server frames; observe transport join separately from postgres_changes system-ok; require real UPDATE after readiness in E02 and no readiness read before system-ok in the missed-event variant. Do not synthesize system readiness, SUBSCRIBED or a change payload. This tests binding timing, not merely late UI observation.
+- [X] T103 [US4] Add E07/E08 `@us4` host/guest reload cases in `e2e/room-session.spec.ts`, retaining each context's storage and comparing its own identity before/after reload; assert host recovery in Waiting and Ready, guest recovery in Ready, identical room code, recovered role through the real RPC result, and no additional seat. Assert zero additional anonymous signup requests for the retained contexts throughout reload/reconnect/repeated operations using T059; new identities are limited to the documented fresh-fixture allocation.
+- [X] T104 [US4] Add E09 `@us4` repeated-join evidence in `e2e/room-session.spec.ts`: repeat each admitted role's real join, dispatch overlapping duplicate guest requests before awaiting either result, and assert `already_member` for an existing seat, the same identity/code/role and no duplicate membership. Keep this idempotency case separate from the network-reconnect case. Assert zero additional anonymous signup requests for the retained contexts throughout reload/reconnect/repeated operations using T059; new identities are limited to the documented fresh-fixture allocation.
+- [X] T105 [US4] Add real `@us4` disconnect/reconnect variants in `e2e/room-session.spec.ts`: retain the accepted context/storage, explicitly interrupt both sides of its real WebSocket and temporarily gate replacement connections, let a guest commit while the host is disconnected, then restore unchanged real transport and observe automatic subscription/refetch recovery to Ready without host reload. Also exercise a guest's Ready recovery; assert actual socket loss, transport-only rejoin, a new postgres_changes system-ok followed by refetch, and identity preservation rather than assuming `setOffline` alone closed an established socket, and close interceptors/connections in `finally`. Assert zero additional anonymous signup requests for the retained contexts throughout reload/reconnect/repeated operations using T059; new identities are limited to the documented fresh-fixture allocation.
+- [X] T106 [US2] Checkpoint — from a clean reset run `npm run db:test`, `npm run lint`, `npm run typecheck`, `npm run test:client`, `npm run web:export`, and `npm run test:e2e -- --grep '@us2-join|@us2-realtime'`; prove scenarios 3–8 and E02/E03/E04/E10/E11 including both independent invitation flows, missed-initial-event recovery, all distinguishable failures, and no post-Ready behavior, record results in `specs/001-room-session/tasks.md`, and leave US2 incomplete on any failure. Normal validation also requires `npm run db:types:check` after the phase reset, without preceding `db:types`. Before this ordinary Auth acceptance selection, run unfiltered `npm run test:e2e:security` after reset/check and account for its separate one-signup cost.
+- [X] T107 [US4] Checkpoint — run `npm run test:client -- --runTestsByPath __tests__/auth/anonymous-session.test.ts __tests__/rooms/use-room-subscription.test.ts __tests__/routes/room.test.tsx` and, after reset/env setup, `npm run db:test` plus `npm run test:e2e -- --grep @us4`; independently prove scenarios 13–14 and E07/E08/E09 with real reload/offline recovery, record results in `specs/001-room-session/tasks.md`, and block phase 9 until both T106 and T107 pass. Normal validation also requires `npm run db:types:check` after the phase reset, without preceding `db:types`. Before this ordinary Auth acceptance selection, run unfiltered `npm run test:e2e:security` after reset/check and account for its separate one-signup cost.
+
+### Phase 8 initial partial execution evidence — 2026-09-06 (historical)
+
+This failed attempt is retained as evidence, not the current readiness contract.
+The separately authorized system-readiness remediation supersedes its
+SUBSCRIBED/wait assumption. T096 was additionally reopened before new evidence;
+T099–T107 were already unchecked. T092–T095/T097–T098 are independent of that
+assumption and are preserved.
+
+**Result: BLOCKED at T106; US2 and US4 are not complete.** Started on clean
+`main` at `6a97e8d45c5de8f50b7b811153a9ada56073d2c4`. Only Phase 8
+implementation/tests were authored. T092–T098 are checked. T099–T101 were
+reopened after real integration disproved the approved binding-readiness
+assumption, despite isolated client tests passing. T102–T107 remain unchecked;
+T108–T121 and all task text are unchanged. No staging, commit or push.
+
+Publication and retained ACL/RLS/RPC evidence passed actual clean reset:
+pgTAP **287/287** (the original 285 plus two publication assertions).
+`npm run db:types:check` passed after every reset without any write command;
+canonical SHA-256 remains
+`46f41c3ca2a88d65a2604f449b17aa10c36b535c8ee0a67047683fb37f80fb4b`.
+Refetch/state/lifecycle and route cases were observed red before their
+implementation. Full `npm run test:client` subsequently passed **267/267**,
+16 suites. The final SDK test additionally verifies automatic token propagation
+to the same channel/participant using the real pinned SDK and synthetic Auth.
+Its fixture disables only the SDK's empty-channel grace timer for cleanup,
+not production behavior. The exact T107 isolated selection
+`npm run test:client -- --runTestsByPath __tests__/auth/anonymous-session.test.ts __tests__/rooms/use-room-subscription.test.ts __tests__/routes/room.test.tsx`
+passed **60/60**; this is not the real US4 checkpoint.
+
+Attempted T106 commands: `npm run supabase:start`, `npm run env:local`,
+`npm run db:reset`, `npm run db:types:check`, `npm run lint`,
+`npm run typecheck`, `npm run test:client`, `npm run db:test`,
+`npm run web:export`, `npm run playwright:install`, and
+`npm run test:e2e:security` each exited **0**. Reset output used the existing
+safe process wrapper; DB output was restricted to the TAP summary.
+`npm run test:e2e -- --grep '@us2-join|@us2-realtime'` exited **1**:
+**7/8 passed**, E02 host automatic Ready convergence failed. Both real E03
+variants passed (UPDATE, and actual outbound join frame held until guest
+commit), as did E04 manual/retry, E10 malformed variants, and E11 not-found.
+Those successes do not waive E02 or prove cold binding readiness.
+
+A separate clean-reset reproduction ran start/env/reset/types-check/security
+(all exit **0**), then `npm run test:e2e -- --grep '@us2-join E02'` (exit **1**).
+Read-only in-memory socket observation confirmed a real socket and successful
+room join reply, but no UPDATE; the host remained without Ready. Exact safe
+failure location: `e2e/room-session.spec.ts:470`. No raw frame/header/token was
+retained. An additional lint/typecheck run also passed.
+
+**Upstream blocker:** project-local `supabase services` (exit **0**) identifies
+Realtime **v2.129.3** for CLI **2.116.0**. Official tagged server sources do not
+implement `postgres_changes_options.wait`: its config schema omits the field;
+`join/3` returns success independently of the later
+`handle_info(:postgres_subscribe, ...)`, which reports real PostgreSQL
+readiness through a `system` event. The pinned JS client sends the option but
+emits SUBSCRIBED on the join reply. Research section 10 and Realtime lifecycle
+step 5 therefore incorrectly equate that reply with an active database binding
+for the selected local server. A commit between initial refetch and actual
+replication subscription can leave the host Waiting without invalidation.
+Resolving this requires separately approved readiness-contract/planning
+remediation. No system-event trigger, polling, artificial delay, backend upgrade
+or test-only readiness workaround was added to hide the conflict.
+
+Official evidence:
+
+- <https://raw.githubusercontent.com/supabase/realtime/v2.129.3/lib/realtime_web/channels/payloads/config.ex>
+- <https://raw.githubusercontent.com/supabase/realtime/v2.129.3/lib/realtime_web/channels/realtime_channel.ex>
+- <https://supabase.com/docs/guides/troubleshooting/realtime-postgres-changes-troubleshooting>
+
+C1 passed twice: each outer exit **0**, expected inner exit **1**, one verified
+PNG on attempt 1, complete controlled-probe artifacts, zero scanner findings.
+Acceptance failures also scanned cleanly. Actual anonymous sign-ins: C1 **2**,
+attempted Phase 8 acceptance **15** (13 + 2), total **17**. No 429 or automatic
+Auth retry. R02 remains N = 47 and anonymous_users = 150; reset/restart was
+never treated as quota reset/evasion. The second C1 probe/reproduction cost is
+included, not hidden by cleanup.
+
+T103–T105 browser cases were authored but **not executed**: independent host
+Waiting/Ready and guest Ready reloads, overlapping repeated guest joins, and
+real two-sided socket loss/reconnect. T107 real-stack/US4 evidence and the
+additional US1 browser regression did not run after unresolved T106 failure.
+No full US3 acceptance or Phase 9 task ran.
+
+All three Supabase lifecycles ended through an EXIT trap with
+`npm run supabase:stop` exit **0**, including both failed browser selections.
+All four pinned Playwright Docker runtimes and managed Expo processes stopped;
+contexts and controller registry/IPC finalized. Ports 8081 and 55321–55324 are
+free. All 18 unrelated Docker container ID/running/StartedAt/restart-count
+records match the initial snapshot. Protected constitution/spec/planning/model/
+contracts/quickstart, canonical types and package/lockfile hashes are unchanged.
+The four scanned Phase 8 diagnostic directories were removed; pre-existing
+artifacts were preserved. No extension hooks are configured or executed.
+
+### Phase 8 system-readiness remediation evidence — 2026-09-06
+
+**READY TO RESUME PHASE 8**, not full Phase 8/US2/US4 acceptance. User authorized
+this contract correction on top of the preserved partial working tree at the
+same Phase 7 HEAD. No reset/restore/stash/clean, staging, commit or push occurred.
+The implementation skill prerequisite passed, checklist 16/16; no extension
+hooks are configured or executed. Product/RPC/route/model and C1/R01/R02 remain
+unchanged. Realtime contract, affected plan/research/quickstart and task text
+now require actual postgres_changes system-ok, never SUBSCRIBED/wait readiness.
+
+T096 was reopened before changed tests ran; T099–T101 were already reopened
+after the previous failure. Their new evidence below now passes, so they are
+checked again. T092–T095/T097–T098 never depended on the faulty barrier and stay
+checked. **T102–T107 remain unchecked**: E04, the other E03 variant, complete
+reload/repeated-join selections and original full T106/T107 gates were not rerun
+here. Targeted T105 reconnect evidence is available for resumption, not a claim
+that earlier pending tasks or US4 are complete. T108–T121 remain unchecked and
+untouched; no Phase 9 task ran. IDs, phase/story counts and parallel groups are
+unchanged. Historical failed evidence above is retained, not reused as a pass.
+
+Pinned sources were checked directly: supabase-js v2.115.0 RealtimeChannel
+supports system listeners; server v2.129.3 emits postgres_changes system-ok only
+after successful PostgresCdc.after_connect, separately from join acknowledgement.
+Official links and rejected alternatives are in research section 10. Installed
+supabase-js/realtime-js = 2.115.0, local CLI = 2.116.0, actual container image =
+public.ecr.aws/supabase/realtime:v2.129.3, PostgreSQL = 17.6. Node 24.20.0/npm
+11.19.0 and Playwright 1.63.0 official noble Docker runtime are unchanged.
+
+| Actual command / evidence | Exit / result |
+|---|---|
+| Updated hook/route tests against old implementation | Expected 1; 9 failures expose false readiness and missing system/error behavior |
+| `npm run test:client -- --runTestsByPath __tests__/rooms/use-room-subscription.test.ts __tests__/routes/room.test.tsx` after fix | 0; 53/53 |
+| `npm run supabase:start`, `npm run env:local` | 0 each; real local health/readiness, credentials withheld |
+| `npm run db:reset` via existing safe managed-process helper | 0; clean migration replay, no raw CLI dump |
+| `npm run db:types:check` | 0; canonical bytes match, no preceding write |
+| `npm run lint`, `npm run typecheck` | 0 each, focused and complete remediation validation |
+| `npm run test:client` | 0; 275/275 across 16 suites, including final stale/reconnect tests |
+| `npm run db:test` with bounded TAP-summary output | 0; 287/287 |
+| `npm run web:export` | 0 |
+| `npm run playwright:install` | 0; pinned automatic Docker runtime prepared |
+| Unfiltered `npm run test:e2e:security` before each of the three acceptance selections | Each outer 0 / expected inner 1; A/B pass, one controlled real Auth failure, one verified PNG on attempt 1, zero scanner findings |
+| `npm run test:e2e -- --grep '@us2-join E02'` | 0; 1/1, previously failing cold-reset E02 passes |
+| `npm run test:e2e -- --grep '@us2-realtime E03 first'` | 0; 1/1, lost-initial-event recovery passes |
+| `npm run test:e2e -- --grep '@us4 E07 host actual\|@us4 E08 guest actual'` | 0; 2/2 real host/guest reconnect cases; pipe escaped here only for Markdown |
+| Read-only post-browser aggregate | 0; rooms=4, anonymous_users=11 |
+| `npm run supabase:stop` | 0; EXIT/INT/TERM owner cleanup |
+
+Readiness evidence: both listeners precede subscribe; no wait option is passed.
+Transport-only SUBSCRIBED and unrelated system events cause no read, even after
+advancing unit timers. Current system-ok immediately refetches; no English
+message predicate exists in application code. Duplicate readiness/UPDATE events
+coalesce, latest request and room generation guards reject stale completion,
+old-channel system callbacks are ignored, Ready never regresses. System-error
+invalidates pending reads and preserves Waiting/Ready with generic UI; later ok
+recovers without automatic channel replacement or suppression of server retries.
+Explicit retry removes before rebuilding and does not call membership RPCs.
+
+Real E02 observes transport join, then actual postgres_changes system-ok and its
+read before guest commit; real UPDATE then triggers refetch and host Ready with
+no refresh. Real E03 holds only the outbound room join frame until the guest
+commits: readiness/UPDATE/read counters are zero, then the unchanged join frame
+is released, true system-ok arrives and its mandatory read recovers Ready.
+No fabricated events, sleeps, polling, warm-up writes or version changes.
+
+Real reconnect interrupts both socket ends and gates replacements. After allowing
+transport rejoin, the harness temporarily holds the actual system-ok frame in
+memory: no extra read occurs and synchronization stays degraded. Forwarding that
+unchanged frame then permits authoritative refetch and Ready. Host missed a real
+guest commit while disconnected; guest retained Ready. Both retain identity,
+room, seats and join-request counts with zero extra anonymous signup. All frames
+remain in memory only; only bounded structural counters/outcomes are retained.
+
+| Finalized invocation directory | Sign-ins | Evidence |
+|---|---:|---|
+| `test-results/run-iSlLsd` | 1 | C1 before E02; 6 allowed files, one verified PNG |
+| `test-results/run-eZdmK0` | 2 | E02; 3 allowed files |
+| `test-results/run-kKjOT8` | 1 | C1 before E03; 6 allowed files, one verified PNG |
+| `test-results/run-4ZLJsD` | 2 | Lost-initial E03; 3 allowed files |
+| `test-results/run-G1x27l` | 1 | C1 before reconnect; 6 allowed files, one verified PNG |
+| `test-results/run-oMc8jC` | 4 | Host + guest reconnect; 3 allowed files |
+| Total | **11** | 3 security + 8 acceptance, no hidden retry or 429 |
+
+All six invocations were scanned against the live credential registry before
+registry cleanup: zero findings, contexts/IPC finalized. Capture-off policy,
+sanitizer/registry/scanner were not weakened. N=47 and anonymous_users=150 remain
+unchanged; this targeted cost is separate from the prior failed attempt's 17
+sign-ins (28 observed across both attempts). The stack remained running between
+these selections; reset/restart was never quota recovery. Canonical types remain
+SHA-256 46f41c3ca2a88d65a2604f449b17aa10c36b535c8ee0a67047683fb37f80fb4b.
+
+All six owned Playwright containers/managed Expo processes and local Supabase
+containers stopped; ports 8081 and 55321–55324 are free. The 18 unrelated Docker
+container IDs/states/StartedAt/restart counts match the entry snapshot. Protected
+constitution/spec/model/RPC/client-route, canonical types and package/lockfile
+hashes match before/after. Only these six new scanned artifact directories were
+removed; pre-existing diagnostics and all partial implementation were preserved.
+Final Git/whitespace and versionable-file security checks passed. No full story
+checkpoint, Phase 9 implementation, staging, commit or push is implied.
+
+### T102–T107 complete Phase 8 execution evidence — 2026-09-06
+
+**Result: GREEN. Full US2 (T106) and US4 (T107) passed in this continuation.**
+This supersedes the incomplete story status in the explicitly historical entries
+above; their failed/targeted evidence remains intact. Resumed intentionally dirty
+main at `6a97e8d45c5de8f50b7b811153a9ada56073d2c4`, preserving the partial
+implementation and approved Postgres Changes system-readiness remediation.
+T102–T105 test bodies already existed and were inspected before execution;
+no implementation, test, contract, or planning-text correction was needed here.
+Only T102–T107 checkboxes and this evidence entry changed in this continuation.
+
+Environment: Node 24.20.0 / npm 11.19.0, locked Expo 57.0.20,
+project-local Supabase CLI 2.116.0, supabase-js/realtime-js 2.115.0,
+PostgreSQL 17.6 and real Realtime v2.129.3. All browser invocations used
+`mcr.microsoft.com/playwright:v1.63.0-noble`, with runner-owned readiness
+probes, real local Anonymous Auth/RPC/RLS/Realtime and Expo web. No Realtime
+event/status was fabricated. No fixed delay, polling, warm-up mutation, wait
+option, version change or dependency installation was introduced.
+
+One Supabase start/stop lifecycle covered both gates. EXIT/INT/TERM cleanup
+ownership was installed before startup; the EXIT handler propagated both the
+validation result and shutdown failure. Each reset occurred with prior browser
+contexts closed. Reset output was drained by the existing safe-process helper;
+pgTAP output was bounded in memory and only its result/count was printed.
+No raw status, Auth/session or WebSocket payload was retained.
+
+Executed command evidence, in order (all listed outer exits are 0):
+
+| Gate | Exact command | Observed result |
+|---|---|---|
+| Shared startup | `npm run supabase:start` | Real local stack healthy |
+| T106 setup | `npm run env:local` | Only ignored public env generated; values withheld |
+| T106 setup | `npm run db:reset` | All three versioned migrations replayed cleanly |
+| T106 R01 | `npm run db:types:check` | Existing canonical artifact consistent; no write |
+| T106 database | `npm run db:test` | 287/287 pgTAP PASS |
+| T106 client | `npm run lint` | PASS |
+| T106 client | `npm run typecheck` | PASS |
+| T106 client | `npm run test:client` | 16 suites, 275/275 tests PASS |
+| T106 web | `npm run web:export` | Production web export PASS |
+| Browser preparation | `npm run playwright:install` | Exact official Docker runtime prepared |
+| T106 C1 | `npm run test:e2e:security` | A/B PASS; exact controlled C failure; safety gate PASS |
+| T102 / T106 browser | `npm run test:e2e -- --grep '@us2-join|@us2-realtime'` | 8/8 PASS, 13 sign-ins |
+| T107 client | `npm run test:client -- --runTestsByPath __tests__/auth/anonymous-session.test.ts __tests__/rooms/use-room-subscription.test.ts __tests__/routes/room.test.tsx` | 3 suites, 68/68 tests PASS |
+| T107 setup | `npm run env:local` | Ignored public environment configured again |
+| T107 setup | `npm run db:reset` | Independent clean database baseline, no stop/start |
+| T107 R01 | `npm run db:types:check` | Existing canonical artifact still consistent |
+| T107 database | `npm run db:test` | 287/287 pgTAP PASS |
+| T107 C1 | `npm run test:e2e:security` | A/B PASS; exact controlled C failure; safety gate PASS |
+| T103–T105 / T107 browser | `npm run test:e2e -- --grep @us4` | 6/6 PASS, 11 sign-ins |
+| Shared shutdown | `npm run supabase:stop` | PASS; complete command driver exit 0 |
+| Final hygiene | `git diff --check` | PASS |
+
+**T102 / US2:** E02 observes transport join separately, waits for real
+postgres_changes system-ok and its read, then admits the guest. A real UPDATE
+causes authoritative refetch and automatic host Ready/2 of 2 before any reload.
+E04 independently proves manual normalization and shared transport convergence;
+its pre-acceptance abort leaves Waiting unchanged and explicit retry joins.
+Both E03 variants pass: UPDATE after binding and guest commit before the actual
+outbound binding frame is released. The latter has no readiness/read/UPDATE
+before release and recovers Ready by the first real system-ok refetch.
+E10 manual/direct malformed inputs perform no RPC; E11 returns real not_found.
+Both isolated clients see the same room, and no post-Ready behavior starts.
+The complete eight-case selection closes A03–A08, not merely targeted E02.
+
+**T103 / US4 reload:** all three independent cases pass: host Waiting reload,
+host Ready reload and guest Ready reload. Retained browser storage preserves
+each participant identity, canonical code, authoritative RPC role and occupied
+seat; real re-entry returns already_member. No extra signup is dispatched.
+
+**T104 / US4 idempotency:** separate E09 repeats host and guest joins and
+dispatches two overlapping guest requests before awaiting either. All return
+already_member with the same room/roles/two seats and unchanged identities.
+The overlap is duplicate admitted membership, not a Phase 9 final-seat race.
+
+**T105 / US4 reconnect:** both host and guest variants actually close both sides
+of the real WebSocket and gate replacement connections. A guest commits while
+the host is disconnected; the host remains Waiting until recovery. After the
+new transport join, the harness temporarily holds the real system-ok: no new
+read occurs and the generic synchronization failure remains. Forwarding that
+unchanged system event triggers refetch and automatic Ready without reload,
+another join RPC or another sign-in. Guest recovery independently preserves
+Ready and identity. All transport interceptors/connections close in finally.
+
+The rerun client suites also prove exact-ID/minimal-column binding, system
+handler registration before subscribe, transport-only SUBSCRIBED, first/repeated
+system-ready refetch, duplicate coalescing, missed changes, stale old-room and
+same-room generation rejection, invalidate-before-remove cleanup, preserved
+Waiting/Ready on channel/system errors, later-ok recovery, and explicit retry
+with removal before clean replacement. Raw errors remain hidden. Isolated
+scheduling doubles are not substituted for the real browser evidence above.
+
+Publication inspection after the final reset/acceptance reports exactly
+`public.rooms` in `supabase_realtime`; pgTAP independently verifies UPDATE
+enabled, no all-tables publication, and unchanged grants/RLS/RPC invariants.
+After US4 there are six fixture rooms and twelve anonymous users from the second
+reset's C1 + US4 block. Those aggregate counts disclose no credentials.
+
+**C1:** two unfiltered gates each exit 0 around the exact expected inner exit 1.
+Each produces exactly one verified safe PNG on capture attempt 1, with complete
+diagnostics and cleanup receipts. Both recursive scans with the live in-memory
+credential registry report zero findings. Each acceptance run also finalizes
+and scans successfully, zero findings. Trace/HAR/video/automatic screenshot/
+storage-state export remain disabled; no raw network/session/WS logs are saved.
+
+**R02 measured accounting for this continuation:** C1 = 1 + 1 = 2;
+US2 = 2 + 2 + 1 + 1 + 1 + 2 + 2 + 2 = 13;
+US4 = 1 + 2 + 2 + 2 + 2 + 2 = 11.
+Total signup attempts = successful new identities = **26**. Reload, reconnect
+and repeated joins add zero. No retries, hidden fixture users or HTTP 429.
+The approved standard-suite N = 47 and local anonymous_users = 150 are unchanged;
+these two partial story selections are counted separately from earlier runs.
+Neither database reset nor service restart is used or claimed to replenish quota.
+
+Sanitized invocation directories were:
+`test-results/run-jBQOMq` (C1 before US2, 6 files),
+`test-results/run-6gsUoB` (US2, 3 files),
+`test-results/run-Ub1jjN` (C1 before US4, 6 files), and
+`test-results/run-TGNYk5` (US4, 3 files).
+After finalized scans and receipt inspection, these four disposable directories
+were removed; pre-existing diagnostic directories were not changed.
+
+Cleanup: all fixture contexts and intercepted connections finalized; four owned
+Playwright Docker runtimes were removed, Expo/Metro and local Supabase stopped,
+and credential registry/IPC cleared. No owned runtime process remains; loopback
+ports 8081, 55320–55324, 55327 and 55329 are free. The exact IDs, running states,
+StartedAt values and restart counts of all 18 original unrelated Docker containers
+match the pre-run snapshot; no global Docker cleanup occurred.
+
+R01 canonical SHA-256 remains
+`46f41c3ca2a88d65a2604f449b17aa10c36b535c8ee0a67047683fb37f80fb4b`.
+No `db:types` command ran. All task descriptions, protected normative inputs,
+contracts, migrations, generated types and the approved remediation are unchanged
+relative to this continuation's starting worktree. No new upstream contradiction
+or scope deviation was found. T092–T107 are now checked; T108–T121 remain
+unchecked. No US3 full browser acceptance, Phase 9, commit or push was performed.
+Phase 8 complete; stop before T108.
 
 ## Phase 9: User Story 3 — Capacity, Concurrency, and Isolation (P1)
 
@@ -1531,6 +1872,7 @@ The actual network-recovery variants in T105 are additional evidence for A14, no
 | Requirement | Acceptance scenario | Implementation task(s) | Test task(s) | Checkpoint |
 |---|---|---|---|---|
 | RPC code-collision/winner recovery — T044 correction | Exact `create_room` constraint routing / NFR-001 | T037, T041 | T040, T044 (live barrier, committed winner, named conflict, cleanup) | T049 |
+| Phase 8 readiness correction | A05/A14, FR-012/FR-013, NFR-002: transport-only join; postgres_changes system-ok barrier; degraded recovery | T099–T101 | T096 (system/error/stale/coalescing), T102 (both initial race sides), T105 (new readiness after real reconnect) | T106, T107; targeted remediation is not full story acceptance |
 | R01 — deterministic artifact | All typed database/client boundaries | T046, T047, T048 | T045, T049, T094, T117 | T049, T094, T121 |
 | C1 — credential-safe diagnostics / Constitution V | All authenticated E2E, including failure paths | T008, T011–T017 | T010, T018, T060, T115 | T061 before T063; T118, T121 |
 | R02 — local budget/config | E01–E12 and Auth smoke | T021, T028, T057, T059, T116 | T022, T056, T062, T103, T104, T105, T114 | T029, T063, T107, T118, T121 |

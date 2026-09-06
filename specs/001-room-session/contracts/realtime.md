@@ -20,9 +20,7 @@ operation. With `@supabase/supabase-js` `2.115.0`, the planned call shape is:
 
 ```ts
 const channel = supabase
-  .channel(`room:${roomId}`, {
-    config: { postgres_changes_options: { wait: true } },
-  })
+  .channel(`room:${roomId}`)
   .on(
     'postgres_changes',
     {
@@ -34,16 +32,28 @@ const channel = supabase
     },
     () => scheduleAuthoritativeRefetch(generation, roomId),
   )
-  .subscribe((status, error) => {
+  .on('system', {}, (payload) => {
+    if (!isCurrent(generation, roomId)) return;
+    if (payload?.extension !== 'postgres_changes') return;
+    if (payload.status === 'ok') {
+      markDatabaseReady();
+      scheduleAuthoritativeRefetch(generation, roomId);
+    } else if (payload.status === 'error') {
+      markDatabaseNotReadyAndInvalidatePendingReads();
+      handleRecoverableSynchronizationFailure();
+    }
+  })
+  .subscribe((status) => {
     if (!isCurrent(generation, roomId)) return;
     if (status === 'SUBSCRIBED') {
-      scheduleAuthoritativeRefetch(generation, roomId);
+      // Transport joined only: no DB-ready transition or refetch here.
     } else if (
       status === 'CHANNEL_ERROR' ||
       status === 'TIMED_OUT' ||
       status === 'CLOSED'
     ) {
-      handleRecoverableChannelFailure(status, error);
+      markDatabaseNotReadyAndInvalidatePendingReads();
+      handleRecoverableSynchronizationFailure();
     }
   });
 ```
@@ -64,18 +74,31 @@ membership policy—not from the name, filter, or selected payload field.
 2. Call `join_room` for the route code, including immediately after successful
    create navigation.
 3. Render the authoritative RPC state.
-4. Allocate a new monotonically increasing lifecycle generation and subscribe
-   only after the result discloses an accepted member's immutable `room_id`.
-5. The channel's `postgres_changes_options.wait = true` makes `SUBSCRIBED` wait
-   until the server confirms the Postgres Changes binding. On the first
-   successful `SUBSCRIBED`, immediately refetch the room. This closes the race
-   where a guest joined before the host's binding became active.
-6. On every matching UPDATE event, schedule an authoritative refetch.
-7. On every later `SUBSCRIBED` after channel reconnect, refetch again, recovering
-   all changes missed while disconnected.
-8. Before `/room/[code]` unmounts, its accepted room ID changes, or the shared
+4. Allocate a new monotonically increasing lifecycle generation and exactly one
+   channel for the accepted immutable `room_id`. Register the exact-ID UPDATE
+   handler and system handler before calling subscribe.
+5. `SUBSCRIBED` confirms only socket/channel transport join. It is not evidence
+   that Postgres Changes is listening and cannot trigger DB readiness/refetch.
+6. Only current-channel/generation `system` with `extension = postgres_changes`
+   and `status = ok` confirms the one approved binding is live. Mark DB-ready
+   and immediately schedule authoritative refetch on every such event. The
+   English message is not a correctness predicate; pinned-server tests may
+   check `Subscribed to PostgreSQL` structurally in memory.
+7. On every matching UPDATE while DB-ready, schedule/coalesce an authoritative
+   refetch. Events before readiness may be ignored: the mandatory system-ready
+   refetch recovers a guest commit that happened before the listener was live.
+8. Transport/channel loss or postgres_changes system-error clears DB readiness
+   and invalidates pending reads. A reconnect's SUBSCRIBED alone does not
+   restore it: require a new current postgres_changes system-ok, then refetch.
+9. Before `/room/[code]` unmounts, its accepted room ID changes, or the shared
    client is disposed, invalidate the generation and call
    `void supabase.removeChannel(channel)`.
+
+All callbacks and async reads are generation-guarded, including old-channel
+system-ok/error. No `postgres_changes_options.wait` is sent: client support does
+not imply server support on pinned Realtime v2.129.3. Generic replication-ready
+signals (`extension = system`) are not a substitute for actual binding readiness.
+No fixed delay, polling, warm-up mutation, Broadcast or Presence is introduced.
 
 No channel is opened for `invalid_code`, `not_found`, `full`, or an exceptional
 failure because those outcomes disclose no internal room ID.
@@ -109,7 +132,7 @@ only an invalidation signal.
 - Since the database has no `ready` to `waiting` transition, the mapper also
   refuses to replace a locally observed `ready` with an older `waiting` result
   for the same room.
-- The first and every later `SUBSCRIBED` transition always refetch, so an event
+- The first and every later current postgres_changes system-ok always refetch, so an event
   lost before initial readiness or during a disconnect/resubscribe window is
   recovered.
 - Duplicate events cause another safe read at most; they cannot duplicate
@@ -122,7 +145,13 @@ only an invalidation signal.
 - Retry invalidates the failed generation and removes its channel, confirms that
   the persisted Auth session is recovered, allocates a new generation,
   re-establishes the channel for the same accepted `room_id`, and refetches on
-  successful `SUBSCRIBED`.
+  a new postgres_changes system-ok, not transport-only SUBSCRIBED.
+- A current postgres_changes system-error is degraded/not-ready: preserve the
+  last room, invalidate pending reads and show only the approved generic
+  recoverable synchronization failure. Do not remove the channel automatically
+  or suppress the server's applicable subscription retries; a later system-ok
+  may recover this same valid generation. Explicit retry may rebuild it.
+  Never log/render raw system payloads, messages, Auth or WebSocket details.
 - If the refetch is denied or returns no row, the client does not infer room
   state from the event payload. It shows the generic recoverable failure and may
   repeat `join_room` using the route code after confirming Auth session recovery.
@@ -132,7 +161,7 @@ only an invalidation signal.
   authorization is propagated by the client. A refresh/channel recovery failure
   follows the same recoverable retry path and never signs in a replacement user
   while a persisted session remains recoverable.
-- Polling is not used as the primary synchronization mechanism.
+- There is no polling fallback or delay-based readiness.
 
 ## Authorization and Isolation
 
@@ -149,7 +178,8 @@ only an invalidation signal.
 
 - The guest sees `ready` directly from the committed `joined` RPC result.
 - A waiting host sees `ready` and participant count `2` after the guest-seat
-  UPDATE invalidates and refetches the row, without manual refresh.
+  UPDATE invalidates and refetches the row, or after the system-ready refetch
+  recovers a pre-readiness missed UPDATE, without manual refresh.
 - A reload or temporary disconnect recovers the current `waiting` or `ready`
   state for the same persisted participant without adding a seat.
 - Reaching `ready` triggers no later product behavior.

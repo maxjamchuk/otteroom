@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { expect, type Page, type Route, type Browser, type BrowserContextOptions, type TestInfo, type Response } from '@playwright/test';
+import { expect, type Page, type Route, type Browser, type BrowserContextOptions, type TestInfo, type Response, type WebSocketRoute } from '@playwright/test';
 import { test, safeBody, SafeDiagnostics } from './support/safe-diagnostics';
 
 // Binding allocation from quickstart; later cases consume these trials, not
-// additional fixture/bootstrap identities. Phase 7 adds entry and bounded
-// capacity/isolation smoke, not full US2 convergence or full US3 acceptance.
+// additional fixture/bootstrap identities. Phase 8 closes US2/US4; the existing
+// capacity/isolation checks remain smoke, not full US3 acceptance.
 export const anonymousBudget = Object.freeze({
   E01: 3, E02: 2, E03: 4, E04: 4, E05: 3, E06: 3,
   E07: 5, E08: 4, E09: 2, E10: 2, E11: 1, E12: 11, auth: 3,
@@ -246,6 +246,126 @@ const malformedMessage = 'Malformed invitation. Enter a valid room code.';
 const missingMessage = 'Room not found. Check your invitation.';
 const fullMessage = 'Room Full. This room already has two participants.';
 
+// Real transport barrier, scoped to a finally-closed context. Frame contents,
+// including authorization in phx_join, never enter logs/assertion diffs/artifacts.
+// Deadlines bound failed evidence, not application readiness or fixed sleeps.
+async function realtimeBarrier(page: Page, holdInitial = false) {
+  type Connection = { browser: WebSocketRoute; server: WebSocketRoute };
+  const connections = new Set<Connection>();
+  const waiting = new Set<() => void>();
+  let held: { connection: Connection; message: string | Buffer }[] = [];
+  let hold = holdInitial, paused = false, disposed = false, failed = false;
+  let holdReady = false;
+  let readyFrames: { connection: Connection; message: string | Buffer }[] = [];
+  const dbReady = new Set<Connection>();
+  const stats = { held: 0, transportJoins: 0, readiness: 0, readyHeld: 0, prematureReads: 0, reads: 0, updates: 0, losses: 0, joins: 0 };
+  const changed = () => { for (const notify of waiting) notify(); };
+  const failure = () => { failed = true; changed(); };
+  const wait = (name: keyof typeof stats, minimum: number) => new Promise<void>((resolve, reject) => {
+    const done = () => {
+      if (!failed && !disposed && stats[name] < minimum) return;
+      clearTimeout(deadline); waiting.delete(done);
+      if (failed || disposed) reject(new Error('E2E_SAFE_FAILURE')); else resolve();
+    };
+    const deadline = setTimeout(() => { waiting.delete(done); reject(new Error('E2E_SAFE_FAILURE')); }, 15000);
+    waiting.add(done); done();
+  });
+  const decode = (message: string | Buffer) => {
+    // Pinned Phoenix JSON serializer; binary broadcast is not a room transport.
+    if (typeof message !== 'string' || message.length > 65536) throw new Error('E2E_SAFE_FAILURE');
+    const value = JSON.parse(message);
+    if (!Array.isArray(value) || value.length !== 5) throw new Error('E2E_SAFE_FAILURE');
+    return { topic: value[2], event: value[3], payload: value[4] };
+  };
+  const closeConnection = async (c: Connection) => {
+    connections.delete(c); dbReady.delete(c);
+    await Promise.all([c.browser.close({ code: 1012, reason: 'test transport interruption' }), c.server.close({ code: 1012, reason: 'test transport interruption' })]);
+  };
+  const socket = (ws: import('@playwright/test').WebSocket) => {
+    if (new URL(ws.url()).pathname === '/realtime/v1/websocket') ws.on('close', () => { stats.losses++; changed(); });
+  };
+  const request = (r: import('@playwright/test').Request) => {
+    const url = new URL(r.url());
+    if (url.pathname.endsWith('/rpc/join_room')) stats.joins++;
+    if (url.pathname === '/rest/v1/rooms' && url.searchParams.get('id') &&
+      url.searchParams.get('select')?.replaceAll(' ', '') === 'id,code,state' && dbReady.size === 0) stats.prematureReads++;
+  };
+  const response = async (r: Response) => {
+    const url = new URL(r.url());
+    if (url.pathname !== '/rest/v1/rooms' || !url.searchParams.get('id') || url.searchParams.get('select')?.replaceAll(' ', '') !== 'id,code,state') return;
+    try {
+      const rows = await r.json();
+      if (!r.ok() || !Array.isArray(rows) || rows.length !== 1 ||
+        Object.keys(rows[0]).sort().join(',') !== 'code,id,state' || url.searchParams.get('id') !== `eq.${rows[0].id}`) throw new Error('E2E_SAFE_FAILURE');
+      stats.reads++; changed();
+    } catch { if (!disposed) failure(); }
+  };
+  page.on('websocket', socket); page.on('request', request); page.on('response', response);
+  await page.context().routeWebSocket('**/realtime/v1/websocket**', async browser => {
+    // Every connection is to the real server, including a replacement rejected
+    // while the outage gate is shut. No fabricated open/binding/update response.
+    const server = browser.connectToServer(), c = { browser, server };
+    connections.add(c);
+    if (disposed || paused) { await closeConnection(c).catch(failure); return; }
+    browser.onClose(async () => { connections.delete(c); dbReady.delete(c); await server.close().catch(() => { if (!disposed) failure(); }); });
+    server.onClose(async () => { connections.delete(c); dbReady.delete(c); await browser.close().catch(() => { if (!disposed) failure(); }); });
+    browser.onMessage(message => {
+      try {
+        const frame = decode(message);
+        if (frame.event === 'phx_join' && /^realtime:room:/.test(frame.topic)) {
+          const filters = frame.payload?.config?.postgres_changes;
+          if (!Array.isArray(filters) || filters.length !== 1 || filters[0].event !== 'UPDATE' ||
+            filters[0].schema !== 'public' || filters[0].table !== 'rooms' ||
+            filters[0].filter !== `id=eq.${frame.topic.slice('realtime:room:'.length)}` ||
+            JSON.stringify(filters[0].select) !== '["id"]' || frame.payload.config.postgres_changes_options !== undefined) throw new Error('E2E_SAFE_FAILURE');
+          if (hold) { held.push({ connection: c, message }); stats.held++; changed(); return; }
+        }
+        server.send(message);
+      } catch { failure(); }
+    });
+    server.onMessage(message => {
+      try {
+        const frame = decode(message);
+        if (/^realtime:room:/.test(frame.topic)) {
+          if (frame.event === 'phx_reply' && frame.payload?.status === 'ok' && Array.isArray(frame.payload.response?.postgres_changes)) stats.transportJoins++;
+          if (frame.event === 'system' && frame.payload?.extension === 'postgres_changes') {
+            if (frame.payload.status === 'ok') {
+              if (frame.payload.message !== 'Subscribed to PostgreSQL') throw new Error('E2E_SAFE_FAILURE');
+              if (holdReady) { readyFrames.push({ connection: c, message }); stats.readyHeld++; changed(); return; }
+              stats.readiness++; dbReady.add(c);
+            } else if (frame.payload.status === 'error') dbReady.delete(c);
+          }
+          if (frame.event === 'postgres_changes') stats.updates++;
+        }
+        browser.send(message); changed(); // Forward the exact real frame unchanged.
+      } catch { failure(); }
+    });
+  });
+  return {
+    stats, wait,
+    release() { hold = false; const frames = held; held = []; for (const { connection, message } of frames) connection.server.send(message); },
+    async disconnect() { paused = true; const before = stats.losses; await Promise.all([...connections].map(closeConnection)); await wait('losses', before + 1); },
+    holdReadiness() { holdReady = true; },
+    releaseReadiness() {
+      holdReady = false; const frames = readyFrames; readyFrames = [];
+      for (const { connection, message } of frames) {
+        if (!connections.has(connection)) continue;
+        dbReady.add(connection); stats.readiness++; connection.browser.send(message);
+      }
+      changed();
+    },
+    resume() { paused = false; },
+    assertHealthy() { expect(!failed && !disposed && stats.prematureReads === 0).toBe(true); },
+    async close() {
+      disposed = true; held = []; readyFrames = []; dbReady.clear(); changed();
+      page.removeListener('websocket', socket); page.removeListener('request', request); page.removeListener('response', response);
+      await Promise.all([...connections].map(closeConnection));
+      // Playwright's WS routes have context lifetime; the fixture closes that
+      // context in finally. This disposed guard rejects any late replacement.
+    },
+  };
+}
+
 // Test-only ownership: every extra isolated context gets the same registry,
 // capture policy, one-signup cap and finally cleanup as the primary fixture.
 async function withParticipants(browser: Browser, options: BrowserContextOptions, info: TestInfo,
@@ -345,19 +465,27 @@ async function repeatReady(page: Page, diagnostics: SafeDiagnostics, api: Public
 
 test('@us2-join E02 actual invitation and same-member host guest re-entry', async ({ page, diagnostics, browser, baseURL, viewport }, info) => {
   await safeBody(diagnostics, async () => {
-    const { api, room, invitation, participant } = await createWaiting(page, diagnostics);
-    await withParticipants(browser, { baseURL, viewport }, info, 1, async ([guest]) => {
-      await linkGuest(guest, room, invitation);
-      expect((await ownParticipant(guest.page)) !== participant).toBe(true);
-      // Phase 7 has no subscription. The authoritative DB is Ready, not this
-      // host's unchanged initial UI; explicit re-entry below is intentional.
-      await expect(page.getByRole('heading', { name: 'Waiting', exact: true })).toBeVisible();
-      expect((await ownRooms(page, api))[0].state === 'ready').toBe(true);
-      await repeatReady(page, diagnostics, api, room, 'host');
-      await repeatReady(guest.page, guest, api, room, 'guest');
-      expect(diagnostics.signupAttempts + guest.signupAttempts === anonymousBudget.E02).toBe(true);
-      await diagnostics.record({ scenario: 'E02', outcome: 'joined guest ready; repeated host/guest already_member; two seats; host refreshed explicitly' });
-    });
+    const transport = await realtimeBarrier(page);
+    try {
+      const { api, room, invitation, participant } = await createWaiting(page, diagnostics);
+      await transport.wait('transportJoins', 1);
+      await transport.wait('readiness', 1);
+      await transport.wait('reads', 1);
+      const before = { ...transport.stats };
+      await withParticipants(browser, { baseURL, viewport }, info, 1, async ([guest]) => {
+        await linkGuest(guest, room, invitation); // Only after real DB subscription readiness.
+        expect((await ownParticipant(guest.page)) !== participant).toBe(true);
+        await transport.wait('updates', before.updates + 1);
+        await transport.wait('reads', before.reads + 1);
+        await assertReady(page, diagnostics, room); // No host navigation/reload.
+        expect((await ownRooms(page, api))[0].state === 'ready').toBe(true);
+        transport.assertHealthy();
+        await repeatReady(page, diagnostics, api, room, 'host');
+        await repeatReady(guest.page, guest, api, room, 'guest');
+        expect(diagnostics.signupAttempts + guest.signupAttempts === anonymousBudget.E02).toBe(true);
+        await diagnostics.record({ scenario: 'E02', outcome: 'transport joined; postgres system-ok; guest commit; real UPDATE; refetch; host Ready; same-member re-entry' });
+      });
+    } finally { await transport.close(); }
   });
 });
 
@@ -375,7 +503,7 @@ test('@us2-join E04 manual whitespace lowercase converges on shared join', async
       await assertReady(guest.page, guest, room);
       expect((await ownParticipant(guest.page)) !== participant).toBe(true);
       expect((await ownRooms(page, api))[0].state === 'ready').toBe(true);
-      await expect(page.getByRole('heading', { name: 'Waiting', exact: true })).toBeVisible();
+      await assertReady(page, diagnostics, room);
       expect(diagnostics.signupAttempts + guest.signupAttempts === 2).toBe(true);
       await diagnostics.record({ scenario: 'E04', outcome: 'manual canonical join; guest ready; two seats' });
     });
@@ -453,6 +581,7 @@ test('@us2-join E04 pre-acceptance failure preserves Waiting then same-code retr
         expect((await request).postDataJSON()?.p_room_code === room.code).toBe(true);
         await assertAccepted(await retry, room, 'joined', 'guest', 'ready');
         await assertReady(guest.page, guest, room);
+        await assertReady(page, diagnostics, room);
         expect((await ownParticipant(guest.page)) === participant && (await ownRooms(page, api))[0].state === 'ready').toBe(true);
         await diagnostics.record({ scenario: 'E04', outcome: 'pre-acceptance abort; Waiting unchanged; same-code retry joined guest ready' });
       } finally { await guest.page.unroute(joinEndpoint, abort); }
@@ -472,7 +601,7 @@ test('@capacity-smoke E05 minimal third identity rejection preserves admitted se
       await assertNoRoomDetails(third.page, third, fullMessage);
       const thirdId = await ownParticipant(third.page);
       expect(new Set([participant, guestId, thirdId]).size === 3 && (await ownRooms(third.page, api)).length === 0).toBe(true);
-      await expect(page.getByRole('heading', { name: 'Waiting', exact: true })).toBeVisible();
+      await assertReady(page, diagnostics, room);
       await repeatReady(page, diagnostics, api, room, 'host');
       await repeatReady(guest.page, guest, api, room, 'guest');
       expect((await ownParticipant(page)) === participant && (await ownParticipant(guest.page)) === guestId).toBe(true);
@@ -501,3 +630,142 @@ test('@capacity-smoke E12 minimal known-ID RLS read preserves two own rooms', as
     });
   });
 });
+
+for (const missedInitial of [false, true]) {
+  test(`@us2-realtime E03 ${missedInitial ? 'first binding recovers missed initial commit' : 'bound UPDATE converges both browsers'}`, async ({ page, diagnostics, browser, baseURL, viewport }, info) => {
+    await safeBody(diagnostics, async () => {
+      const transport = await realtimeBarrier(page, missedInitial); // Before navigation.
+      try {
+        const { api, room, invitation, participant } = await createWaiting(page, diagnostics);
+        if (missedInitial) await transport.wait('held', 1);
+        else { await transport.wait('readiness', 1); await transport.wait('reads', 1); }
+        const reads = transport.stats.reads;
+        await withParticipants(browser, { baseURL, viewport }, info, 1, async ([guest]) => {
+          await linkGuest(guest, room, invitation); // Real committed join response.
+          expect((await ownParticipant(guest.page)) !== participant && (await ownRooms(page, api))[0].state === 'ready').toBe(true);
+          if (missedInitial) {
+            expect(transport.stats.readiness === 0 && transport.stats.reads === 0 && transport.stats.updates === 0).toBe(true);
+            await expect(page.getByRole('heading', { name: 'Waiting', exact: true })).toBeVisible();
+            transport.release();
+          } else await transport.wait('updates', 1);
+          await transport.wait('readiness', 1); await transport.wait('reads', reads + 1);
+          await assertReady(page, diagnostics, room); await assertReady(guest.page, guest, room);
+          expect(transport.stats.joins === 1 && (await ownParticipant(page)) === participant && diagnostics.signupAttempts + guest.signupAttempts === 2).toBe(true);
+          transport.assertHealthy();
+          await diagnostics.record({ scenario: 'E03', outcome: missedInitial ? 'guest committed before first binding; real postgres system-ok; authoritative refetch; both ready; no host reload' : 'postgres system-ok; UPDATE invalidation; authoritative refetch; both ready; no host reload' });
+        });
+      } finally { await transport.close(); }
+    });
+  });
+}
+
+test('@us4 E07 host Waiting reload retains identity and seat', async ({ page, diagnostics }) => {
+  await safeBody(diagnostics, async () => {
+    const { api, room, participant } = await createWaiting(page, diagnostics);
+    const recovered = page.waitForResponse(response => response.url().endsWith('/rpc/join_room'));
+    expect((await page.reload())?.status() === 200).toBe(true);
+    await assertAccepted(await recovered, room, 'already_member', 'host', 'waiting');
+    await assertWaiting(page, diagnostics, room);
+    const rows = await ownRooms(page, api);
+    expect(rows.length === 1 && rows[0].id === room.id && rows[0].code === room.code && rows[0].state === 'waiting' && (await ownParticipant(page)) === participant).toBe(true);
+    await diagnostics.record({ scenario: 'E07', outcome: 'host Waiting reload; same identity/code/role; one seat; no new signup' });
+  });
+});
+
+for (const role of ['host', 'guest'] as const) {
+  test(`@us4 ${role === 'host' ? 'E07' : 'E08'} ${role} Ready reload retains identity and seat`, async ({ page, diagnostics, browser, baseURL, viewport }, info) => {
+    await safeBody(diagnostics, async () => {
+      const { api, room, invitation } = await createWaiting(page, diagnostics);
+      await withParticipants(browser, { baseURL, viewport }, info, 1, async ([guest]) => {
+        await linkGuest(guest, room, invitation); await assertReady(page, diagnostics, room);
+        const target = role === 'host' ? diagnostics : guest;
+        await repeatReady(target.page, target, api, room, role);
+        await assertReady(page, diagnostics, room); await assertReady(guest.page, guest, room);
+        expect(diagnostics.signupAttempts + guest.signupAttempts === 2).toBe(true);
+        await target.record({ scenario: role === 'host' ? 'E07' : 'E08', outcome: 'Ready reload; already_member; same identity/code/role; two seats; no new signup' });
+      });
+    });
+  });
+}
+
+// Own-session credentials stay inside the originating browser, never returned to
+// the runner. Both overlapping fetches are dispatched before awaiting either.
+async function repeatJoin(page: Page, api: PublicApi, room: RoomProjection, role: 'host' | 'guest', overlap = false) {
+  const valid = await page.evaluate(async ({ api, room, role, overlap }) => {
+    const key = Object.keys(localStorage).find(name => /^sb-.+-auth-token$/.test(name));
+    const session = key ? JSON.parse(localStorage.getItem(key) ?? 'null') : null;
+    if (!session?.access_token) return false;
+    const send = () => fetch(`${api.origin}/rest/v1/rpc/join_room`, {
+      method: 'POST', headers: { apikey: api.publicKey, Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ p_room_code: room.code }),
+    });
+    const pending = overlap ? [send(), send()] : [send()];
+    const responses = await Promise.all(pending);
+    return (await Promise.all(responses.map(async response => {
+      const rows = await response.json();
+      return response.ok && Array.isArray(rows) && rows.length === 1 &&
+        Object.keys(rows[0]).sort().join(',') === 'outcome,participant_count,participant_role,room_code,room_id,room_state' &&
+        rows[0].outcome === 'already_member' && rows[0].participant_role === role && rows[0].participant_count === 2 &&
+        rows[0].room_id === room.id && rows[0].room_code === room.code && rows[0].room_state === 'ready';
+    }))).every(Boolean);
+  }, { api, room, role, overlap });
+  expect(valid).toBe(true);
+}
+
+test('@us4 E09 repeated host guest and overlapping guest joins stay idempotent', async ({ page, diagnostics, browser, baseURL, viewport }, info) => {
+  await safeBody(diagnostics, async () => {
+    const { api, room, invitation, participant } = await createWaiting(page, diagnostics);
+    await withParticipants(browser, { baseURL, viewport }, info, 1, async ([guest]) => {
+      await linkGuest(guest, room, invitation); await assertReady(page, diagnostics, room);
+      const guestId = await ownParticipant(guest.page);
+      await repeatJoin(page, api, room, 'host'); await repeatJoin(guest.page, api, room, 'guest');
+      await repeatJoin(guest.page, api, room, 'guest', true);
+      for (const target of [diagnostics, guest]) {
+        const rows = await ownRooms(target.page, api);
+        expect(rows.length === 1 && rows[0].id === room.id && rows[0].code === room.code && rows[0].state === 'ready').toBe(true);
+        await assertReady(target.page, target, room);
+      }
+      expect((await ownParticipant(page)) === participant && (await ownParticipant(guest.page)) === guestId && diagnostics.signupAttempts + guest.signupAttempts === anonymousBudget.E09).toBe(true);
+      await diagnostics.record({ scenario: 'E09', outcome: 'host/guest repeated joins and two overlapping guest requests; all already_member; same seats; no signup' });
+    });
+  });
+});
+
+for (const role of ['host', 'guest'] as const) {
+  test(`@us4 ${role === 'host' ? 'E07' : 'E08'} ${role} actual socket loss and unchanged transport recovery`, async ({ page, diagnostics, browser, baseURL, viewport }, info) => {
+    await safeBody(diagnostics, async () => {
+      await withParticipants(browser, { baseURL, viewport }, info, 1, async ([guest]) => {
+        const target = role === 'host' ? diagnostics : guest;
+        const transport = await realtimeBarrier(target.page); // Before either app navigation.
+        try {
+          const { api, room, invitation } = await createWaiting(page, diagnostics);
+          if (role === 'guest') { await linkGuest(guest, room, invitation); await assertReady(page, diagnostics, room); }
+          await transport.wait('readiness', 1); await transport.wait('reads', 1);
+          const participant = await ownParticipant(target.page);
+          const before = { ...transport.stats };
+          await transport.disconnect(); // Explicitly closes browser AND real server.
+          await expect(target.page.getByText('Unable to synchronize this room. Please try again.', { exact: true })).toBeVisible();
+          if (role === 'host') {
+            await linkGuest(guest, room, invitation);
+            expect((await ownRooms(page, api))[0].state === 'ready').toBe(true);
+            await expect(page.getByRole('heading', { name: 'Waiting', exact: true })).toBeVisible();
+          } else await assertReady(guest.page, guest, room);
+          expect(transport.stats.reads === before.reads && transport.stats.readiness === before.readiness && transport.stats.losses > before.losses).toBe(true);
+          transport.holdReadiness(); transport.resume();
+          await transport.wait('transportJoins', before.transportJoins + 1);
+          await transport.wait('readyHeld', before.readyHeld + 1);
+          // Transport is joined, but actual system-ok has not reached the app.
+          expect(transport.stats.reads === before.reads && transport.stats.readiness === before.readiness).toBe(true);
+          await expect(target.page.getByText('Unable to synchronize this room. Please try again.', { exact: true })).toBeVisible();
+          transport.releaseReadiness();
+          await transport.wait('readiness', before.readiness + 1); await transport.wait('reads', before.reads + 1);
+          await assertReady(page, diagnostics, room); await assertReady(guest.page, guest, room);
+          await expect(target.page.getByText('Unable to synchronize this room. Please try again.', { exact: true })).toHaveCount(0);
+          expect((await ownParticipant(target.page)) === participant && transport.stats.joins === before.joins && diagnostics.signupAttempts + guest.signupAttempts === 2).toBe(true);
+          transport.assertHealthy();
+          await target.record({ scenario: role === 'host' ? 'E07' : 'E08', outcome: 'actual socket loss; gated replacements; transport-only rejoin; new postgres system-ok/refetch; Ready; same identity; no reload/join/signup' });
+        } finally { await transport.close(); }
+      });
+    });
+  });
+}

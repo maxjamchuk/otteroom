@@ -742,6 +742,22 @@ select results_eq(
   'client state assignment: all eight fields and row count unchanged'
 );
 
+-- T093: publication survives clean replay; the following T033 catalog AND real
+-- caller assertions must still pass with publication enabled, without broader ACLs.
+select results_eq(
+  $$select schemaname::text collate "default", tablename::text collate "default"
+    from pg_catalog.pg_publication_tables where pubname = 'supabase_realtime'
+    order by schemaname, tablename$$,
+  $$values ('public'::text, 'rooms'::text)$$,
+  'Realtime publishes exactly public.rooms, no unrelated object'
+);
+select results_eq(
+  $$select puballtables, pubupdate from pg_catalog.pg_publication
+    where pubname = 'supabase_realtime'$$,
+  $$values (false, true)$$,
+  'Realtime permits UPDATE delivery without an all-tables publication'
+);
+
 -- T033: catalog ACL evidence and actual caller execution are independent checks.
 select results_eq(
   $$select relrowsecurity, pg_get_userbyid(relowner)::text collate "default"

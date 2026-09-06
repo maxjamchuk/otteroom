@@ -1,4 +1,6 @@
 import type { AcceptedRoomResult, JoinResult } from './contracts';
+import { RoomContractError } from './contracts';
+import type { RoomProjection } from './service';
 
 export function acceptedRoomState(result: AcceptedRoomResult) {
   return {
@@ -12,6 +14,11 @@ export function acceptedRoomState(result: AcceptedRoomResult) {
   };
 }
 export type AcceptedRoomState = ReturnType<typeof acceptedRoomState>;
+export function applyRoomRefetch(current: AcceptedRoomState, row: RoomProjection): AcceptedRoomState {
+  if (current.id !== row.id || current.code !== row.code) throw new RoomContractError();
+  if (current.state === 'ready' && row.state === 'waiting') return current;
+  return { ...current, state: row.state, title: row.state === 'ready' ? 'Ready' : 'Waiting', count: row.state === 'ready' ? 2 : 1 };
+}
 export function createErrorState() {
   return { kind: 'error' as const, message: 'Unable to create your room. Please try again.' };
 }

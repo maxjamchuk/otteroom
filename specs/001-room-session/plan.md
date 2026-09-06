@@ -157,7 +157,8 @@ exception.
 - An in-flight bootstrap promise prevents multiple client sign-in attempts.
 - Every protected route action awaits bootstrap. Auth and Realtime share one
   Supabase client so refresh updates channel authorization; reconnect still
-  requires `SUBSCRIBED` plus authoritative refetch.
+  requires a new postgres_changes system-ok plus authoritative refetch;
+  `SUBSCRIBED` is transport-only, not database readiness.
 - Same browser storage means same participant; a separate context or cleared
   storage means a distinct participant. Native reload uses its persisted SQLite
   adapter. Disconnection never frees a seat.
@@ -525,10 +526,22 @@ Detailed definitions: [data-model.md](./data-model.md) and
 
 - A migration adds `public.rooms` to the `supabase_realtime` publication.
 - An accepted member subscribes to UPDATE events filtered by exact internal room
-  ID with `select: ['id']` and a wait-for-Postgres-binding channel option, and
-  removes that channel when the route or room changes.
-- Each event and the first and every later successful `SUBSCRIBED` transition
-  schedule an exact-column authoritative refetch under RLS.
+  ID with `select: ['id']`; register that one binding and a system handler before
+  subscribe, and remove the channel when the route or room changes.
+- SUBSCRIBED is only transport join. First and every later current-channel
+  `system(extension=postgres_changes, status=ok)` establishes database readiness
+  and immediately schedules an exact-column authoritative refetch under RLS;
+  matching UPDATE events while ready also schedule/coalesce reads.
+- System-error/channel loss clears readiness and invalidates pending reads,
+  preserving the last room with generic recovery UI. Server retries are retained;
+  later system-ok can recover, including after reconnect. Explicit retry rebuilds
+  the channel. Guard all system callbacks and async results by generation.
+- Pinned Realtime v2.129.3 does not implement the client's wait option. Send no
+  `postgres_changes_options.wait`; require extension/status/current generation,
+  not an English message, generic replication-ready signal, delay or polling.
+  No warm-up write, Broadcast, Presence or version change is a workaround.
+  Research section 10 records pinned official source evidence. System payloads
+  are inspected structurally in memory only, never retained in diagnostics.
 - Event payloads never replace state directly. Refetch sequencing, coalescing,
   a room/subscription generation token, and the irreversible Waiting-to-Ready
   rule prevent stale or duplicate events from rolling UI back or crossing rooms.
@@ -815,7 +828,8 @@ planning invocation.
   follows the separate write/check/review procedure, never an automatic repair
   inside a failed validation gate.
 - Implement the exact-room Postgres Changes lifecycle with
-  wait-for-binding `SUBSCRIBED`, immediate/event/reconnect refetch, coalescing,
+  transport-only SUBSCRIBED and current postgres_changes system-ok readiness,
+  immediate system-ready/event/reconnect refetch, coalescing,
   generation/request guards, recoverable errors, and deterministic cleanup.
 - Add lifecycle tests plus real-stack evidence for a completely missed initial
   event, duplicate events, room changes, reconnect, and unmount.
@@ -919,8 +933,10 @@ pgTAP after a clean `supabase db reset` covers:
   recoverable failure states;
 - retry semantics, including create request ID reuse;
 - duplicate-submit protection without claiming it as database correctness; and
-- first/repeated `SUBSCRIBED`, UPDATE invalidation, missed/duplicate events,
-  generation/request stale-result guards, channel errors, and cleanup.
+- SUBSCRIBED alone never marking DB-ready/refetching; first/repeated system-ok,
+  UPDATE invalidation, missed/duplicate events, system-error/later-ok recovery,
+  generation/request and old-channel system-event guards, channel errors and
+  cleanup. Prove both real race sides and new system readiness after reconnect.
 
 ### Browser acceptance evidence
 

@@ -540,6 +540,26 @@ controls, and no Android emulator or iOS simulator is required.
 
 ## Browser Two-Participant Verification
 
+### Realtime readiness (pinned local server)
+
+Register one exact-room UPDATE listener and a system listener before subscribe.
+SUBSCRIBED confirms transport join only; it neither proves Postgres Changes
+readiness nor triggers the readiness read. Only current-channel/generation
+`system(extension=postgres_changes, status=ok)` establishes DB readiness and
+immediately triggers the RLS-protected authoritative refetch. Every later such
+event, including after reconnect, refetches again; UPDATE is invalidation only.
+This recovers a guest commit missed before the binding became live. System-error
+or channel loss clears readiness/pending reads, preserves the last room and shows
+generic recoverable synchronization failure; later system-ok or explicit channel
+retry can recover. Never retain raw system/WS messages in diagnostics.
+
+The application ignores the human-readable message and generic replication-ready
+signals. Do not send postgres_changes_options.wait on Realtime v2.129.3, infer
+DB readiness from SUBSCRIBED, poll, sleep, warm up with a mutation or change
+versions. The Phase 8 evidence covers guest UPDATE after system readiness and
+guest commit before readiness, plus a new system-ok/refetch after real reconnect.
+See research section 10 and the Realtime contract for pinned official sources.
+
 This is the manual observable check after implementation:
 
 1. Open `http://127.0.0.1:8081/` in one fresh browser context.

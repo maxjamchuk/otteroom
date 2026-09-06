@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { invitationLink, parseRoomSegment } from '../../src/rooms/code';
 import { joinRoom } from '../../src/rooms/service';
-import { joinRoomState, joinErrorState, malformedInvitationState } from '../../src/rooms/state';
+import { joinRoomState, joinErrorState, malformedInvitationState, type AcceptedRoomState } from '../../src/rooms/state';
+import { useRoomSubscription } from '../../src/rooms/use-room-subscription';
 
 export default function RoomRouteScreen() {
   const params = useLocalSearchParams<{ code?: string | string[] }>();
@@ -67,13 +68,26 @@ function RoomEntry({ code }: { code: string }) {
       setState({ kind: 'loading' }); setAttempt(value => value + 1);
     }}><Text>Retry room</Text></Pressable>}
   </>;
+  return <AcceptedRoom initial={state} />;
+}
+
+function AcceptedRoom({ initial }: { initial: AcceptedRoomState & { invitation?: string } }) {
+  const { room, error, retry, retrying } = useRoomSubscription(initial);
+  // An accepted RPC is immediately visible, including guest Ready before binding.
+  const state = room ?? initial;
   return <>
     <Text accessibilityRole="header" style={styles.title}>{state.title}</Text>
     <Text accessibilityLabel="Room code" selectable>{state.code}</Text>
     <Text>{state.count} of 2</Text>
     {state.state === 'waiting' && <>
       <Text>Waiting for the second participant.</Text>
-      <Text accessibilityLabel="Invitation link" selectable>{state.invitation}</Text>
+      <Text accessibilityLabel="Invitation link" selectable>{initial.invitation}</Text>
+    </>}
+    {error && <>
+      <Text accessibilityLiveRegion="polite">Unable to synchronize this room. Please try again.</Text>
+      <Pressable accessibilityRole="button" accessibilityLabel="Retry synchronization" disabled={retrying} onPress={retry}>
+        <Text>{retrying ? 'Reconnecting…' : 'Retry synchronization'}</Text>
+      </Pressable>
     </>}
   </>;
 }

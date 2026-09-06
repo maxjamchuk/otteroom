@@ -1,11 +1,14 @@
-import { createRoom, joinRoom, RoomServiceError } from '../../src/rooms/service';
+import { createRoom, joinRoom, refetchRoom, RoomServiceError } from '../../src/rooms/service';
 import { normalizeRoomCode } from '../../src/rooms/code';
 const mockBootstrap = jest.fn();
 const mockRpc = jest.fn();
+const mockSelect = jest.fn(), mockEq = jest.fn(), mockLimit = jest.fn();
+const mockFrom = jest.fn(() => ({ select: mockSelect }));
 jest.mock('../../src/auth/anonymous-session', () => ({ bootstrapAnonymousSession: () => mockBootstrap() }));
-jest.mock('../../src/lib/supabase', () => ({ getSupabase: () => ({ rpc: mockRpc }) }));
+jest.mock('../../src/lib/supabase', () => ({ getSupabase: () => ({ rpc: mockRpc, from: mockFrom }) }));
 const row = { outcome: 'created', room_id: '11111111-1111-4111-8111-111111111111', room_code: 'ABCDEF0123', room_state: 'waiting', participant_role: 'host', participant_count: 1 };
 const requestId = '22222222-2222-4222-8222-222222222222';
+const projection = { id: row.room_id, code: row.room_code, state: 'ready' };
 beforeEach(() => { jest.resetAllMocks(); mockBootstrap.mockResolvedValue({ user: { id: 'private-participant' } }); mockRpc.mockResolvedValue({ data: [row], error: null }); });
 it('forwards only the creation request UUID through the typed RPC', async () => {
   expect(await createRoom(requestId)).toEqual(row);
@@ -67,4 +70,38 @@ it('link and normalized manual entry use the identical gated transport', async (
   await Promise.resolve(); expect(mockRpc).not.toHaveBeenCalled();
   resolve(); await Promise.all(calls);
   expect(mockRpc.mock.calls).toEqual(Array(2).fill(['join_room', { p_room_code: row.room_code }]));
+});
+
+describe('authoritative member refetch', () => {
+  beforeEach(() => {
+    mockFrom.mockReturnValue({ select: mockSelect });
+    mockSelect.mockReturnValue({ eq: mockEq }); mockEq.mockReturnValue({ limit: mockLimit });
+    mockLimit.mockResolvedValue({ data: [projection], error: null });
+  });
+  it('awaits the shared session and reads only the accepted immutable ID and public projection', async () => {
+    let resolve!: () => void;
+    mockBootstrap.mockReturnValue(new Promise<void>(done => { resolve = done; }));
+    const read = refetchRoom(row.room_id);
+    await Promise.resolve(); expect(mockFrom).not.toHaveBeenCalled();
+    resolve(); expect(await read).toEqual(projection);
+    expect(mockFrom).toHaveBeenCalledWith('rooms');
+    expect(mockSelect).toHaveBeenCalledWith('id, code, state');
+    expect(mockEq).toHaveBeenCalledWith('id', row.room_id);
+    // Read two to detect a cardinality violation, never hide it with limit(1).
+    expect(mockLimit).toHaveBeenCalledWith(2); expect(mockRpc).not.toHaveBeenCalled();
+  });
+  it.each([null, [], [projection, projection], [{ ...projection, id: requestId }],
+    [{ ...projection, code: 'abcdef0123' }], [{ ...projection, state: 'unknown' }],
+    [{ ...projection, code: null }], [{ ...projection, host_user_id: 'private' }]])('rejects absent/invalid/cross-room rows %#', async data => {
+    mockLimit.mockResolvedValue({ data, error: null });
+    await expect(refetchRoom(row.room_id)).rejects.toEqual(new RoomServiceError());
+    expect(mockLimit).toHaveBeenCalledTimes(1); expect(mockRpc).not.toHaveBeenCalled();
+  });
+  it.each(['auth', 'read', 'thrown'])('keeps %s failure generic without mutations or automatic retries', async mode => {
+    if (mode === 'auth') mockBootstrap.mockRejectedValue(new Error('private'));
+    if (mode === 'read') mockLimit.mockResolvedValue({ data: [projection], error: { message: 'private' } });
+    if (mode === 'thrown') mockLimit.mockRejectedValue(new Error('private'));
+    await expect(refetchRoom(row.room_id)).rejects.toEqual(new RoomServiceError());
+    expect(mockLimit).toHaveBeenCalledTimes(mode === 'auth' ? 0 : 1); expect(mockRpc).not.toHaveBeenCalled();
+  });
 });
