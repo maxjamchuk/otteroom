@@ -14,6 +14,7 @@ type SafeInput = {
 function scenarioFor(title: unknown): string {
   if (typeof title !== 'string') return 'unclassified';
   if (title.startsWith('@baseline ')) return 'baseline';
+  if (title.startsWith('@auth ')) return 'auth';
   if (title.startsWith('@diagnostics-static A ')) return 'A';
   if (title.startsWith('@diagnostics-static B ')) return 'B';
   if (title.startsWith('@credential-probe C ')) return 'C';
@@ -29,6 +30,8 @@ export function safeResult(test: { title?: unknown; expectedStatus?: unknown }, 
     ? String(result.status) : 'failed';
   const receipt = (name: string, expected: string) =>
     result.annotations?.some(item => item.type === name && item.description === expected) === true;
+  const count = (name: string) => (result.annotations ?? []).filter(item => item.type === name && /^[0-9]{1,2}$/.test(item.description ?? ''))
+    .reduce((sum, item) => sum + Number(item.description), 0);
   return {
     scenario: scenarioFor(test.title),
     context: receipt('safe-context-label', 'primary') ? 'primary' : 'none',
@@ -37,7 +40,12 @@ export function safeResult(test: { title?: unknown; expectedStatus?: unknown }, 
       ? 'CONTROLLED_AUTH_DIAGNOSTIC_FAILURE' : status === 'passed' ? 'PASS' : 'E2E_FAILURE',
     cleanup: receipt('safe-context-cleanup', 'complete'),
     authSuccess: receipt('safe-auth-success', 'confirmed'),
-    signups: receipt('safe-signups', '1') ? 1 : 0,
+    signups: count('safe-signups'),
+    identities: count('safe-identities'),
+    budgetFailure: receipt('safe-auth-budget', 'exhausted'),
+    capture: [...(result.annotations ?? [])].reverse().find(item => item.type === 'safe-capture-result' &&
+      ['stabilizing', 'unstable-dom', 'unsafe-ui', 'changed-dom', 'changed-viewport', 'changed-values', 'invalid-png', 'verified'].includes(item.description ?? ''))?.description ?? 'none',
+    captureAttempts: Math.max(0, ...(result.annotations ?? []).filter(item => item.type === 'safe-capture-attempt' && /^[1-3]$/.test(item.description ?? '')).map(item => Number(item.description))),
     artifactsComplete: receipt('safe-artifacts', 'complete'),
     stage: ['cleanup', 'scanner', 'sanitizer', 'ui', 'capture-guards', 'config'].find(value => receipt('safe-stage', value)) ?? 'none',
     ui: [...(result.annotations ?? [])].reverse().find(item => item.type === 'safe-ui-result' && ['safe', 'incomplete', 'credential'].includes(item.description ?? ''))?.description ?? 'none',
@@ -79,7 +87,7 @@ export default class SafeReporter implements Reporter {
     if (!this.#directory) return;
     if (this.#runnerFailed) this.#results.push({
       scenario: 'runner', context: 'none', status: 'failed', category: 'E2E_FAILURE',
-      cleanup: false, authSuccess: false, signups: 0, artifactsComplete: false, location: 'none', stage: 'none', ui: 'none', uiReason: 'none',
+      cleanup: false, authSuccess: false, signups: 0, identities: 0, budgetFailure: false, capture: 'none', captureAttempts: 0, artifactsComplete: false, location: 'none', stage: 'none', ui: 'none', uiReason: 'none',
     });
     // Every field was projected to fixed vocabulary above; never serialize TestResult.
     const summary = JSON.stringify(this.#results);

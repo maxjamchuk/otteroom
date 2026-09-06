@@ -42,6 +42,18 @@ export function assessRun(mode, staticOnly, exitCode, results, scanOk) {
     probe.authSuccess === true && probe.signups === 1 && probe.cleanup === true && probe.artifactsComplete === true;
 }
 
+export function verifyProbeArtifacts(directory) {
+  const names = new Set();
+  function walk(current) {
+    for (const item of fs.readdirSync(current, { withFileTypes: true })) {
+      if (item.isDirectory()) walk(path.join(current, item.name));
+      else names.add(item.name);
+    }
+  }
+  walk(directory);
+  return ['summary.json', 'safe-failure.png', 'safe-diagnostics.txt', 'error-context.md', 'safe-process.txt'].every(name => names.has(name));
+}
+
 async function launchPlaywright({ invocation, directory, socket, signal, runtime }) {
   const env = { ...runtimeEnvironment(runtime),
     CI: '1', PLAYWRIGHT_NO_COPY_PROMPT: '1',
@@ -68,15 +80,20 @@ export async function executeInvocation(invocation, { artifactRoot = path.join(r
     server = await startRegistryServer(registry);
     const exitCode = await runtime(selected => launch({ invocation, directory, registry, socket: server.endpoint, signal, runtime: selected }), { signal });
     // Child close includes reporter/web-server teardown; scan even when tests failed.
+    fs.writeFileSync(path.join(directory, 'safe-process.txt'), `playwright exit=${exitCode}; managed web and browser runtime finalized\n`, { flag: 'wx', mode: 0o600 });
     const scan = scanArtifacts(directory, { registry });
     let results = [];
     const summary = path.join(directory, 'summary.json');
     if (scan.ok && fs.existsSync(summary) && fs.statSync(summary).size <= 65536) results = JSON.parse(fs.readFileSync(summary, 'utf8'));
-    outcome = signalExit(signal) ?? (assessRun(invocation.mode, invocation.staticOnly, exitCode, results, scan.ok) ? 0 : exitCode || 1);
+    const completeProbe = invocation.mode !== 'security' || invocation.staticOnly || scan.ok && registry.size > 0 && verifyProbeArtifacts(directory);
+    outcome = signalExit(signal) ?? (assessRun(invocation.mode, invocation.staticOnly, exitCode, results, scan.ok && completeProbe) ? 0 : exitCode || 1);
     process.stdout.write(JSON.stringify({ component: 'e2e-controller', selection: invocation.staticOnly ? 'synthetic-only' : invocation.mode,
       status: outcome === 0 ? 'passed' : 'failed', artifacts: scan.fileCount, findings: scan.findings,
-      scenarios: results.map(result => ({ scenario: ['A', 'B', 'C', 'baseline'].includes(result.scenario) ? result.scenario : 'other', status: result.status === 'passed' ? 'passed' : 'failed' })),
+      innerExit: exitCode, probeArtifactsComplete: completeProbe,
+      scenarios: results.map(result => ({ scenario: ['A', 'B', 'C', 'baseline', 'auth'].includes(result.scenario) ? result.scenario : 'other', status: result.status === 'passed' ? 'passed' : 'failed',
+        signups: Number.isInteger(result.signups) ? result.signups : 0, identities: Number.isInteger(result.identities) ? result.identities : 0 })),
     }) + '\n');
+    if (results.some(result => result.budgetFailure === true)) process.stderr.write('AUTH_BUDGET_FAILURE HTTP 429: acceptance N=47, local anonymous_users=150. Check configured limit and remaining hourly allowance; stop/start only after config change, never retry/reset/restart to evade quota.\n');
   } catch (error) { process.stderr.write(runtimeDiagnostic(error) + '\n'); outcome = signalExit(signal) ?? 1; }
   finally {
     try { await server?.close(); } catch { process.stderr.write('E2E_CLEANUP_FAILED\n'); outcome = 1; }

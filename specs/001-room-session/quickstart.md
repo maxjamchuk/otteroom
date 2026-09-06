@@ -671,6 +671,20 @@ The following allocation is binding on test design, not a measured result:
 | Auth infrastructure smoke | original context 1 + fresh context 1 + explicitly cleared original storage 1; reload adds zero | 3 |
 | Standard full suite | E01–E12 plus Auth smoke; no uncounted setup identities | 47 |
 
+Phase 5 executes only the Auth row with `npm run test:e2e -- --grep @auth`:
+original context = 1, retained reload = 0, fresh context = 1, explicitly cleared
+original storage followed by reload = 1. It does not execute E01–E12 or call room
+RPCs. `anonymousBudget` in `e2e/room-session.spec.ts` mirrors the table above;
+the shared safe collector installs signup counters and acknowledged in-memory
+credential registration before navigation. Per-context bounds are enforced before
+forwarding real Auth traffic; attempts and successful identities are recorded as
+numbers only. HTTP 429 aborts with environment-budget guidance, without retries.
+Every context and observer closes in `finally`. The separate unfiltered security
+gate must pass first and costs one additional sign-in, so one Phase 5 checkpoint
+costs at most four. T061 is a separate security checkpoint; count its one-signup
+cost too when executing T061 and T063 independently. No reset or restart is quota
+recovery, and the local limit remains 150.
+
 Reload, reconnect, token refresh, create/join retry, and repeated join add **zero**
 identities when storage is retained. Merely creating a browser context adds zero
 until it actually signs in. No hidden fixture/bootstrap users are allowed.

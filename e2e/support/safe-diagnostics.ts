@@ -33,6 +33,71 @@ export function requireStableCapture(checked: boolean, unchanged: boolean): void
   if (!checked || !unchanged) throw safeError();
 }
 
+type UiFingerprint = { safe: boolean; epoch: number; viewport: string; digest: string };
+type CaptureResult = 'stabilizing' | 'unstable-dom' | 'unsafe-ui' | 'changed-dom' | 'changed-viewport' | 'changed-values' | 'invalid-png' | 'verified';
+
+// A condition-based quiet window, not a fixed sleep. Every mutation resets it.
+// The deadline also bounds missing frames/background pages; observers are released.
+export async function waitForDomQuiet(page: Page): Promise<boolean> {
+  return page.evaluate(() => new Promise<boolean>(resolve => {
+    const view = window as typeof window & { __otteroomMutationEpoch?: number };
+    let lastMutation = performance.now(), frame = 0, finished = false;
+    const observer = new MutationObserver(() => { lastMutation = performance.now(); });
+    const finish = (quiet: boolean) => {
+      if (finished) return;
+      finished = true; observer.disconnect(); cancelAnimationFrame(frame); clearTimeout(deadline); resolve(quiet);
+    };
+    const deadline = setTimeout(() => finish(false), 1500);
+    observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+    const check = () => {
+      if (document.readyState !== 'complete' || document.fonts.status !== 'loaded') lastMutation = performance.now();
+      else if (view.__otteroomMutationEpoch !== undefined && performance.now() - lastMutation >= 100) { finish(true); return; }
+      frame = requestAnimationFrame(check);
+    };
+    frame = requestAnimationFrame(check);
+  }));
+}
+
+export async function prepareDiagnosticSurface(page: Page): Promise<void> {
+  // Harness-only replacement after the exact controlled failure. No app objects,
+  // auth values, live scripts, external assets or production debug route.
+  await page.goto('about:blank');
+  await page.setContent('<!doctype html><title>Diagnostics</title><h1>Diagnostics</h1><p>Controlled diagnostic failure</p>');
+}
+
+export async function captureStablePng({ stabilize, inspect, screenshot, onAttempt = () => {} }: {
+  stabilize: () => Promise<boolean>;
+  inspect: () => Promise<UiFingerprint>;
+  screenshot: () => Promise<Buffer>;
+  onAttempt?: (attempt: number, result: CaptureResult) => void;
+}): Promise<{ png: Buffer; attempts: number }> {
+  const changed = (a: UiFingerprint, b: UiFingerprint): CaptureResult | undefined =>
+    a.epoch !== b.epoch ? 'changed-dom' : a.viewport !== b.viewport ? 'changed-viewport' : a.digest !== b.digest ? 'changed-values' : undefined;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    onAttempt(attempt, 'stabilizing');
+    if (!await stabilize()) { onAttempt(attempt, 'unstable-dom'); continue; }
+    const before = await inspect();
+    if (!before.safe) { onAttempt(attempt, 'unsafe-ui'); throw safeError(); }
+    // Fingerprint first, then an independent credential/UI check before capture.
+    const checked = await inspect();
+    if (!checked.safe) { onAttempt(attempt, 'unsafe-ui'); throw safeError(); }
+    const preChange = changed(before, checked);
+    if (preChange) { onAttempt(attempt, preChange); continue; }
+    const png = await screenshot();
+    let accepted = false;
+    try {
+      const after = await inspect();
+      if (!after.safe) { onAttempt(attempt, 'unsafe-ui'); throw safeError(); }
+      const postChange = changed(checked, after);
+      if (postChange) { onAttempt(attempt, postChange); continue; }
+      if (!validPng(png)) { onAttempt(attempt, 'invalid-png'); throw safeError(); }
+      onAttempt(attempt, 'verified'); accepted = true;
+      return { png, attempts: attempt };
+    } finally { if (!accepted) png.fill(0); }
+  }
+  throw safeError();
+}
+
 function blockCapture(context: BrowserContext): void {
   const reject = async (): Promise<never> => { throw safeError(); };
   context.tracing.start = reject;
@@ -52,6 +117,9 @@ export class SafeDiagnostics {
   #pending: Promise<void>[] = [];
   #failed = false;
   #signups = 0;
+  #signupCap = 0;
+  #identities = new Set<string>();
+  #authStatus = 0;
   #logs = new DiagnosticBuffer();
   #info: TestInfo;
   #closed = false;
@@ -78,6 +146,8 @@ export class SafeDiagnostics {
     const diagnostics = new SafeDiagnostics(context, page, options, info);
     info.annotations.push({ type: 'safe-context-label', description: 'primary' });
     context.on('request', diagnostics.#observeRequest);
+    // Forward real traffic unchanged only after memory-only registration ACK.
+    await context.route('**/auth/v1/**', diagnostics.#observeAuth);
     // Drop unclassified browser output entirely, including console arguments and page errors.
     context.on('console', diagnostics.#drop);
     context.on('weberror', diagnostics.#drop);
@@ -89,6 +159,50 @@ export class SafeDiagnostics {
     if (/\/auth\/v1\/signup(?:\?|$)/.test(request.url())) this.#signups++;
   };
   get signupAttempts(): number { return this.#signups; }
+  get successfulIdentities(): number { return this.#identities.size; }
+
+  allowAnonymousSignups(cap: number): void {
+    if (!Number.isInteger(cap) || cap < 1 || cap > 3 || this.#signups !== 0) throw safeError();
+    this.#signupCap = cap;
+  }
+
+  #observeAuth = async (route: import('@playwright/test').Route) => {
+    try {
+      if (this.#signups > this.#signupCap) throw safeError();
+      const headers = await route.request().allHeaders();
+      const sensitive = [headers.authorization, headers.cookie].filter((value): value is string => !!value);
+      if (sensitive.length) await this.register(sensitive);
+      const response = await route.fetch({ maxRetries: 0, maxRedirects: 0, timeout: 15000 });
+      this.#authStatus = response.status();
+      if (this.#authStatus === 429) {
+        this.#info.annotations.push({ type: 'safe-auth-budget', description: 'exhausted' });
+        throw safeError();
+      }
+      const bytes = await response.body();
+      try {
+        if (bytes.length > 65536) throw safeError();
+        const value = JSON.parse(bytes.toString('utf8'));
+        if (value.access_token || value.refresh_token) {
+          if (typeof value.access_token !== 'string' || typeof value.refresh_token !== 'string') throw safeError();
+          await this.register([value.access_token, value.refresh_token]);
+          if (response.ok() && /\/signup(?:\?|$)/.test(route.request().url()) && value.user?.is_anonymous === true && typeof value.user.id === 'string') {
+            this.#identities.add(value.user.id);
+          }
+        }
+        await route.fulfill({ response });
+      } finally { bytes.fill(0); await response.dispose(); }
+    } catch {
+      this.#failed = true;
+      await route.abort().catch(() => {});
+    }
+  };
+
+  async assertAuthAccounting(attempts: number, identities: number): Promise<void> {
+    await this.flush();
+    if (this.#signups !== attempts || this.#identities.size !== identities || this.#signups > this.#signupCap) throw safeError();
+    this.#info.annotations.push({ type: 'safe-auth-success', description: 'confirmed' });
+    await this.record({ component: 'anonymous-auth', status: this.#authStatus, outcome: `attempts=${attempts}; identities=${identities}; acceptance-N=47; local-limit=150` });
+  }
 
   stage(value: 'config' | 'capture-guards' | 'ui' | 'sanitizer' | 'scanner' | 'cleanup'): void {
     this.#info.annotations.push({ type: 'safe-stage', description: value });
@@ -153,18 +267,22 @@ export class SafeDiagnostics {
   }
 
   async captureControlledFailure(error: unknown): Promise<void> {
-    // Ordinary retention remains disabled until the future real-Auth T061 gate.
-    // This infrastructure does not create an Auth session or implement the C probe.
+    // The real C probe is the sole authenticated pre-gate retention exception.
     if (process.env.OTTEROOM_E2E_MODE !== 'security' || process.env.OTTEROOM_E2E_STATIC !== '0' ||
       !this.#info.title.startsWith('@credential-probe C ') || this.#registry.size === 0 ||
       !(error instanceof Error) || error.message !== 'CONTROLLED_AUTH_DIAGNOSTIC_FAILURE') throw safeError();
-    const before = await this.#inspect();
-    requireStableCapture(before.safe, true);
-    const png = await this.#screenshot({ type: 'png', fullPage: false, animations: 'disabled', caret: 'hide' });
+    // Never hide an unsafe application UI by replacing it with the static surface.
+    await this.assertNoCredentialUi();
+    await prepareDiagnosticSurface(this.page);
+    const { png } = await captureStablePng({
+      stabilize: () => waitForDomQuiet(this.page), inspect: () => this.#inspect(),
+      screenshot: () => this.#screenshot({ type: 'png', fullPage: false, animations: 'disabled', caret: 'initial', timeout: 5000 }),
+      onAttempt: (attempt, result) => {
+        this.#info.annotations.push({ type: 'safe-capture-attempt', description: String(attempt) });
+        this.#info.annotations.push({ type: 'safe-capture-result', description: result });
+      },
+    });
     try {
-      const after = await this.#inspect();
-      requireStableCapture(after.safe, before.epoch === after.epoch && before.viewport === after.viewport && before.digest === after.digest);
-      if (!validPng(png)) throw safeError();
       const root = process.env.OTTEROOM_E2E_ARTIFACT_DIR;
       if (!root) throw safeError();
       const filename = this.#info.outputPath('safe-failure.png');
@@ -172,7 +290,9 @@ export class SafeDiagnostics {
       await registerPng(process.env.OTTEROOM_CREDENTIAL_SOCKET ?? '', relative, createHash('sha256').update(png).digest('hex'));
       fs.mkdirSync(path.dirname(filename), { recursive: true });
       fs.writeFileSync(filename, png, { flag: 'wx', mode: 0o600 });
+      this.#logs.add({ error: safeError(error).message, stack: safeError(error).stack }, this.#registry.values());
       fs.writeFileSync(this.#info.outputPath('safe-diagnostics.txt'), this.#logs.text(), { flag: 'wx', mode: 0o600 });
+      this.#info.annotations.push({ type: 'safe-artifacts', description: 'complete' });
     } finally { png.fill(0); }
   }
 
@@ -181,11 +301,16 @@ export class SafeDiagnostics {
     this.#closed = true;
     try { await this.flush(); }
     finally {
+      this.#info.annotations.push({ type: 'safe-signups', description: String(this.#signups) });
+      this.#info.annotations.push({ type: 'safe-identities', description: String(this.#identities.size) });
       this.context.removeListener('request', this.#observeRequest);
       this.context.removeListener('console', this.#drop);
       this.context.removeListener('weberror', this.#drop);
-      try { await this.context.close(); }
-      finally { this.#registry.clear(); this.#pending.length = 0; }
+      try { await this.context.unrouteAll({ behavior: 'wait' }); }
+      finally {
+        try { await this.context.close(); }
+        finally { this.#registry.clear(); this.#identities.clear(); this.#pending.length = 0; }
+      }
     }
   }
 }
@@ -243,6 +368,9 @@ export async function safeBody(diagnostics: SafeDiagnostics, body: () => Promise
   try { await body(); await diagnostics.assertNoCredentialUi(); await diagnostics.flush(); }
   catch (error) {
     try { await diagnostics.flush(); } catch { throw safeError(); }
+    if (error instanceof Error && error.message === 'CONTROLLED_AUTH_DIAGNOSTIC_FAILURE') {
+      try { await diagnostics.captureControlledFailure(error); } catch { throw safeError(); }
+    }
     throw safeError(error);
   }
 }

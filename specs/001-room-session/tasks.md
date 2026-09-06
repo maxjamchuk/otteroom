@@ -834,20 +834,161 @@ this planning correction; Phase 4 still starts at T035.
 
 **Minimum validation**: Environment/storage/restore/single-flight/error tests, static web export without browser bootstrap, and real-browser identity persistence without room acceptance work.
 
-- [ ] T050 [P] Add environment-validation tests in `__tests__/config/env.test.ts` for the two explicit Expo public variables, invalid/missing URL/key, actionable non-sensitive errors, and no client construction before valid configuration. Include non-browser module evaluation/export behavior so these checks are not deferred to final polish.
-- [ ] T051 [P] Add platform-storage tests in `__tests__/lib/auth-storage.test.ts` for lazy browser storage access, read-null/no-op non-browser export behavior, native SQLite installation/persistence, storage failures, and web/native resolver selection with no SQLite/WASM import in the web path. Cover unavailable browser storage and assert the agreed synchronous getItem/setItem/removeItem interface for both adapters.
-- [ ] T052 Implement `src/config/env.ts` with explicit Expo-supported references to `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, HTTP(S)/nonempty validation, and safe failure propagation before Supabase construction; read no privileged environment variable.
-- [ ] T053 [P] Implement `src/lib/auth-storage.web.ts` with lazy `globalThis.localStorage` access inside methods and a read-null/no-op path when no browser exists, while preserving actual browser storage failures as recoverable errors.
-- [ ] T054 [P] Implement `src/lib/auth-storage.native.ts` importing `expo-sqlite/localStorage/install` only on native and exposing its installed persistent storage under the same adapter contract as web, without AsyncStorage, SecureStore, or a web/WASM adapter.
-- [ ] T055 Create the single typed client in `src/lib/supabase.ts` using `src/types/database.generated.ts`, validated environment and platform storage, `persistSession: true`, `autoRefreshToken: true`, and `detectSessionInUrl: false`; ensure Auth and later Realtime use this same instance and static export does not start Auth.
-- [ ] T056 Add bootstrap behavior tests in `__tests__/auth/anonymous-session.test.ts` for restore-before-sign-in, existing session/no sign-in, absent session/one sign-in, failed restore without replacement identity, failed sign-in/retry, concurrent callers sharing one promise, failed-flight release, cleared storage as a new participant, and refresh/recovery errors without discarding recoverable identity. Include explicit regression assertions for module evaluation without Auth startup and retry after a failed shared flight before this phase's checkpoint. Add HTTP 429 classification and bounded-retry unit cases: one sign-in per explicit bootstrap/retry action, none on failed session recovery or persisted reload/reconnect, no automatic anonymous-sign-in retry loop, and a generic recoverable UI error without raw Auth details.
-- [ ] T057 Implement `src/auth/anonymous-session.ts` with `getSession()` before `signInAnonymously()`, a shared in-flight promise, explicit failure propagation and retry semantics, and no replacement identity while persisted-session recovery is failing; preserve token-refresh compatibility with the single client from T055. Allow at most one anonymous sign-in per explicit bootstrap/retry action after rechecking storage; never automatically loop or replace an existing identity after 429/recovery failure. Preserve a safe status classification for test-environment diagnostics while the route retains its contract's generic recoverable UI.
-- [ ] T058 Integrate mounted-client bootstrap/loading/recoverable retry in `app/_layout.tsx` and add protected-action gating tests in `__tests__/auth/anonymous-session.test.ts`; prove concurrent consumers cannot invoke a protected callback before bootstrap resolves and cannot proceed signed-out after failure, without adding sign-out or permanent-account UI. Test the mounted `app/_layout.tsx` behavior through Expo Router helpers in `__tests__/routes/home.test.tsx`, including bootstrap loading/error/retry and no protected action on failure; a mocked callback invocation alone is not mounted-route evidence.
-- [ ] T059 Add test-scoped signup accounting and cleanup to `e2e/room-session.spec.ts` and document its exact E01–E12/Auth allocation table in `specs/001-room-session/quickstart.md`: N = 47, local limit 150, no shared or hidden fixture identities. Install observers before navigation to count actual anonymous signup attempts and successful identities, enforce per-trial caps, and record only C1-sanitized counts/statuses and use T016's registry/collector; close every context and observer in `finally`. In `playwright.config.ts` set standard `repeatEach: 1` and `retries: 0`; HTTP 429 fails the run as test-environment budget failure with scenario/count/N/limit and recovery guidance, never Auth mock success, automatic retry, reset/restart evasion, or credential logging.
-- [ ] T060 Add C's actual failed authenticated probe to `e2e/diagnostics/credential-safety.spec.ts` after mounted bootstrap T058: one isolated context performs exactly one real local Anonymous Auth signup, registers access/refresh/session-sensitive values in memory through T012 before diagnostics, confirms Auth success and credential-free rendered UI, then throws only `CONTROLLED_AUTH_DIAGNOSTIC_FAILURE`. Exercise T016's ordinary failure collector, T014's safe reporter and runner-created error-context output; no raw error cause, trace/HAR/video/storage export or session fixture is written. The controller must wait for finalized artifacts, recursively scan all of them with the live registry, verify all expected allowed artifact categories/cleanup receipts, and distinguish exactly this controlled failure from Auth 429, unexpected failures or scanner errors. Zero retries; count this separate one-signup probe outside unchanged acceptance N = 47; no room creation or product test endpoint is needed.
-- [ ] T061 Credential-artifact safety checkpoint — after local startup/env, clean `npm run db:reset`, `npm run db:types:check`, `npm run lint`, `npm run typecheck`, `npm run test:client -- --runTestsByPath __tests__/config/e2e-diagnostics.test.ts`, `npm run web:export`, and locked `npm run playwright:install`, run unfiltered `npm run test:e2e:security`. Require runtime A/B pass, exactly one real anonymous controlled failed probe, guarded PNG and sanitized error/log/process evidence, a completed clean recursive scan including runner outputs, synthetic nonzero/redacted scanner controls, no forbidden artifacts, and context/IPC/web/Supabase cleanup. Record outer zero and expected inner nonzero separately with safe scenario/count/category diagnostics in `specs/001-room-session/tasks.md`. Any missing evidence/unexpected failure/429 fails this gate; block T062/T063 and all ordinary Auth artifact retention until it is green.
-- [ ] T062 Add the real-stack `@auth` infrastructure case in `e2e/room-session.spec.ts`: original context sign-in 1, fresh context sign-in 1, and explicitly cleared original storage sign-in 1, for at most 3 total. Reload the retained context and assert zero new sign-ins and the same own user ID; contrast the new/cleared identities, without creating rooms or a production identity endpoint. Require T061 first, then use T059's observers and T016's safe fixture before navigation and guaranteed context teardown; do not log session tokens or silently retry Auth failures.
-- [ ] T063 Checkpoint — after reset/env setup, run `npm run lint`, `npm run typecheck`, `npm run test:client`, `npm run web:export`, and `npm run test:e2e -- --grep @auth`; record restore/single-flight/platform/gating results and same-context versus new-context identity evidence in `specs/001-room-session/tasks.md`, block room actions on failure, and identify this as the continuity prerequisite for scenarios 13–14 rather than completed reconnect acceptance. Require the @auth cap of 3, no extra sign-in on reload/bootstrap races, and actionable Auth 429 failure classification. Normal validation also requires `npm run db:types:check` after the phase reset, without preceding `db:types`. Before this ordinary Auth acceptance selection, run unfiltered `npm run test:e2e:security` after reset/check and account for its separate one-signup cost.
+- [X] T050 [P] Add environment-validation tests in `__tests__/config/env.test.ts` for the two explicit Expo public variables, invalid/missing URL/key, actionable non-sensitive errors, and no client construction before valid configuration. Include non-browser module evaluation/export behavior so these checks are not deferred to final polish.
+- [X] T051 [P] Add platform-storage tests in `__tests__/lib/auth-storage.test.ts` for lazy browser storage access, read-null/no-op non-browser export behavior, native SQLite installation/persistence, storage failures, and web/native resolver selection with no SQLite/WASM import in the web path. Cover unavailable browser storage and assert the agreed synchronous getItem/setItem/removeItem interface for both adapters.
+- [X] T052 Implement `src/config/env.ts` with explicit Expo-supported references to `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, HTTP(S)/nonempty validation, and safe failure propagation before Supabase construction; read no privileged environment variable.
+- [X] T053 [P] Implement `src/lib/auth-storage.web.ts` with lazy `globalThis.localStorage` access inside methods and a read-null/no-op path when no browser exists, while preserving actual browser storage failures as recoverable errors.
+- [X] T054 [P] Implement `src/lib/auth-storage.native.ts` importing `expo-sqlite/localStorage/install` only on native and exposing its installed persistent storage under the same adapter contract as web, without AsyncStorage, SecureStore, or a web/WASM adapter.
+- [X] T055 Create the single typed client in `src/lib/supabase.ts` using `src/types/database.generated.ts`, validated environment and platform storage, `persistSession: true`, `autoRefreshToken: true`, and `detectSessionInUrl: false`; ensure Auth and later Realtime use this same instance and static export does not start Auth.
+- [X] T056 Add bootstrap behavior tests in `__tests__/auth/anonymous-session.test.ts` for restore-before-sign-in, existing session/no sign-in, absent session/one sign-in, failed restore without replacement identity, failed sign-in/retry, concurrent callers sharing one promise, failed-flight release, cleared storage as a new participant, and refresh/recovery errors without discarding recoverable identity. Include explicit regression assertions for module evaluation without Auth startup and retry after a failed shared flight before this phase's checkpoint. Add HTTP 429 classification and bounded-retry unit cases: one sign-in per explicit bootstrap/retry action, none on failed session recovery or persisted reload/reconnect, no automatic anonymous-sign-in retry loop, and a generic recoverable UI error without raw Auth details.
+- [X] T057 Implement `src/auth/anonymous-session.ts` with `getSession()` before `signInAnonymously()`, a shared in-flight promise, explicit failure propagation and retry semantics, and no replacement identity while persisted-session recovery is failing; preserve token-refresh compatibility with the single client from T055. Allow at most one anonymous sign-in per explicit bootstrap/retry action after rechecking storage; never automatically loop or replace an existing identity after 429/recovery failure. Preserve a safe status classification for test-environment diagnostics while the route retains its contract's generic recoverable UI.
+- [X] T058 Integrate mounted-client bootstrap/loading/recoverable retry in `app/_layout.tsx` and add protected-action gating tests in `__tests__/auth/anonymous-session.test.ts`; prove concurrent consumers cannot invoke a protected callback before bootstrap resolves and cannot proceed signed-out after failure, without adding sign-out or permanent-account UI. Test the mounted `app/_layout.tsx` behavior through Expo Router helpers in `__tests__/routes/home.test.tsx`, including bootstrap loading/error/retry and no protected action on failure; a mocked callback invocation alone is not mounted-route evidence.
+- [X] T059 Add test-scoped signup accounting and cleanup to `e2e/room-session.spec.ts` and document its exact E01–E12/Auth allocation table in `specs/001-room-session/quickstart.md`: N = 47, local limit 150, no shared or hidden fixture identities. Install observers before navigation to count actual anonymous signup attempts and successful identities, enforce per-trial caps, and record only C1-sanitized counts/statuses and use T016's registry/collector; close every context and observer in `finally`. In `playwright.config.ts` set standard `repeatEach: 1` and `retries: 0`; HTTP 429 fails the run as test-environment budget failure with scenario/count/N/limit and recovery guidance, never Auth mock success, automatic retry, reset/restart evasion, or credential logging.
+- [X] T060 Add C's actual failed authenticated probe to `e2e/diagnostics/credential-safety.spec.ts` after mounted bootstrap T058: one isolated context performs exactly one real local Anonymous Auth signup, registers access/refresh/session-sensitive values in memory through T012 before diagnostics, confirms Auth success and credential-free rendered UI, then throws only `CONTROLLED_AUTH_DIAGNOSTIC_FAILURE`. Exercise T016's ordinary failure collector, T014's safe reporter and runner-created error-context output; no raw error cause, trace/HAR/video/storage export or session fixture is written. The controller must wait for finalized artifacts, recursively scan all of them with the live registry, verify all expected allowed artifact categories/cleanup receipts, and distinguish exactly this controlled failure from Auth 429, unexpected failures or scanner errors. Zero retries; count this separate one-signup probe outside unchanged acceptance N = 47; no room creation or product test endpoint is needed.
+- [X] T061 Credential-artifact safety checkpoint — after local startup/env, clean `npm run db:reset`, `npm run db:types:check`, `npm run lint`, `npm run typecheck`, `npm run test:client -- --runTestsByPath __tests__/config/e2e-diagnostics.test.ts`, `npm run web:export`, and locked `npm run playwright:install`, run unfiltered `npm run test:e2e:security`. Require runtime A/B pass, exactly one real anonymous controlled failed probe, guarded PNG and sanitized error/log/process evidence, a completed clean recursive scan including runner outputs, synthetic nonzero/redacted scanner controls, no forbidden artifacts, and context/IPC/web/Supabase cleanup. Record outer zero and expected inner nonzero separately with safe scenario/count/category diagnostics in `specs/001-room-session/tasks.md`. Any missing evidence/unexpected failure/429 fails this gate; block T062/T063 and all ordinary Auth artifact retention until it is green.
+- [X] T062 Add the real-stack `@auth` infrastructure case in `e2e/room-session.spec.ts`: original context sign-in 1, fresh context sign-in 1, and explicitly cleared original storage sign-in 1, for at most 3 total. Reload the retained context and assert zero new sign-ins and the same own user ID; contrast the new/cleared identities, without creating rooms or a production identity endpoint. Require T061 first, then use T059's observers and T016's safe fixture before navigation and guaranteed context teardown; do not log session tokens or silently retry Auth failures.
+- [X] T063 Checkpoint — after reset/env setup, run `npm run lint`, `npm run typecheck`, `npm run test:client`, `npm run web:export`, and `npm run test:e2e -- --grep @auth`; record restore/single-flight/platform/gating results and same-context versus new-context identity evidence in `specs/001-room-session/tasks.md`, block room actions on failure, and identify this as the continuity prerequisite for scenarios 13–14 rather than completed reconnect acceptance. Require the @auth cap of 3, no extra sign-in on reload/bootstrap races, and actionable Auth 429 failure classification. Normal validation also requires `npm run db:types:check` after the phase reset, without preceding `db:types`. Before this ordinary Auth acceptance selection, run unfiltered `npm run test:e2e:security` after reset/check and account for its separate one-signup cost.
+
+### Phase 5 execution evidence — 2026-09-06
+
+**T050–T063: GREEN.** Started on clean `main` at
+`a2c4642e0b73102700cbf4f95ff7e8564f2cf53e`. The implementation prerequisite
+check passed; requirements checklist 16/16. No extension hooks were configured
+or executed. Task text is unchanged; only T050–T063 checkboxes and this evidence
+entry changed here. T064–T121 remain unchecked. No commit or push ran.
+
+Environment: persistent Node v24.20.0 / npm 11.19.0, Expo 57.0.20,
+Router 57.0.19, Supabase JS 2.115.0, project-local CLI 2.116.0,
+TypeScript 6.0.3, Jest 29.7.0 / jest-expo 57.0.5, Playwright 1.63.0,
+and actual local PostgreSQL 17.6. No dependency installation, package/lockfile
+change, version upgrade or global CLI was needed. AlmaLinux browser execution
+used the existing automatic official Docker runtime
+`mcr.microsoft.com/playwright:v1.63.0-noble`, without LD_LIBRARY_PATH,
+manually installed libraries or native Chromium fallback.
+
+| Task / command / observable evidence | Exit / actual result |
+|---|---|
+| T050/T051 tests before implementation | Expected 1; 18 behavior cases RED on absent modules |
+| T050–T055 env/storage tests after implementation | 0; final env 12/12, storage 7/7 |
+| T056 bootstrap tests before implementation | Expected 1; 13 cases RED on absent module |
+| T057 bootstrap implementation and subsequent refresh/gating coverage | 0; final 15/15 Auth tests |
+| T058 mounted route tests before integration | Expected 1; three new loading/error/cleanup cases RED |
+| T058 mounted root integration | 0; 5/5 Router tests, including both existing inert route navigation cases |
+| `npm run lint` | 0 in final T061/T063 checks |
+| `npm run typecheck` | 0 in final T061/T063 checks |
+| `npm run test:client -- --runTestsByPath __tests__/config/e2e-diagnostics.test.ts` | 0; 13/13, including Auth registration-before-delivery, caps, synthetic 429 and finalized-category negatives |
+| `npm run test:client` | 0; final 94/94 across 9 suites, no snapshots or React act warnings |
+| `npm run supabase:start`, `npm run supabase:status`, `npm run env:local` | 0 each; real health/status evidence, only ignored public env output |
+| `npm run db:reset` | 0; clean replay of unchanged Phase 3/4 migrations before each real gate |
+| `npm run db:types:check` | 0 after each reset; canonical file was never overwritten |
+| Additional `npm run db:test` regression | 0; 285/285, including RPC concurrency, ACL/RLS and denied direct writes |
+| `npm run web:export` | 0; static root/dynamic route output; no export-time Auth startup |
+| `npm run playwright:install` | 0; existing selector prepared pinned official Docker runtime |
+| T061 unfiltered `npm run test:e2e:security` | Outer 0; A/B passed with zero sign-ins, C exactly one real signup and expected inner Playwright exit 1 |
+| Final T063 unfiltered `npm run test:e2e:security` | Outer 0 / inner 1; all required failure artifact categories verified and complete scan clean |
+| T062/T063 `npm run test:e2e -- --grep @auth` | 0; one real browser scenario, exactly 3 signup attempts / 3 distinct anonymous identities |
+| `npm run supabase:stop` | 0 on every lifecycle, including failed security invocation |
+| `npm ls --depth=0` | 0; approved installed dependency graph, no package changes |
+| `git diff --check` and untracked text whitespace check | 0; no whitespace failures |
+
+Implementation: `readPublicEnv()` reads only the two explicit Expo public env
+references and validates before construction, without printing values or using
+privileged substitutes. `getSupabase()` lazily constructs one
+`SupabaseClient<Database>` with the canonical generated type and the agreed
+persist/auto-refresh/detect-URL flags. Static module evaluation does not start
+Auth. Web methods lazily access browser localStorage, with synchronous no-op/null
+export behavior; native alone imports `expo-sqlite/localStorage/install`.
+Actual Metro resolver calls prove web/iOS/Android file selection; adapter unit
+tests isolate native storage installation without claiming a device/emulator run.
+
+Bootstrap reads existing storage before SDK recovery, calls getSession before
+any sign-in, and shares one exact in-flight promise. Failed recovery is not
+absence and cannot silently create a replacement; an explicit retry rechecks
+storage. Session errors retain only a safe status/category, with generic UI.
+RootLayout mounts the Stack only after successful bootstrap, exposes loading and
+explicit retry otherwise, ignores callbacks after cleanup, and ties native
+refresh start/stop to AppState. Protected callbacks await the same bootstrap.
+No participant ID, token, session or raw backend failure is rendered.
+
+Refresh evidence includes the pinned actual SDK with synthetic in-memory storage
+and a fetch double: refresh updates stored credentials while retaining the same
+user, and the same client's Realtime token callback sees the refreshed token
+without creating a channel or making a signup. This is isolated refresh evidence,
+not a claim of real room Realtime or complete reconnect acceptance. A13/A14 still
+depend on later story tasks.
+
+C1 uses existing collector/registry/reporter/controller boundaries. Real Auth
+responses are forwarded unchanged only after access/refresh credentials are
+registered through acknowledged private memory-only IPC. Counters are installed
+before navigation; extra signup attempts and 429 fail closed. A/B now use an
+isolated synthetic document rather than navigating the mounted Auth application,
+preserving their zero-signup obligation without mocking Auth success. The actual
+C probe navigates the application, waits for its post-bootstrap control, proves
+one signup and safe UI, then throws exactly CONTROLLED_AUTH_DIAGNOSTIC_FAILURE.
+The ordinary exception wrapper exercises guarded PNG/sanitized error and log
+capture, the sole safe reporter and runner error-context output. The controller
+also requires finalized artifact categories, a complete scan with live registry
+values, cleanup receipts and the exact expected inner failure before returning 0.
+
+Intermediate failures were not waived. Lint rejected an unnecessary synchronous
+effect state update; removing it restored green. Test-harness async act handling
+was corrected without suppressing warnings. The first T063 security run had
+successful Auth and safe inspected UI but no retained PNG, so its outer exit was
+1 and ordinary Auth never ran. Its scan had zero findings and all processes
+cleaned up. The old failure did not include a capture substage, so its exact
+transient cause cannot be proven retrospectively. Capture now records only a
+closed safe failure category and first waits for document/font readiness and two
+unchanged DOM frames, with a bounded observable probe rather than a sleep.
+It does not alter caret styles inside the checked DOM. Any change during the
+single capture still discards the in-memory image and fails, without screenshot
+or Auth retry. A diagnostic security rerun and the final complete T063 invocation
+passed; no capture/scan guard or contract was weakened.
+
+Exact anonymous HTTP accounting (attempts and successful identities match):
+
+| Invocation | Sign-ins | Result |
+|---|---:|---|
+| T061 security, `run-YutxYc` | 1 | Outer 0 / inner 1; complete safe evidence |
+| First T063 security, `run-kXCuQS` | 1 | Outer 1; no acceptance executed |
+| Diagnostic security rerun, `run-BPZFQH` | 1 | Outer 0 / inner 1 |
+| Final T063 security, `run-ECTI5r` | 1 | Outer 0 / inner 1 |
+| Final T063 Auth, `run-upXSDh` | 3 | 0; original + fresh + explicitly cleared original |
+| Entire Phase 5 | **7** | No hidden signup or HTTP 429 |
+
+The real Auth test retains the original user ID through reload, both baseline
+routes, direct dynamic navigation and another reload with no added signup. A
+fresh isolated context and explicitly cleared original storage followed by
+reload produce distinct IDs, compared only in memory. All requests reach real
+local Supabase; no room RPC, fabricated Auth success or production identity
+endpoint is used. The final live database has zero rooms and exactly four
+anonymous users from that invocation's one security plus three Auth sign-ins.
+The prior reset is schema reconstruction, not hourly quota recovery. Each stack
+stop is checkpoint/failure cleanup, never rate-limit evasion. R02 remains
+N=47, anonymous_users=150, 94/141 acceptance and 48/144 paired allowances.
+
+Final C1 scan: security 6 files and acceptance 3 files, zero findings. Security
+categories include guarded PNG, sanitized text/error/stack, safe process excerpt,
+safe summary and runner error-context. Trace/HAR/video/automatic screenshots,
+storage-state export and raw network/session/process dumps stayed disabled.
+The five exact generated invocation directories listed above were removed after
+their finalized scans; pre-existing artifacts were not deleted. Registry/IPC
+cleanup left zero credential-socket directories. No credential values appear in
+this evidence or versionable files.
+
+Cleanup: Expo 8081 and Supabase 55321–55324 are all bindable after final shutdown.
+All five owned Playwright containers and each local Supabase stack were removed;
+no owned service remains. All 18 pre-existing containers retain their exact IDs,
+names, running states, StartedAt and restart counts. No unrelated Docker resource
+was stopped/deleted or pruned. CLI-owned local data volumes remain outside Git.
+
+R01 canonical SHA-256 remains
+`46f41c3ca2a88d65a2604f449b17aa10c36b535c8ee0a67047683fb37f80fb4b`.
+Constitution/spec/plan/research/data model/contracts, dependencies, migrations,
+database tests and Supabase config remain unchanged against entry HEAD.
+Only Phase 5 source/tests, required diagnostics integration, the exact Auth
+accounting quickstart note and this task evidence changed. No room service/UI,
+RPC invocation, Realtime channel/publication, schema change or later task ran.
+Stop before T064.
 
 ## Phase 6: User Story 1 — Host Creates a Room (P1, MVP)
 

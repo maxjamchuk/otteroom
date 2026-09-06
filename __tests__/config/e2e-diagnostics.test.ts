@@ -25,6 +25,56 @@ const prelude = `
 `;
 
 describe('credential-safe diagnostics boundaries', () => {
+  it('registers real-shape Auth responses before delivery, counts only signups and fails closed on 429 or excess attempts', () => verify(prelude + `
+    const { SafeDiagnostics } = await import('./e2e/support/safe-diagnostics.ts');
+    const { CredentialRegistry, startRegistryServer } = await import('./e2e/support/credential-registry.ts');
+    for (const status of [200, 429]) {
+      const registry = new CredentialRegistry(); const server = await startRegistryServer(registry);
+      process.env.OTTEROOM_CREDENTIAL_SOCKET = server.endpoint;
+      const events = new Map(); let intercept, delivered = 0, aborted = 0, closed = 0;
+      const page = { screenshot: async () => Buffer.alloc(0), pdf: async () => Buffer.alloc(0) };
+      const context = { tracing: {}, request: {}, addInitScript: async () => {}, newPage: async () => page,
+        on: (name, callback) => events.set(name, callback), removeListener: name => events.delete(name),
+        route: async (_, handler) => { intercept = handler; }, unrouteAll: async () => {}, close: async () => { closed++; } };
+      const info = { title: 'synthetic', annotations: [] };
+      const d = await SafeDiagnostics.create(context, {}, info); d.allowAnonymousSignups(1);
+      const access = sentinel(), refresh = sentinel();
+      const request = { url: () => 'http://127.0.0.1:55321/auth/v1/signup', allHeaders: async () => ({}) };
+      const response = { status: () => status, ok: () => status === 200, dispose: async () => {},
+        body: async () => Buffer.from(JSON.stringify({ access_token: access, refresh_token: refresh, user: { id: 'synthetic', is_anonymous: true } })) };
+      const route = { request: () => request, fetch: async options => { assert.equal(options.maxRetries, 0); return response; },
+        fulfill: async () => { assert.equal(registry.hasCredential(access) && registry.hasCredential(refresh), true); delivered++; },
+        abort: async () => { aborted++; } };
+      try {
+        events.get('request')(request); await intercept(route);
+        if (status === 200) {
+          await d.assertAuthAccounting(1, 1); assert.equal(delivered, 1);
+          events.get('request')(request); await intercept(route);
+          await assert.rejects(d.flush()); assert.equal(delivered, 1);
+        } else {
+          await assert.rejects(d.flush()); assert.equal(delivered, 0);
+          assert.equal(info.annotations.some(x => x.type === 'safe-auth-budget'), true);
+        }
+        assert.equal(aborted, 1); assert.equal(JSON.stringify(info).includes(access), false);
+      } finally {
+        await d.close().catch(() => {}); await server.close(); registry.clear();
+      }
+      assert.equal(closed, 1); assert.equal(events.size, 0);
+    }
+  `));
+
+  it('requires actual finalized probe artifact categories, not merely a success receipt', () => verify(prelude + `
+    const { verifyProbeArtifacts } = await import('./scripts/run-e2e.mjs');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'otteroom-probe-artifacts-'));
+    try {
+      assert.equal(verifyProbeArtifacts(dir), false);
+      for (const name of ['summary.json', 'safe-failure.png', 'safe-diagnostics.txt', 'error-context.md', 'safe-process.txt']) fs.writeFileSync(path.join(dir, name), 'synthetic');
+      assert.equal(verifyProbeArtifacts(dir), true);
+      fs.unlinkSync(path.join(dir, 'error-context.md'));
+      assert.equal(verifyProbeArtifacts(dir), false);
+    } finally { fs.rmSync(dir, { recursive: true }); }
+  `));
+
   it('redacts known values, case-insensitive fields, bearer/JWT and secret-key shapes', () => verify(prelude + `
     const { sanitizeDiagnostic, containsCredential } = await import('./e2e/support/sanitize-diagnostics.ts');
     const values = Array.from({ length: 10 }, sentinel);
@@ -174,6 +224,7 @@ describe('credential-safe diagnostics boundaries', () => {
     const page = { screenshot: async () => Buffer.alloc(0), pdf: async () => Buffer.alloc(0) };
     const context = {
       tracing: {}, request: {}, storageState: async () => ({}), addInitScript: async () => {}, newPage: async () => page,
+      route: async () => {}, unrouteAll: async () => {},
       on: name => events.add(name), removeListener: name => events.delete(name), close: async () => { closes++; },
     };
     const diagnostics = await SafeDiagnostics.create(context, {}, { title: 'synthetic', annotations: [] });

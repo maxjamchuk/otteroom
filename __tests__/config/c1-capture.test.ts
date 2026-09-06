@@ -1,0 +1,110 @@
+/** @jest-environment node */
+import { spawnSync } from 'node:child_process';
+
+function verify(body: string) {
+  const child = spawnSync(process.execPath, ['--input-type=module'], {
+    input: `
+      import assert from 'node:assert/strict';
+      import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
+      import { randomUUID, createHash } from 'node:crypto';
+      import { deflateSync } from 'node:zlib';
+      import { captureStablePng, inspectUiValues } from './e2e/support/safe-diagnostics.ts';
+      import { CredentialRegistry, startRegistryServer, registerCredentials, registerPng } from './e2e/support/credential-registry.ts';
+      import { scanArtifacts } from './scripts/check-e2e-artifacts.mjs';
+      const stable = { safe: true, epoch: 1, viewport: 'fixed', digest: 'safe-fingerprint' };
+      function png() {
+        const chunk = (name, body) => {
+          const bytes = Buffer.concat([Buffer.from(name), body]); let crc = 0xffffffff;
+          for (const byte of bytes) { crc ^= byte; for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1)); }
+          const size = Buffer.alloc(4), sum = Buffer.alloc(4); size.writeUInt32BE(body.length); sum.writeUInt32BE((crc ^ 0xffffffff) >>> 0);
+          return Buffer.concat([size, bytes, sum]);
+        };
+        const header = Buffer.alloc(13); header.writeUInt32BE(1, 0); header.writeUInt32BE(1, 4); header[8] = 8; header[9] = 6;
+        return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), chunk('IHDR', header), chunk('IDAT', deflateSync(Buffer.from([0,255,255,255,255]))), chunk('IEND', Buffer.alloc(0))]);
+      }
+      ${body}
+    `,
+    encoding: 'utf8', timeout: 20000, maxBuffer: 65536,
+  });
+  // Never forward a child assertion diff or a credential-bearing stream.
+  expect(child.error === undefined && child.status === 0).toBe(true);
+}
+
+describe('bounded credential-safe PNG capture', () => {
+  it('accepts stable DOM only after stabilization and two independent pre-capture safety checks', () => verify(`
+    const order = [];
+    const result = await captureStablePng({
+      stabilize: async () => { order.push('quiet'); return true; },
+      inspect: async () => { order.push('check'); return stable; },
+      screenshot: async () => { order.push('png'); return png(); },
+    });
+    assert.deepEqual(order, ['quiet','check','check','png','check']);
+    assert.equal(result.attempts, 1); assert.equal(result.png.length > 0, true); result.png.fill(0);
+  `));
+
+  it('discards every image mutated during capture and fails after exactly three attempts', () => verify(`
+    const images = []; let checks = 0, quiet = 0;
+    await assert.rejects(captureStablePng({
+      stabilize: async () => { quiet++; return true; },
+      inspect: async () => ({ ...stable, epoch: ++checks % 3 === 0 ? 2 : 1 }),
+      screenshot: async () => { const bytes = png(); images.push(bytes); return bytes; },
+    }), /E2E_SAFE_FAILURE/);
+    assert.equal(quiet, 3); assert.equal(checks, 9); assert.equal(images.length, 3);
+    assert.equal(images.every(bytes => bytes.every(value => value === 0)), true);
+  `));
+
+  it('rechecks safety from scratch and succeeds after a rejected image stabilizes', () => verify(`
+    let checks = 0, quiet = 0; const images = [];
+    const result = await captureStablePng({
+      stabilize: async () => { quiet++; return true; },
+      inspect: async () => ({ ...stable, epoch: ++checks === 3 ? 2 : 1 }),
+      screenshot: async () => { const bytes = png(); images.push(bytes); return bytes; },
+    });
+    assert.equal(result.attempts, 2); assert.equal(quiet, 2); assert.equal(checks, 6);
+    assert.equal(images[0].every(value => value === 0), true);
+    assert.equal(result.png === images[1], true); result.png.fill(0);
+  `));
+
+  it('continuously mutating DOM exhausts three quiet windows without taking a screenshot', () => verify(`
+    let quiet = 0, captured = 0, inspected = 0;
+    await assert.rejects(captureStablePng({
+      stabilize: async () => { quiet++; return false; },
+      inspect: async () => { inspected++; return stable; },
+      screenshot: async () => { captured++; return png(); },
+    }), /E2E_SAFE_FAILURE/);
+    assert.equal(quiet, 3); assert.equal(captured, 0); assert.equal(inspected, 0);
+  `));
+
+  it.each([1, 2, 3])('credential at safety check %i aborts without retry or an accepted image', check => verify(`
+    const secret = 'synthetic-' + randomUUID(); let checks = 0, quiet = 0; const images = [];
+    let error;
+    try { await captureStablePng({
+      stabilize: async () => { quiet++; return true; },
+      inspect: async () => ({ ...stable, safe: inspectUiValues([++checks === ${check} ? secret : 'safe'], [secret]) }),
+      screenshot: async () => { const bytes = png(); images.push(bytes); return bytes; },
+    }); } catch (failure) { error = failure; }
+    assert.equal(error instanceof Error, true); assert.equal(String(error.stack).includes(secret), false);
+    assert.equal(quiet, 1); assert.equal(checks, ${check});
+    assert.equal(images.every(bytes => bytes.every(value => value === 0)), true);
+  `));
+
+  it('a retry persists exactly one authorized PNG; scanner and memory-only registry cleanup still fail closed', () => verify(`
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'otteroom-capture-test-'));
+    const registry = new CredentialRegistry(); const server = await startRegistryServer(registry);
+    const secret = 'synthetic-' + randomUUID(); let checks = 0; let result;
+    try {
+      await registerCredentials(server.endpoint, 'test', [secret]);
+      result = await captureStablePng({ stabilize: async () => true,
+        inspect: async () => ({ ...stable, epoch: ++checks === 3 ? 2 : 1 }), screenshot: async () => png() });
+      assert.equal(result.attempts, 2);
+      await registerPng(server.endpoint, 'safe-failure.png', createHash('sha256').update(result.png).digest('hex'));
+      fs.writeFileSync(path.join(directory, 'safe-failure.png'), result.png, { flag: 'wx' });
+      assert.equal(fs.readdirSync(directory).filter(name => name.endsWith('.png')).length, 1);
+      assert.equal(scanArtifacts(directory, { registry }).ok, true);
+      fs.writeFileSync(path.join(directory, 'synthetic-leak.json'), JSON.stringify({ message: secret }));
+      const scan = scanArtifacts(directory, { registry });
+      assert.equal(scan.ok, false); assert.equal(JSON.stringify(scan).includes(secret), false);
+    } finally { result?.png.fill(0); await server.close(); registry.clear(); fs.rmSync(directory, { recursive: true }); }
+    assert.equal(registry.size, 0); assert.equal(fs.existsSync(path.dirname(server.endpoint)), false);
+  `));
+});
