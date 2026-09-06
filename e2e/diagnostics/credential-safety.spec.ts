@@ -165,7 +165,7 @@ test('@credential-probe C real Anonymous Auth controlled failure', async ({ page
     const response = await page.goto('/');
     expect(response?.status() === 200).toBe(true);
     // This control is mounted only after real bootstrap succeeds, not merely SSR.
-    await expect(page.getByRole('link', { name: 'Open route preview' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Create Room' })).toBeVisible();
     await diagnostics.assertAuthAccounting(1, 1);
     await diagnostics.assertNoCredentialUi();
     await diagnostics.record({ scenario: 'C', context: 'primary', component: 'application', outcome: 'authenticated-ui-verified' });

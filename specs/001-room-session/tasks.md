@@ -996,20 +996,142 @@ Stop before T064.
 
 **Independent test**: A fresh context creates without registration, sees canonical `/room/<CODE>`, Waiting, `1 of 2`, and an absolute same-room invitation link. A rejected create exposes no usable invitation; retrying an ambiguously completed request recovers the same room.
 
-- [ ] T064 [P] [US1] Add typed create/shared accepted-result boundary tests in `__tests__/rooms/contracts.test.ts` and `__tests__/rooms/service.test.ts`: one-row cardinality, closed outcome/nullability/role/state/count validation, `created`/`already_created`, same UUID forwarded on retry, bootstrap-before-RPC, and exceptional responses mapped to a generic recoverable error.
-- [ ] T065 [P] [US1] Replace obsolete inert-route assertions in `__tests__/routes/home.test.tsx` with behavioral create tests for session loading, one UUID per intentional action, double-submit prevention, retry UUID reuse, canonical `router.replace` carrying only code, disabled in-flight controls, and failed creation without usable room/invitation details, retaining applicable navigation coverage.
-- [ ] T066 [P] [US1] Add normalization tests in `__tests__/rooms/code.test.ts` and implement pure trim/uppercase/`^[0-9A-F]{10}$` validation in `src/rooms/code.ts` so creation results and later manual/direct-link entry share one canonical-code contract; never generate invitation codes in the client.
-- [ ] T067 [US1] Implement generated-type-backed closed RPC narrowing in `src/rooms/contracts.ts` and satisfy `__tests__/rooms/contracts.test.ts`: enforce one-row cardinality, exact create/join closed outcomes and per-branch nullability/role/state/count rules, rejecting unknown or inconsistent payloads as contract errors without adding navigation, storage, or UI side effects.
-- [ ] T068 [US1] Implement pure accepted/create-error mapping in `src/rooms/state.ts` with behavioral tests in `__tests__/rooms/state.test.ts`: consume the narrowed results from T067, preserve internal ID/role only in the local model, render Waiting/one seat or Ready/two seats, and map exceptional failure without usable invitation data; perform no network, navigation, subscription, or post-Ready side effect.
-- [ ] T069 [US1] Implement `createRoom(requestId)` and the shared `joinRoom(code)` transport in `src/rooms/service.ts` using only typed `create_room`/`join_room` RPCs after bootstrap and T067 narrowing; the host uses the same join transport to recover after create navigation, while guest-facing failure UI follows in phase 7; add no direct table write or separate host-recovery RPC.
-- [ ] T070 [US1] Implement the home create action in `app/index.tsx` with Expo Crypto `randomUUID()`, per-logical-request lifecycle, in-flight guards, `created`/`already_created` navigation using only canonical `router.replace('/room/<CODE>')`, generic recoverable failure, and retry reuse without exposing a partial result.
-- [ ] T071 [US1] Add host-room component behavior tests in `__tests__/routes/room.test.tsx` for code-based `already_member` recovery after create, bootstrap/loading, Waiting/code/seat display, same-host Ready recovery, missing/malformed input safety, and no rendered Auth/internal UUID or raw backend exception.
-- [ ] T072 [US1] Implement accepted host entry and room presentation in `app/room/[code].tsx`: validate the canonical code, await bootstrap, use the shared join transport, render authoritative Waiting or Ready from accepted results, offer generic recovery on exceptional failure, and never trust hidden route state or navigate beyond Ready; guest-specific error presentation and full route-generation handling follow in phase 7.
-- [ ] T073 [US1] Add absolute invitation-link construction to `src/rooms/code.ts`, wire it into `app/room/[code].tsx`, and extend `__tests__/rooms/code.test.ts` for actual browser-origin URLs and native Expo Linking scheme URLs pointing to the same canonical route; show the shareable link in Waiting without a deployment-domain, QR, or sharing-service dependency.
-- [ ] T074 [US1] Add E01 `@us1` real-stack create/Waiting acceptance in `e2e/room-session.spec.ts`, retiring obsolete inert `@baseline` assertions: a fresh unregistered context obtains one host seat, canonical code, actual-origin invitation link and canonical route with no hidden IDs; use ordinary member-authorized reads as the state oracle and a test-scoped context with cleanup.
-- [ ] T075 [US1] Add the `@us1` pre-acceptance create-failure case in `e2e/room-session.spec.ts`: bootstrap a fresh context, abort only its outbound create request before server dispatch, assert a clear recoverable failure and no usable invitation, and confirm zero newly owned rooms through its ordinary authorized projection; use a one-shot interceptor removed in `finally`, not a fabricated Supabase error body.
-- [ ] T076 [US1] Add `@us1` retry-safety browser evidence in `e2e/room-session.spec.ts` by allowing a real create to commit and discarding its response once, then retrying with the same logical request; assert one owned room and the same code, and reload the accepted host to recover it without a second room; do not fabricate a Supabase success/failure body or use privileged credentials as the client. Install a one-shot request route before create, use `route.fetch()` to execute the real server request and capture the committed result privately, then abort delivery of that response; observe the next real RPC request to verify UUID reuse and compare its returned room. Always remove the interception in `finally`.
-- [ ] T077 [US1] Checkpoint — from a clean reset run `npm run db:test`, `npm run lint`, `npm run typecheck`, `npm run test:client`, `npm run web:export`, and `npm run test:e2e -- --grep @us1`; independently demonstrate scenarios 1–2 and E01 plus exceptional/ambiguous retry evidence, record actual results in `specs/001-room-session/tasks.md`, and block guest-flow work on any failure. This is the first independently demonstrable MVP, not completion of the feature. Normal validation also requires `npm run db:types:check` after the phase reset, without preceding `db:types`. Before this ordinary Auth acceptance selection, run unfiltered `npm run test:e2e:security` after reset/check and account for its separate one-signup cost.
+- [X] T064 [P] [US1] Add typed create/shared accepted-result boundary tests in `__tests__/rooms/contracts.test.ts` and `__tests__/rooms/service.test.ts`: one-row cardinality, closed outcome/nullability/role/state/count validation, `created`/`already_created`, same UUID forwarded on retry, bootstrap-before-RPC, and exceptional responses mapped to a generic recoverable error.
+- [X] T065 [P] [US1] Replace obsolete inert-route assertions in `__tests__/routes/home.test.tsx` with behavioral create tests for session loading, one UUID per intentional action, double-submit prevention, retry UUID reuse, canonical `router.replace` carrying only code, disabled in-flight controls, and failed creation without usable room/invitation details, retaining applicable navigation coverage.
+- [X] T066 [P] [US1] Add normalization tests in `__tests__/rooms/code.test.ts` and implement pure trim/uppercase/`^[0-9A-F]{10}$` validation in `src/rooms/code.ts` so creation results and later manual/direct-link entry share one canonical-code contract; never generate invitation codes in the client.
+- [X] T067 [US1] Implement generated-type-backed closed RPC narrowing in `src/rooms/contracts.ts` and satisfy `__tests__/rooms/contracts.test.ts`: enforce one-row cardinality, exact create/join closed outcomes and per-branch nullability/role/state/count rules, rejecting unknown or inconsistent payloads as contract errors without adding navigation, storage, or UI side effects.
+- [X] T068 [US1] Implement pure accepted/create-error mapping in `src/rooms/state.ts` with behavioral tests in `__tests__/rooms/state.test.ts`: consume the narrowed results from T067, preserve internal ID/role only in the local model, render Waiting/one seat or Ready/two seats, and map exceptional failure without usable invitation data; perform no network, navigation, subscription, or post-Ready side effect.
+- [X] T069 [US1] Implement `createRoom(requestId)` and the shared `joinRoom(code)` transport in `src/rooms/service.ts` using only typed `create_room`/`join_room` RPCs after bootstrap and T067 narrowing; the host uses the same join transport to recover after create navigation, while guest-facing failure UI follows in phase 7; add no direct table write or separate host-recovery RPC.
+- [X] T070 [US1] Implement the home create action in `app/index.tsx` with Expo Crypto `randomUUID()`, per-logical-request lifecycle, in-flight guards, `created`/`already_created` navigation using only canonical `router.replace('/room/<CODE>')`, generic recoverable failure, and retry reuse without exposing a partial result.
+- [X] T071 [US1] Add host-room component behavior tests in `__tests__/routes/room.test.tsx` for code-based `already_member` recovery after create, bootstrap/loading, Waiting/code/seat display, same-host Ready recovery, missing/malformed input safety, and no rendered Auth/internal UUID or raw backend exception.
+- [X] T072 [US1] Implement accepted host entry and room presentation in `app/room/[code].tsx`: validate the canonical code, await bootstrap, use the shared join transport, render authoritative Waiting or Ready from accepted results, offer generic recovery on exceptional failure, and never trust hidden route state or navigate beyond Ready; guest-specific error presentation and full route-generation handling follow in phase 7.
+- [X] T073 [US1] Add absolute invitation-link construction to `src/rooms/code.ts`, wire it into `app/room/[code].tsx`, and extend `__tests__/rooms/code.test.ts` for actual browser-origin URLs and native Expo Linking scheme URLs pointing to the same canonical route; show the shareable link in Waiting without a deployment-domain, QR, or sharing-service dependency.
+- [X] T074 [US1] Add E01 `@us1` real-stack create/Waiting acceptance in `e2e/room-session.spec.ts`, retiring obsolete inert `@baseline` assertions: a fresh unregistered context obtains one host seat, canonical code, actual-origin invitation link and canonical route with no hidden IDs; use ordinary member-authorized reads as the state oracle and a test-scoped context with cleanup.
+- [X] T075 [US1] Add the `@us1` pre-acceptance create-failure case in `e2e/room-session.spec.ts`: bootstrap a fresh context, abort only its outbound create request before server dispatch, assert a clear recoverable failure and no usable invitation, and confirm zero newly owned rooms through its ordinary authorized projection; use a one-shot interceptor removed in `finally`, not a fabricated Supabase error body.
+- [X] T076 [US1] Add `@us1` retry-safety browser evidence in `e2e/room-session.spec.ts` by allowing a real create to commit and discarding its response once, then retrying with the same logical request; assert one owned room and the same code, and reload the accepted host to recover it without a second room; do not fabricate a Supabase success/failure body or use privileged credentials as the client. Install a one-shot request route before create, use `route.fetch()` to execute the real server request and capture the committed result privately, then abort delivery of that response; observe the next real RPC request to verify UUID reuse and compare its returned room. Always remove the interception in `finally`.
+- [X] T077 [US1] Checkpoint — from a clean reset run `npm run db:test`, `npm run lint`, `npm run typecheck`, `npm run test:client`, `npm run web:export`, and `npm run test:e2e -- --grep @us1`; independently demonstrate scenarios 1–2 and E01 plus exceptional/ambiguous retry evidence, record actual results in `specs/001-room-session/tasks.md`, and block guest-flow work on any failure. This is the first independently demonstrable MVP, not completion of the feature. Normal validation also requires `npm run db:types:check` after the phase reset, without preceding `db:types`. Before this ordinary Auth acceptance selection, run unfiltered `npm run test:e2e:security` after reset/check and account for its separate one-signup cost.
+
+### Phase 6 execution evidence — 2026-09-06
+
+**T064–T077: GREEN.** Started on clean `main` at
+`17d9ff6e184990e60680f6002e890046c3f8410f`. The implementation skill
+prerequisite check passed; requirements checklist 16/16. No configured extension
+hooks ran. The user explicitly clarified that the shared `joinRoom(code)`
+transport and real `join_room(text)` host re-entry belong to Phase 6; the route
+must not consume hidden create-result navigation state. No contract/task text
+changed. T001–T063 remain checked and T078–T121 remain unchecked.
+
+Runtime remains Node v24.20.0 / npm 11.19.0, Expo 57.0.20, Router 57.0.19,
+Supabase JS 2.115.0 / CLI 2.116.0, PostgreSQL 17.6, TypeScript 6.0.3,
+Jest 29.7.0 / jest-expo 57.0.5 and Playwright 1.63.0. Existing Expo Crypto and
+Linking dependencies supply UUIDs and native URLs; no install, dependency/version
+change, global CLI or machine-specific runtime injection was needed.
+
+| Task / command / observable evidence | Exit / actual result |
+|---|---|
+| T064/T065/T066 initial focused tests | Expected 1 on absent room modules; after transport existed, 8 home behavior cases also demonstrated RED against the inert UI |
+| T066/T067 normalization/closed decoder tests | 0; initial 43/43; rejects malformed cardinality, fields, outcomes, role/state/count/nullability |
+| T068 state tests before implementation | Expected 1 on absent mapper; after implementation 3/3 |
+| T064/T069 service tests | 0; 9/9 including bootstrap gating, exact RPC arguments, same-request retry and generic errors |
+| T065/T070 home behavior tests | 0; 9/9 including direct duplicate handler calls before disabled UI, navigation failure/retry and new intentional request after completion |
+| T071 tests against inert room UI | Expected 1; 6 missing-behavior failures; T072/T073 final room tests 7/7 |
+| T073 code/link tests | 0; final 16/16, actual browser-origin selection and Expo Linking native delegation |
+| `npm run supabase:start`, `npm run supabase:status`, `npm run env:local` | 0 each; real health/readiness, ignored public env only |
+| `npm run db:reset` | 0; clean replay of unchanged Phase 3/4 migrations |
+| `npm run db:types:check` | 0; canonical bytes match without preceding overwrite |
+| `npm run lint` | 0 |
+| `npm run typecheck` | 0 |
+| `npm run test:client` | 0; 171/171 across 15 suites, no snapshots; previous Auth/storage/config/C1/runtime regressions retained |
+| `npm run db:test` | 0; 285/285, including real-session concurrency, RLS/grants, definer containment and direct mutation denial |
+| `npm run web:export` | 0; root and dynamic room route exported, no export-time Auth |
+| `npm run playwright:install` | 0; prepared the pinned official Docker runtime |
+| Unfiltered `npm run test:e2e:security` | Outer 0 / expected inner 1; A/B pass, C exact controlled failure, one verified PNG, capture attempt 1, zero scanner findings |
+| `npm run test:e2e -- --grep @us1` | 0; all three independent real-stack host scenarios pass |
+| Read-only post-acceptance aggregate via project-container psql | 0; rooms=2, waiting=2, empty_guest=2, unique_host_requests=2, anonymous_users=4 |
+| `npm run supabase:stop` | 0; EXIT/INT/TERM trap-owned lifecycle completed |
+| `git diff --check`, separate untracked whitespace/security-path inspection | 0; no accidental versionable runtime/credential artifacts |
+
+Implementation uses one generated-type-backed closed decoder, a pure accepted
+state/error mapper, and only two typed RPC transports after the existing shared
+bootstrap. No client table write, extra client, room cache, privileged key or
+backend change was added. Home generates one Expo Crypto UUID per logical
+action, synchronously guards duplicate calls, preserves the UUID on transport
+or navigation failure, and replaces the route using only the returned canonical
+code. Returning home after completed replacement starts a new deliberate
+request. Exceptional/contract failures render only generic retry feedback, not
+partial room/invitation data or raw errors.
+
+The room route validates the code, invokes real `join_room`, and requires
+authoritative `already_member`/host recovery for its Phase 6 presentation.
+Waiting shows the canonical code, one of two seats and an absolute actual-origin
+web invitation. Native URL construction delegates to Expo Linking's configured
+scheme; no native device/emulator acceptance is claimed. A pure/component test
+also checks the approved existing-host Ready recovery projection, without
+Realtime, guest actions or automatic convergence. No Auth/room/request UUID is
+rendered. Guest rejection presentation, manual entry and route-generation
+enhancements remain Phase 7.
+
+Real browser evidence uses three isolated **host-only** contexts, one identity
+each, and ordinary member-authorized `id,code,state` Data API reads:
+
+- E01 success: two rapid UI clicks are issued while an observed real outbound
+  create is held. Exactly one create request is dispatched; real `created`
+  and subsequent `already_member`/host/Waiting refer to the same one owned
+  room. Canonical route contains only the code; invitation uses that browser's
+  origin. UI credential/UUID checks pass.
+- A02 pre-acceptance failure: a one-shot route aborts before server dispatch.
+  Home shows generic recoverable failure and no room/invitation; the caller's
+  ordinary authorized read returns zero rooms.
+- A02 ambiguous completion: `route.fetch()` executes the real create, privately
+  confirms commit, then aborts delivery once. Retry sends the same UUID and the
+  real server returns `already_created` with the same ID/code. Authoritative
+  host re-entry and HTTP-200 reload return `already_member`; identity, one
+  owned room, Waiting and empty guest seat are preserved. No fabricated RPC
+  body or privileged browser oracle was used.
+
+All interceptors close in finally. Callback failures are retained as safe
+failure flags and cannot make a scenario pass; raw callback errors are not
+reported. Obsolete Phase 5 Auth-smoke preview navigation was retired along with
+the inert UI; its existing 3-identity storage-continuity case now waits for the
+post-bootstrap Create control without invoking a room action. This checkpoint
+executes only @us1, not @auth or a guest scenario.
+
+C1 capture policy is unchanged: trace/HAR/video/automatic PNG/session exports
+and raw network/process dumps stay off. The C probe's sole adaptation is its
+post-bootstrap selector (Create Room instead of removed route-preview link);
+the collector, bounded DOM stabilization, registry, scanner and fail-closed
+policy are untouched. The safe reporter/controller allowlist now recognizes the
+static US1 scenario label. The real C probe creates no room.
+
+Finalized diagnostics were scanned with the live in-memory registry before
+cleanup: security `test-results/run-OTaWxv` had 6 allowed files and exactly one
+verified PNG (no retry); acceptance `test-results/run-c8GA0d` had 3 allowed
+files. Both had zero credential findings. These two newly generated directories
+were removed after verification; pre-existing artifacts were preserved.
+Anonymous sign-ins/attempts: security 1, US1 3, total **4**. No hidden retry,
+second joining identity or HTTP 429 occurred. R02 remains N=47 and local
+anonymous_users=150; reset is not hourly quota recovery.
+
+AlmaLinux browser execution used only
+`mcr.microsoft.com/playwright:v1.63.0-noble`. Both runner-owned containers
+reported actual WS readiness and were removed. Playwright managed Expo HTTP
+readiness and shutdown. Supabase's project containers were removed by its npm
+stop command. Ports 8081 and 55321–55324 are bindable; no owned Expo/runner
+process or credential IPC directory remains. All 18 pre-existing Docker
+containers retain exact IDs/names/running flags/StartedAt/restart counts.
+
+R01 canonical SHA-256 remains
+`46f41c3ca2a88d65a2604f449b17aa10c36b535c8ee0a67047683fb37f80fb4b`.
+Protected specification/planning/contracts, Auth/client/storage, generated
+types, dependency graph, Supabase config/migrations/tests and root Auth layout
+remain unchanged. Initial unit harness mismatches (Pressable component lookup
+and read-only Expo module exports in spies) were corrected and rerun; no failed
+required check was waived. The full real-stack T077 passed on its first run.
+
+No guest UI/acceptance, manual join, room-full handling, Realtime subscription,
+automatic Ready convergence, post-Ready work, T078+, staging, commit or push
+ran. US1 is an independently demonstrable MVP, not complete feature acceptance.
+Stop before T078.
 
 ## Phase 7: User Story 2 — Guest Join by Link and Manual Code (P1)
 
