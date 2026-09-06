@@ -469,11 +469,113 @@ commit or push ran. Stop before T030.
 
 **Minimum validation**: Clean migration replay and real pgTAP structure, constraints, generated state, ACL, RLS, and forbidden-mutation evidence. Complete generated types and publication follow T046–T049 and T092–T094 as explained above.
 
-- [ ] T030 Create `supabase/tests/database/room_session.test.sql` with transaction-scoped pgTAP setup/teardown and owner-created Auth fixtures, then add behavior/catalog assertions for exactly one application table, all column types/nullability/defaults, generated state, named constraints, FKs, and required indexes from `specs/001-room-session/data-model.md`; run the relevant tests to observe failure before schema implementation.
-- [ ] T031 Create the complete atomic schema/security migration in `supabase/migrations/20260905000000_rooms_schema.sql`: enable `pgcrypto` in `extensions`; define `public.rooms` with UUID default `extensions.gen_random_uuid()`, non-null code/creation request/host, nullable guest, generated non-null stored state using `CASE WHEN guest_user_id IS NULL THEN 'waiting'::text ELSE 'ready'::text END`, and `timestamptz` defaults `pg_catalog.transaction_timestamp()`. Include exact constraints `rooms_pkey`, `rooms_code_key`, `rooms_host_creation_request_key`, `rooms_code_format_check`, `rooms_distinct_participants_check`, `rooms_host_user_id_fkey`, `rooms_guest_user_id_fkey`, `^[0-9A-F]{10}$`, FK `ON DELETE RESTRICT ON UPDATE NO ACTION`, and partial B-tree `rooms_guest_user_id_idx`, reusing the host-leading unique index. In the same migration revoke owner-default client table grants and all actual `PUBLIC`/`anon`/`authenticated` privileges, enable RLS, grant `authenticated` SELECT only on `id, code, state`, and add only the host-or-guest `auth.uid()` SELECT policy; ship no insecure intermediate table, timestamp trigger, duplicate index, writable stage, or second application table.
-- [ ] T032 Extend `supabase/tests/database/room_session.test.sql` to execute valid/invalid codes, duplicate codes and host/request keys, missing Auth references, same-person seats, generated-state transitions, direct state assignment rejection, timestamp defaults, FK deletion restrictions, and unchanged rows after rejected mutations; test client attempts to clear/replace seats, regress Ready to Waiting, or delete rooms rather than claiming the migration owner is forbidden from fixture setup.
-- [ ] T033 Extend `supabase/tests/database/room_session.test.sql` with actual `anon` and claimed `authenticated` sessions proving signed-out denial, host/guest exact-column reads, unrelated zero-row RLS denial, denied private-column/wildcard reads, denied INSERT/UPDATE/DELETE, and the distinction between absent SQL grants and an RLS-filtered readable projection; fixture ownership must not leak into calls under test.
-- [ ] T034 Checkpoint — after local startup/env setup, run `npm run db:reset` and `npm run db:test`, verify schema/default/constraint/index and separate ACL/RLS results, and record commands and acceptance-scenario 9–12 invariant evidence in `specs/001-room-session/tasks.md`; block RPC work on any failure and explicitly carry generated-type validation to T049 and publication validation to T094 without claiming those pending checks passed.
+- [X] T030 Create `supabase/tests/database/room_session.test.sql` with transaction-scoped pgTAP setup/teardown and owner-created Auth fixtures, then add behavior/catalog assertions for exactly one application table, all column types/nullability/defaults, generated state, named constraints, FKs, and required indexes from `specs/001-room-session/data-model.md`; run the relevant tests to observe failure before schema implementation.
+- [X] T031 Create the complete atomic schema/security migration in `supabase/migrations/20260905000000_rooms_schema.sql`: enable `pgcrypto` in `extensions`; define `public.rooms` with UUID default `extensions.gen_random_uuid()`, non-null code/creation request/host, nullable guest, generated non-null stored state using `CASE WHEN guest_user_id IS NULL THEN 'waiting'::text ELSE 'ready'::text END`, and `timestamptz` defaults `pg_catalog.transaction_timestamp()`. Include exact constraints `rooms_pkey`, `rooms_code_key`, `rooms_host_creation_request_key`, `rooms_code_format_check`, `rooms_distinct_participants_check`, `rooms_host_user_id_fkey`, `rooms_guest_user_id_fkey`, `^[0-9A-F]{10}$`, FK `ON DELETE RESTRICT ON UPDATE NO ACTION`, and partial B-tree `rooms_guest_user_id_idx`, reusing the host-leading unique index. In the same migration revoke owner-default client table grants and all actual `PUBLIC`/`anon`/`authenticated` privileges, enable RLS, grant `authenticated` SELECT only on `id, code, state`, and add only the host-or-guest `auth.uid()` SELECT policy; ship no insecure intermediate table, timestamp trigger, duplicate index, writable stage, or second application table.
+- [X] T032 Extend `supabase/tests/database/room_session.test.sql` to execute valid/invalid codes, duplicate codes and host/request keys, missing Auth references, same-person seats, generated-state transitions, direct state assignment rejection, timestamp defaults, FK deletion restrictions, and unchanged rows after rejected mutations; test client attempts to clear/replace seats, regress Ready to Waiting, or delete rooms rather than claiming the migration owner is forbidden from fixture setup.
+- [X] T033 Extend `supabase/tests/database/room_session.test.sql` with actual `anon` and claimed `authenticated` sessions proving signed-out denial, host/guest exact-column reads, unrelated zero-row RLS denial, denied private-column/wildcard reads, denied INSERT/UPDATE/DELETE, and the distinction between absent SQL grants and an RLS-filtered readable projection; fixture ownership must not leak into calls under test.
+- [X] T034 Checkpoint — after local startup/env setup, run `npm run db:reset` and `npm run db:test`, verify schema/default/constraint/index and separate ACL/RLS results, and record commands and acceptance-scenario 9–12 invariant evidence in `specs/001-room-session/tasks.md`; block RPC work on any failure and explicitly carry generated-type validation to T049 and publication validation to T094 without claiming those pending checks passed.
+
+### Phase 3 execution evidence — 2026-09-06
+
+**T030–T034: GREEN.** Began on clean `main` at Phase 2 commit
+`ab77ada3855efd1d131d56698b3d4f2db3e4e060`. The implementation skill prerequisite
+check passed; requirements checklist 16/16. No extension hooks were configured.
+Only the Phase 3 migration, its pgTAP file, these five checkboxes and this evidence
+entry changed. No task text, product contract, dependency or earlier-phase
+configuration changed. T035–T121 remain unchecked.
+
+Environment: persistent Node v24.20.0 / npm 11.19.0; project-local Supabase CLI
+2.116.0; Docker client/server 28.5.1; actual local PostgreSQL 17.6 and pgTAP 1.3.3.
+No global CLI, Dashboard/manual persistent SQL, hosted project or Auth credentials
+were used. All persistent application DDL is in
+`supabase/migrations/20260905000000_rooms_schema.sql`.
+
+| Command / evidence | Exit / actual result |
+|---|---|
+| `node --version`, `npm --version`, `./node_modules/.bin/supabase --version` | 0 each; v24.20.0 / 11.19.0 / 2.116.0 |
+| `npm run supabase:start` | 0; real local service health checks passed |
+| `npm run supabase:status` | 0; startup and pre-checkpoint readiness confirmed |
+| `npm run env:local` | 0; startup and pre-checkpoint; values withheld |
+| Initial schema-free `npm run db:reset` | 0; public tables 0 before T031 |
+| T030 `npm run db:test` before migration | Expected 1; complete TAP report, 7 missing-schema failures out of 9 |
+| `npm run db:reset` after T031 | 0; complete atomic schema/grants/RLS migration replay |
+| T031 `npm run db:test` | 0; 9/9 structural assertions |
+| T032 `npm run db:test` | 0; 85/85 including constraints, transitions and row preservation |
+| T033 `npm run db:test` | 0; 187/187 including real-role ACL/RLS behavior |
+| T034 clean `npm run db:reset` then `npm run db:test` | 0 / 0; migration rebuilt from zero, final 187/187, one SQL test file |
+| Read-only live catalog / post-test fixture inspection via container `psql -X -U postgres -d postgres` | 0; schema matches contract, no room/Auth fixtures remain |
+| Additional regression `npm run lint` | 0 |
+| Additional regression `npm run typecheck` | 0 |
+| Additional regression `npm run test:client` | 0; 47/47, 5 suites, including Phase 1 C1/runtime/routes and Phase 2 env/config |
+| `npm run supabase:stop` | 0; EXIT-trap cleanup completed |
+| Docker snapshot comparison / four local port bind checks | 0; unrelated 18 containers unchanged, ports 55321–55324 free |
+
+The lifecycle owner installed EXIT cleanup plus INT/TERM exit traps before
+startup and kept them active through all database checks. Start/status/stop used
+the existing safe-process wrapper. Reset used the unchanged npm command through
+the existing managed-process helper, suppressing raw CLI output while preserving
+its exit. DB-test stdout/stderr were captured in bounded memory; only sanitized
+TAP/test-summary diagnostics were displayed, never unrestricted service output
+or credential-bearing connection information. No new persisted test artifacts,
+network traces, HAR or session exports were created.
+
+During T030/T031 test-harness development, pgTAP record comparisons initially
+reported a catalog-string collation error. Explicit test-side text collation
+made catalog and VALUES comparisons compatible; the corrected pre-migration RED
+and all subsequent green stages above were actually rerun. This changed no
+column, database collation, schema contract or tool version.
+
+Live schema evidence: exactly one application table, `public.rooms`, owned by
+`postgres`; eight ordered columns and seven exact named constraints from
+`data-model.md`. The four B-tree indexes are `rooms_pkey`,
+`rooms_code_key`, `rooms_host_creation_request_key` (host-leading) and partial
+`rooms_guest_user_id_idx`. Both Auth FKs have ON DELETE RESTRICT and ON UPDATE
+NO ACTION. State is stored/generated, not independently writable; no application
+timestamp/state trigger exists. There are zero non-extension public functions,
+zero `create_room`/`join_room` signatures and zero room publication memberships.
+
+ACL and RLS evidence are distinct: PUBLIC/anon/authenticated have no table-wide
+privileges; authenticated has only non-grantable column SELECT on id/code/state.
+Migration-owner default client table grants in public are revoked. The sole
+`rooms_select_member` policy permits authenticated SELECT using
+`(select auth.uid()) = host_user_id or (select auth.uid()) = guest_user_id`;
+there are no write policies. Real anon queries fail with SQLSTATE 42501.
+Claimed host/guest reads return exactly their rooms; unrelated code/known-ID
+queries return zero rows under the same valid column grant. Missing subject,
+private-column/wildcard reads and direct INSERT/UPDATE/DELETE are tested
+separately, without service-role or owner execution as the security oracle.
+
+Fixtures use only three synthetic Auth UUID rows and transaction-local room
+data. Owner-only setup/snapshots are separate from explicit SET LOCAL ROLE and
+request.jwt.claims caller assertions. Every forbidden or constraint-violating
+mutation is rejected and the room snapshots remain unchanged. The closing ROLLBACK removes
+all fixtures; post-suite room/Auth row counts were both zero.
+**Anonymous HTTP sign-ins performed: 0.** R02 limit 150 and its 47/94/141,
+48/144 accounting remain unchanged.
+
+Acceptance scenarios 9–12: this checkpoint proves only their Phase 3 invariant
+foundation. A09/A10 have exactly two distinct representable seats with no client
+seat replacement; A11 has member-only read isolation; A12 has denied spoofing,
+seat clearing/replacement, generated-state regression and deletion with row
+preservation. Actual full-room RPC outcomes and true concurrent final-seat
+acceptance remain pending Phase 4/browser tasks; no complete A09–A12 or story
+acceptance is claimed here.
+
+Applicability: generated-type validation is intentionally carried to T049 after
+both RPCs; publication validation to T094. Neither pending check ran or passed.
+No install/export/browser/Auth check is required by T034 for SQL-only changes:
+the existing lockfile, Expo code and browser harness are unchanged, client
+regressions passed, and clean database replay supplies this phase's reproducible
+evidence. A genuinely fresh committed full-feature checkout remains T120–T121;
+this uncommitted worktree is not presented as that evidence.
+
+Cleanup removed all nine project containers and its network; CLI-managed local
+DB/storage volumes were retained normally, never treated as schema authority.
+No project service remained and every exposed project port could be rebound.
+All 18 unrelated containers retained exact IDs, running flags, StartedAt and
+restart counts. No Docker prune, global configuration change, unrelated stop,
+RPC/type/publication work, application Auth/room behavior, commit or push ran.
+Stop before T035.
 
 ## Phase 4: Foundational — Atomic RPC Functions and Database Tests
 
