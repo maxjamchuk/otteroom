@@ -1,4 +1,5 @@
 -- Phase 3 schema/access regression plus Phase 4 RPC acceptance evidence.
+-- Feature 002 Phase 2 extends only schema expectations and the denied projection.
 -- UUID-only fixtures: controller setup rolls back; committed race fixtures are
 -- explicitly cleaned through their separate owner connection on every path.
 -- Local-only harness setup needs the extension owner to revoke dblink's own
@@ -356,8 +357,8 @@ insert into auth.users (id) values
 select results_eq(
   $$select c.relname::text collate "default" from pg_class c join pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'public' and c.relkind in ('r', 'p') order by c.relname$$,
-  $$values ('rooms'::text)$$,
-  'rooms is the only public application table'
+  $$values ('movie_candidates'::text), ('rooms'::text)$$,
+  'rooms and movie_candidates are the only two public application tables'
 );
 select results_eq(
   $$select a.attname::text collate "default", format_type(a.atttypid, a.atttypmod) collate "default", a.attnotnull,
@@ -372,8 +373,9 @@ select results_eq(
     ('guest_user_id', 'uuid', false, '', ''),
     ('state', 'text', true, 's', ''),
     ('created_at', 'timestamp with time zone', true, '', ''),
-    ('updated_at', 'timestamp with time zone', true, '', '')$$,
-  'all eight columns have exact order, types, nullability and generated/identity flags'
+    ('updated_at', 'timestamp with time zone', true, '', ''),
+    ('movie_candidate_id', 'text', false, '', '')$$,
+  'all nine columns have exact order, types, nullability and generated/identity flags'
 );
 select results_eq(
   $$select a.attname::text collate "default", pg_get_expr(d.adbin, d.adrelid) collate "default"
@@ -382,7 +384,8 @@ select results_eq(
       and not a.attisdropped and a.attgenerated = '' order by a.attnum$$,
   $$values ('id'::text, 'extensions.gen_random_uuid()'::text), ('code', null),
     ('creation_request_id', null), ('host_user_id', null), ('guest_user_id', null),
-    ('created_at', 'transaction_timestamp()'), ('updated_at', 'transaction_timestamp()')$$,
+    ('created_at', 'transaction_timestamp()'), ('updated_at', 'transaction_timestamp()'),
+    ('movie_candidate_id', null)$$,
   'defaults are extension UUID, null guest and transaction timestamps; required inputs have none'
 );
 select results_eq(
@@ -397,12 +400,14 @@ select results_eq(
            condeferrable, condeferred
     from pg_constraint where conrelid = to_regclass('public.rooms') order by conname$$,
   $$values
-    ('rooms_code_format_check'::text, 'c'::text, $c$CHECK ((code ~ '^[0-9A-F]{10}$'::text))$c$::text, true, false, false),
+    ('rooms_candidate_requires_guest_check'::text, 'c'::text, 'CHECK (((movie_candidate_id IS NULL) OR (guest_user_id IS NOT NULL)))'::text, true, false, false),
+    ('rooms_code_format_check', 'c', $c$CHECK ((code ~ '^[0-9A-F]{10}$'::text))$c$, true, false, false),
     ('rooms_code_key', 'u', 'UNIQUE (code)', true, false, false),
     ('rooms_distinct_participants_check', 'c', 'CHECK (((guest_user_id IS NULL) OR (guest_user_id <> host_user_id)))', true, false, false),
     ('rooms_guest_user_id_fkey', 'f', 'FOREIGN KEY (guest_user_id) REFERENCES auth.users(id) ON DELETE RESTRICT', true, false, false),
     ('rooms_host_creation_request_key', 'u', 'UNIQUE (host_user_id, creation_request_id)', true, false, false),
     ('rooms_host_user_id_fkey', 'f', 'FOREIGN KEY (host_user_id) REFERENCES auth.users(id) ON DELETE RESTRICT', true, false, false),
+    ('rooms_movie_candidate_id_fkey', 'f', 'FOREIGN KEY (movie_candidate_id) REFERENCES movie_candidates(id) ON DELETE RESTRICT', true, false, false),
     ('rooms_pkey', 'p', 'PRIMARY KEY (id)', true, false, false)$$,
   'exact stable constraint names, definitions and immediate validation'
 );
@@ -412,8 +417,9 @@ select results_eq(
     from pg_constraint where conrelid = to_regclass('public.rooms') and contype = 'f'
     order by conname$$,
   $$values ('rooms_guest_user_id_fkey'::text, 'auth.users'::text, 'a'::text, 'r'::text),
-    ('rooms_host_user_id_fkey', 'auth.users', 'a', 'r')$$,
-  'both Auth foreign keys use ON UPDATE NO ACTION and ON DELETE RESTRICT'
+    ('rooms_host_user_id_fkey', 'auth.users', 'a', 'r'),
+    ('rooms_movie_candidate_id_fkey', 'movie_candidates', 'a', 'r')$$,
+  'both Auth foreign keys and the catalog FK use ON UPDATE NO ACTION and ON DELETE RESTRICT'
 );
 select results_eq(
   $$select i.relname::text collate "default", am.amname::text collate "default", x.indisunique, x.indisvalid, x.indisready,
@@ -489,182 +495,182 @@ select throws_ok($$insert into public.rooms (id, code, creation_request_id, host
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'null primary key: all eight fields and row count unchanged'
+  'null primary key: all nine fields and row count unchanged'
 );
 
 select throws_ok($$insert into public.rooms (code, creation_request_id, host_user_id) values (null, '20000000-0000-4000-a000-000000000009', '00000000-0000-4000-a000-000000000001')$$, '23502', null, 'null code is rejected');
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'null code: all eight fields and row count unchanged'
+  'null code: all nine fields and row count unchanged'
 );
 
 select throws_ok($$insert into public.rooms (code, creation_request_id, host_user_id) values ('A000000001', null, '00000000-0000-4000-a000-000000000001')$$, '23502', null, 'null creation request is rejected');
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'null creation request: all eight fields and row count unchanged'
+  'null creation request: all nine fields and row count unchanged'
 );
 
 select throws_ok($$insert into public.rooms (code, creation_request_id, host_user_id) values ('A000000001', '20000000-0000-4000-a000-000000000009', null)$$, '23502', null, 'null host is rejected');
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'null host: all eight fields and row count unchanged'
+  'null host: all nine fields and row count unchanged'
 );
 
 select throws_ok($$insert into public.rooms (code, creation_request_id, host_user_id) values ('abcdef0123', '20000000-0000-4000-a000-000000000009', '00000000-0000-4000-a000-000000000001')$$, '23514', null, 'invalid code "abcdef0123" is rejected');
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'invalid code "abcdef0123": all eight fields and row count unchanged'
+  'invalid code "abcdef0123": all nine fields and row count unchanged'
 );
 
 select throws_ok($$insert into public.rooms (code, creation_request_id, host_user_id) values ('ABCDEF012', '20000000-0000-4000-a000-000000000009', '00000000-0000-4000-a000-000000000001')$$, '23514', null, 'invalid code "ABCDEF012" is rejected');
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'invalid code "ABCDEF012": all eight fields and row count unchanged'
+  'invalid code "ABCDEF012": all nine fields and row count unchanged'
 );
 
 select throws_ok($$insert into public.rooms (code, creation_request_id, host_user_id) values ('ABCDEF01234', '20000000-0000-4000-a000-000000000009', '00000000-0000-4000-a000-000000000001')$$, '23514', null, 'invalid code "ABCDEF01234" is rejected');
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'invalid code "ABCDEF01234": all eight fields and row count unchanged'
+  'invalid code "ABCDEF01234": all nine fields and row count unchanged'
 );
 
 select throws_ok($$insert into public.rooms (code, creation_request_id, host_user_id) values ('GBCDEF0123', '20000000-0000-4000-a000-000000000009', '00000000-0000-4000-a000-000000000001')$$, '23514', null, 'invalid code "GBCDEF0123" is rejected');
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'invalid code "GBCDEF0123": all eight fields and row count unchanged'
+  'invalid code "GBCDEF0123": all nine fields and row count unchanged'
 );
 
 select throws_ok($$insert into public.rooms (code, creation_request_id, host_user_id) values (' ABCDEF0123', '20000000-0000-4000-a000-000000000009', '00000000-0000-4000-a000-000000000001')$$, '23514', null, 'invalid code " ABCDEF0123" is rejected');
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'invalid code " ABCDEF0123": all eight fields and row count unchanged'
+  'invalid code " ABCDEF0123": all nine fields and row count unchanged'
 );
 
 select throws_ok($$insert into public.rooms (code, creation_request_id, host_user_id) values ('ABCDEF0123 ', '20000000-0000-4000-a000-000000000009', '00000000-0000-4000-a000-000000000001')$$, '23514', null, 'invalid code "ABCDEF0123 " is rejected');
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'invalid code "ABCDEF0123 ": all eight fields and row count unchanged'
+  'invalid code "ABCDEF0123 ": all nine fields and row count unchanged'
 );
 
 select throws_ok($$insert into public.rooms (code, creation_request_id, host_user_id) values ('', '20000000-0000-4000-a000-000000000009', '00000000-0000-4000-a000-000000000001')$$, '23514', null, 'invalid code empty is rejected');
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'invalid code empty: all eight fields and row count unchanged'
+  'invalid code empty: all nine fields and row count unchanged'
 );
 
 select throws_ok($$insert into public.rooms (code, creation_request_id, host_user_id) values ('ABCDEF0123', '20000000-0000-4000-a000-000000000009', '00000000-0000-4000-a000-000000000001')$$, '23505', null, 'duplicate code is rejected');
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'duplicate code: all eight fields and row count unchanged'
+  'duplicate code: all nine fields and row count unchanged'
 );
 
 select throws_ok($$insert into public.rooms (code, creation_request_id, host_user_id) values ('A000000001', '20000000-0000-4000-a000-000000000001', '00000000-0000-4000-a000-000000000001')$$, '23505', null, 'duplicate host-request key is rejected');
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'duplicate host-request key: all eight fields and row count unchanged'
+  'duplicate host-request key: all nine fields and row count unchanged'
 );
 
 select throws_ok($$insert into public.rooms (id, code, creation_request_id, host_user_id) values ('10000000-0000-4000-a000-000000000002', 'A000000001', '20000000-0000-4000-a000-000000000009', '00000000-0000-4000-a000-000000000001')$$, '23505', null, 'duplicate primary key is rejected');
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'duplicate primary key: all eight fields and row count unchanged'
+  'duplicate primary key: all nine fields and row count unchanged'
 );
 
 select throws_ok($$insert into public.rooms (code, creation_request_id, host_user_id) values ('A000000001', '20000000-0000-4000-a000-000000000009', '00000000-0000-4000-a000-000000000099')$$, '23503', null, 'missing host Auth row is rejected');
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'missing host Auth row: all eight fields and row count unchanged'
+  'missing host Auth row: all nine fields and row count unchanged'
 );
 
 select throws_ok($$insert into public.rooms (code, creation_request_id, host_user_id, guest_user_id) values ('A000000001', '20000000-0000-4000-a000-000000000009', '00000000-0000-4000-a000-000000000001', '00000000-0000-4000-a000-000000000099')$$, '23503', null, 'missing guest Auth row is rejected');
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'missing guest Auth row: all eight fields and row count unchanged'
+  'missing guest Auth row: all nine fields and row count unchanged'
 );
 
 select throws_ok($$insert into public.rooms (code, creation_request_id, host_user_id, guest_user_id) values ('A000000001', '20000000-0000-4000-a000-000000000009', '00000000-0000-4000-a000-000000000001', '00000000-0000-4000-a000-000000000001')$$, '23514', null, 'same host and guest on insert is rejected');
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'same host and guest on insert: all eight fields and row count unchanged'
+  'same host and guest on insert: all nine fields and row count unchanged'
 );
 
 select throws_ok($$update public.rooms set guest_user_id = host_user_id where code = 'FEDCBA9876'$$, '23514', null, 'same host and guest on update is rejected');
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'same host and guest on update: all eight fields and row count unchanged'
+  'same host and guest on update: all nine fields and row count unchanged'
 );
 
 select throws_ok($$insert into public.rooms (code, creation_request_id, host_user_id, state) values ('A000000001', '20000000-0000-4000-a000-000000000009', '00000000-0000-4000-a000-000000000001', 'ready')$$, '428C9', null, 'independent state on insert is rejected');
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'independent state on insert: all eight fields and row count unchanged'
+  'independent state on insert: all nine fields and row count unchanged'
 );
 
 select throws_ok($$update public.rooms set state = 'waiting' where code = 'ABCDEF0123'$$, '428C9', null, 'independent state on update is rejected');
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'independent state on update: all eight fields and row count unchanged'
+  'independent state on update: all nine fields and row count unchanged'
 );
 
 select throws_ok($$update public.rooms set created_at = null where code = 'ABCDEF0123'$$, '23502', null, 'null created timestamp is rejected');
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'null created timestamp: all eight fields and row count unchanged'
+  'null created timestamp: all nine fields and row count unchanged'
 );
 
 select throws_ok($$update public.rooms set updated_at = null where code = 'ABCDEF0123'$$, '23502', null, 'null updated timestamp is rejected');
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'null updated timestamp: all eight fields and row count unchanged'
+  'null updated timestamp: all nine fields and row count unchanged'
 );
 
 select throws_ok($$delete from auth.users where id = '00000000-0000-4000-a000-000000000001'$$, '23503', null, 'host deletion RESTRICT is rejected');
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'host deletion RESTRICT: all eight fields and row count unchanged'
+  'host deletion RESTRICT: all nine fields and row count unchanged'
 );
 
 select throws_ok($$delete from auth.users where id = '00000000-0000-4000-a000-000000000002'$$, '23503', null, 'guest deletion RESTRICT is rejected');
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'guest deletion RESTRICT: all eight fields and row count unchanged'
+  'guest deletion RESTRICT: all nine fields and row count unchanged'
 );
 
 select throws_ok($$update auth.users set id = '00000000-0000-4000-a000-000000000091' where id = '00000000-0000-4000-a000-000000000001'$$, '23503', null, 'host update NO ACTION is rejected');
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'host update NO ACTION: all eight fields and row count unchanged'
+  'host update NO ACTION: all nine fields and row count unchanged'
 );
 
 select throws_ok($$update auth.users set id = '00000000-0000-4000-a000-000000000092' where id = '00000000-0000-4000-a000-000000000002'$$, '23503', null, 'guest update NO ACTION is rejected');
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'guest update NO ACTION: all eight fields and row count unchanged'
+  'guest update NO ACTION: all nine fields and row count unchanged'
 );
 
 select is((select count(*) from auth.users where id in
@@ -682,7 +688,7 @@ reset role;
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'clear occupied guest: all eight fields and row count unchanged'
+  'clear occupied guest: all nine fields and row count unchanged'
 );
 set local role authenticated;
 
@@ -691,7 +697,7 @@ reset role;
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'replace occupied guest: all eight fields and row count unchanged'
+  'replace occupied guest: all nine fields and row count unchanged'
 );
 set local role authenticated;
 
@@ -700,7 +706,7 @@ reset role;
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'replace host: all eight fields and row count unchanged'
+  'replace host: all nine fields and row count unchanged'
 );
 set local role authenticated;
 
@@ -709,7 +715,7 @@ reset role;
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'claim guest directly: all eight fields and row count unchanged'
+  'claim guest directly: all nine fields and row count unchanged'
 );
 set local role authenticated;
 
@@ -718,7 +724,7 @@ reset role;
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'regress Ready by clearing guest: all eight fields and row count unchanged'
+  'regress Ready by clearing guest: all nine fields and row count unchanged'
 );
 set local role authenticated;
 
@@ -727,7 +733,7 @@ reset role;
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'delete Ready room: all eight fields and row count unchanged'
+  'delete Ready room: all nine fields and row count unchanged'
 );
 set local role authenticated;
 
@@ -739,7 +745,7 @@ reset role;
 select results_eq(
   $$select row_to_json(r)::text from public.rooms r order by code$$,
   $$select row_to_json(r)::text from pg_temp.phase3_rooms_before r order by code$$,
-  'client state assignment: all eight fields and row count unchanged'
+  'client state assignment: all nine fields and row count unchanged'
 );
 
 -- T093: publication survives clean replay; the following T033 catalog AND real
@@ -811,7 +817,8 @@ order by role_name, privilege_name;
 select is(has_column_privilege('authenticated', 'public.rooms', column_name, 'SELECT'), allowed,
   'authenticated SELECT projection: ' || column_name)
 from (values ('id', true), ('code', true), ('state', true), ('creation_request_id', false),
-  ('host_user_id', false), ('guest_user_id', false), ('created_at', false), ('updated_at', false)) as columns(column_name, allowed)
+  ('host_user_id', false), ('guest_user_id', false), ('created_at', false), ('updated_at', false),
+  ('movie_candidate_id', false)) as columns(column_name, allowed)
 order by column_name;
 select ok(not has_any_column_privilege(role_name, 'public.rooms', privilege_name),
   role_name || ' has no column-level ' || privilege_name)

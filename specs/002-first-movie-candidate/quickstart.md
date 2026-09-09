@@ -439,3 +439,182 @@ and this validation record. Feature 001, application code, SQL/migrations/RPC,
 generated database types, dependencies and lockfile remain unchanged. No movie
 provider or runtime network dependency was introduced. T007–T064 remain
 unchecked; implementation stops at this checkpoint without a commit or push.
+
+## Phase 2 G2 Validation Record — 2026-09-09
+
+**Result: G2 PASS; scope T007–T012 only.** Started with a clean `main` at
+`49f09ec6a8710dfb14ed8dbd93f89b350daade9e`
+(`feat: add candidate poster fixtures`). Used existing Node v24.20.0,
+npm 11.19.0, project Supabase CLI 2.116.0 and local PostgreSQL 17.6.
+No dependency, toolchain, Auth-quota or application configuration changed.
+
+The only new migration is
+`supabase/migrations/20260909000000_movie_candidates_schema.sql`.
+It atomically creates the exact five-column catalog and eight named constraints,
+revokes all PUBLIC/anon/authenticated table access, enables RLS without policies,
+seeds the four approved rows and appends the nullable room FK/check. The existing
+three migrations, generated room state, room grants/policy, four room indexes,
+room RPCs and rooms-only Realtime publication are unchanged.
+
+| Command / evidence | Actual result |
+| --- | --- |
+| `npm run supabase:start` → `npm run env:local` | Exit 0 each; isolated project stack started, only ignored public environment configured; values withheld |
+| Initial `npm run db:reset` → `npm run db:test`, before new files | Exit 0 each; existing database baseline: 1 file, 287/287 tests |
+| `npm run db:test -- supabase/tests/database/room_candidate.test.sql`, before migration | Expected exit 1: seven schema assertions failed; catalog query then reported the absent relation; no schema was supplied by tests |
+| `npm run db:reset -- --version 20260905000002` | Exit 0; reproduced Feature 001 schema before the new migration |
+| Owner-only upgrade trial below, including `node_modules/.bin/supabase migration up --local` | Exit 0; only the new schema migration applied; both pre-existing room snapshots preserved and fixture cleanup passed |
+| Final `npm run db:reset` → `npm run db:test` | Exit 0 each; 2 files, 475/475 tests, no failed or skipped assertion |
+| Owner-only schema/seed/ACL/publication/function inspection after tests | Exact approved schema and four rows; no remaining test rooms or Auth users; only create_room/join_room in public |
+| `npm run supabase:stop` | Exit 0; all containers for this project stopped; unrelated project containers left running |
+| `git diff --check` and untracked SQL whitespace checks | PASS; no whitespace diagnostics |
+| Reproduction shell/Python syntax checks | PASS; no additional database or browser run |
+
+Database assertion counts changed from **287 to 475**: the existing
+`room_session.test.sql` now has **288** (the original 287 plus the denied
+assignment-column SELECT check); `room_candidate.test.sql` adds **187**.
+Legacy changes are additive exact-shape expectations for two tables, nine room
+columns, the third FK/check and the denied projection, plus corrected nine-field
+snapshot labels. All original membership, create/join result shapes, real-session
+races, authorization, failure/rollback and publication assertions remain.
+
+New pgTAP evidence covers actual invalid/duplicate/NULL inserts and inclusive
+valid year/order boundaries; fixed catalog content and indexes; Waiting/NULL,
+Ready/NULL and Ready/assigned success; rejected Waiting assignment and guest
+removal; rejected missing-reference assignment and referenced-row deletion/update.
+It checks explicit PUBLIC/client ACLs and effective table/column privileges.
+Actual anon, host, guest and unrelated authenticated calls cannot browse/mutate
+the catalog, read the assignment column, assign/replace/clear it, or insert an
+assigned room. Whole-row snapshots prove denial preserves catalog and membership.
+Member-only id/code/state reads still work without exposing foreign rooms.
+
+The upgrade trial used two committed owner-only synthetic Auth rows and one
+Waiting plus one Ready room with distinct fixed timestamps, before the migration.
+After migration, each of the eight previous fields and its xmin were identical;
+the ninth field alone was added as NULL. No row was backfilled or rewritten.
+Both upgrade fixtures were cleaned in a finally block. The complete pgTAP suite
+rolls back its local fixtures; the existing race suite retains its bounded
+cleanup. Final inspection found zero rooms and zero Auth users. Total GoTrue
+signup attempts: **0**.
+
+### Reproduce the Disposable Upgrade and G2
+
+Use the pinned installed runtime and the existing local Docker prerequisites.
+This combines the executed commands and in-memory snapshot trial with the
+quickstart's failure-preserving service cleanup. It intentionally resets only
+the configured local project; it does not replace the normal full reset path.
+
+```sh
+set -eu
+cleanup_g2_services() {
+  g2_validation_exit=$?
+  trap - EXIT INT TERM
+  set +e
+  npm run supabase:stop
+  g2_stop_exit=$?
+  if [ "$g2_validation_exit" -ne 0 ]; then
+    exit "$g2_validation_exit"
+  fi
+  exit "$g2_stop_exit"
+}
+trap cleanup_g2_services EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+npm run supabase:start
+npm run env:local
+npm run db:reset -- --version 20260905000002
+python3 - <<'PY'
+import json
+import subprocess
+
+psql = ['docker', 'exec', '-i', 'supabase_db_otteroom-room-session',
+        'psql', '-X', '-U', 'postgres', '-d', 'postgres',
+        '-v', 'ON_ERROR_STOP=1', '-qAt']
+
+def sql(statement):
+    result = subprocess.run(psql, input=statement, text=True, capture_output=True)
+    if result.returncode:
+        raise RuntimeError('G2 owner SQL failed (details withheld)')
+    return result.stdout.strip()
+
+def snapshot():
+    return json.loads(sql("""
+      select coalesce(jsonb_agg(jsonb_build_object('row',to_jsonb(r),'xmin',r.xmin::text)
+        order by r.code),'[]'::jsonb)
+      from public.rooms r where code in ('C2A0000001','C2A0000002');
+    """))
+
+owned = False
+try:
+    assert sql("select current_user='postgres'") == 't'
+    assert sql("select to_regclass('public.movie_candidates') is null") == 't'
+    assert sql("select count(*) from public.rooms") == '0'
+    assert sql("select count(*) from auth.users") == '0'
+    sql("""
+      begin;
+      insert into auth.users(id) values
+        ('02200000-0000-4000-a000-000000000001'),
+        ('02200000-0000-4000-a000-000000000002');
+      insert into public.rooms
+        (id,code,creation_request_id,host_user_id,guest_user_id,created_at,updated_at)
+      values
+        ('02300000-0000-4000-a000-000000000001','C2A0000001',
+         '02400000-0000-4000-a000-000000000001','02200000-0000-4000-a000-000000000001',
+         null,'2020-01-01 UTC','2020-01-02 UTC'),
+        ('02300000-0000-4000-a000-000000000002','C2A0000002',
+         '02400000-0000-4000-a000-000000000002','02200000-0000-4000-a000-000000000001',
+         '02200000-0000-4000-a000-000000000002','2020-02-01 UTC','2020-02-02 UTC');
+      commit;
+    """)
+    owned = True
+    before = snapshot()
+    assert [entry['row']['state'] for entry in before] == ['waiting', 'ready']
+    assert all(len(entry['row']) == 8 for entry in before)
+    subprocess.run(['node_modules/.bin/supabase', 'migration', 'up', '--local'], check=True)
+    after = snapshot()
+    assert len(after) == len(before) == 2
+    for old, new in zip(before, after):
+        assert set(new['row']) == set(old['row']) | {'movie_candidate_id'}
+        assert new['row']['movie_candidate_id'] is None
+        assert {k: v for k, v in new['row'].items() if k != 'movie_candidate_id'} == old['row']
+        assert new['xmin'] == old['xmin']
+    assert sql("select count(*) from public.movie_candidates") == '4'
+    assert sql("select count(*) from public.rooms") == '2'
+    assert sql("select count(*) from auth.users") == '2'
+    print('G2 upgrade PASS: Waiting/Ready preserved; eight prior fields and xmin unchanged; only NULL added; four fixtures; zero GoTrue signups')
+finally:
+    if owned:
+        sql("""
+          begin;
+          delete from public.rooms where id in
+            ('02300000-0000-4000-a000-000000000001','02300000-0000-4000-a000-000000000002');
+          delete from auth.users where id in
+            ('02200000-0000-4000-a000-000000000001','02200000-0000-4000-a000-000000000002');
+          commit;
+        """)
+        assert sql("select count(*) from public.rooms") == '0'
+        assert sql("select count(*) from auth.users") == '0'
+        print('G2 upgrade fixture cleanup PASS')
+PY
+npm run db:reset
+npm run db:test
+```
+
+### G2 Applicability and Scope Protection
+
+Under Constitution I, the reproduced system scenario is the real database
+upgrade/reset, fixture constraints and client-role isolation. Local backend
+startup and full database regression were executed. Fresh dependency installation,
+application build/startup, lint, TypeScript/client tests and browser acceptance
+are not applicable to this schema-only gate: T012 requires reset/pgTAP, no
+application/dependency files changed, and existing RPC signatures/projections
+remain identical. They were not rerun or claimed as new G2 evidence. Full
+fresh-checkout verification belongs to T063.
+
+Both database type commands are deliberately deferred until the finalized RPC
+contract in Phase 4, as required by R01 and the approved Phase 2/3 gates.
+No canonical type consistency or candidate application behavior is claimed at G2.
+The type artifact remains unchanged; no candidate RPC/function, service, hook,
+registry, UI, channel, E2E case or external movie dependency was introduced.
+Feature 001 specification artifacts and Phase 1 PNGs are unchanged.
+Only T007–T012 are newly completed; T013–T064 remain unchecked. Work stops at G2
+without a commit or push.
