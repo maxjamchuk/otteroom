@@ -1584,3 +1584,251 @@ channel, polling, movie provider or future movie interaction was introduced.
 Task descriptions remain byte-identical after normalizing checkboxes:
 **T001–T060 checked; T061–T064 unchecked**. No unresolved Phase 7 item remains.
 Branch stays `main` at the original HEAD; no commit or push was made.
+
+### 2026-09-10 — Phase 8 T061 validation
+
+**T061: PASS.** Started from clean `main` at
+`74f549bf25ce945f1aeee923422f2451367bfe8a`
+(`test: complete movie candidate acceptance`). The date uses Asia/Qyzylorda;
+execution timestamps below use UTC. The remote main ref was independently checked
+and matched this baseline. No Otteroom or managed browser container was running;
+the unrelated local Supabase project was left untouched. The requirements
+checklist passed 16/16. All required inputs were read; existing complete readings
+of unchanged task/quickstart records were retained, and T061–T064 plus both final
+validation command sequences were reread. No extension hooks are configured.
+
+| T061 command / inspection | Actual result |
+| --- | --- |
+| `npm run supabase:start` → `npm run env:local` | Exit 0 each; existing safe wrappers, ignored public environment, values withheld |
+| `npm run db:reset` | Exit 0; all five committed migrations applied |
+| `npm run db:types:check` | Exit 0; canonical artifact consistent; no write-mode generation |
+| `npm run lint` → `npm run typecheck` | Exit 0 each |
+| `npm run test:client` | Exit 0; **23 suites, 414/414 tests** |
+| `npm run db:test` | Exit 0; **588/588 assertions**, candidate 300 + Feature 001 room 288, including both real-session lock races |
+| `npm run web:export` + unchanged T047 Node inspection | Exit 0; four routes, all four distinct 240×360 PNGs within 65,536 bytes, byte-identical source/export hashes and references from the application entry |
+| Read-only post-database fixture counts | Four catalog rows; zero rooms and zero Auth users; no GoTrue signups |
+| Declaration discovery and source audit | 24 Feature 001 + F01–F08 = 32 actual cases; caps 47 + 18 = 65; no skipped/fixme/only tests; all 133 tracked files unchanged before bookkeeping |
+
+R01 canonical SHA-256 remains
+`f6b77ecf056b1ccb68f2c43a48fccde2a305a5fe8ee20d0124120050d0415a69`;
+size 7,370 bytes, mtime_ns `1788966938747066009`, ctime_ns
+`1788966940057157360`, inode `444960` are unchanged across the checks.
+The source export entry is `entry-184436202a971b126814f438c59d151b.js`;
+all-four poster hashes match the T047 table above. Existing pinned Node
+24.20.0/npm 11.19.0/Supabase CLI 2.116.0 are retained without upgrades.
+
+R02 preflight at 19:22:10 UTC found 107 measured prior Phase 7 attempts still
+inside the conservative one-hour window, plus the retained allowance of two
+manual attempts. The 131-attempt repeatability block is therefore deferred until
+at least 19:42:34 UTC, one hour after the last prior summary finalized. Waiting
+occurs outside the application, Playwright and E2E wrapper; no Auth probe, quota
+change or restart is credited as recovery. T061 consumed **zero** identities.
+The stack remains started for the following separately admitted T062 block.
+T062–T064 remain unchecked until their own evidence succeeds.
+
+### 2026-09-10 — Phase 8 repeatability attempt and admission hold
+
+T062 is not yet green. Two preparation attempts stopped before any browser
+invocation because additional, external validation assertions assumed unchanged
+Auth startup metadata and then an unchanged database container ID across
+`npm run db:reset`. These assumptions were incorrect: the pinned CLI's approved
+reset recreates the database container and restarts components while retaining
+the project network. The assertions were removed from the external observer;
+the prescribed command sequence, product, tests and configuration were not
+changed. Both preparations consumed zero signups and ran normal failure cleanup.
+`npm run playwright:install` passed once during preparation.
+
+The actual browser block was admitted at 19:51:15 UTC after the prior Phase 7
+window expired: 0 prior measured + 2 retained manual allowance + 131 reserved =
+133, within 150. Reset and check-only types passed. Its results were:
+
+| Invocation / safe report | Actual result |
+| --- | --- |
+| C1, `run-fNjTNU`, finalized 19:52:47.880680 UTC | Wrapper exit 0; A/B pass and expected controlled C failure; complete probe artifacts; zero scanner findings; 1 signup / 1 identity |
+| First complete acceptance, `run-38NkVC`, finalized 19:55:58.225918 UTC | Wrapper exit 1; 27 cases passed, including all F01–F08, followed by a runner-level failure before all 32 cases completed; zero scanner findings; 55 measured signups / 55 identities |
+| Failure-preserving shutdown | `npm run supabase:stop` exit 0; zero project runtime containers and zero managed browser containers remain |
+
+The runner termination timing is consistent with the unchanged 180,000 ms
+global Playwright deadline; C1 intentionally suppresses the raw runner error, so
+this is an inference rather than an exact error-category claim. No individual
+completed case failed and no HTTP 429 was reported. The incomplete run is not
+acceptance evidence. Its unreported remainder is conservatively charged to the
+full 65-attempt cap (up to 10 additional attempts beyond the measured 55), plus
+the measured C1 attempt. No quota credit is taken for reset or shutdown.
+The second full run and fresh checkout have not started. A repeatability retry
+requires waiting outside the harness until at least 20:55:59.225918 UTC, one hour
+after finalization plus a margin; T062–T064 remain unchecked.
+
+### 2026-09-10 — Phase 8 T062 repeatability validation
+
+**T062: PASS.** This successful, unchanged-command block supersedes the temporary
+admission hold above; the earlier failed attempt remains part of the record.
+Waiting continued outside the harness until a new admission at 20:56:43 UTC:
+0 unexpired prior attempts + 2 manual allowance + 131 reserved = **133/150**.
+Normal start/env succeeded only after that independently sufficient allowance.
+A read-only count before reset found 58 retained Auth users: one from the earlier
+C1 and 57 identities from the incomplete acceptance, compared with its 55
+finalized signup receipts. Its attempt charge remains the conservative 65;
+neither reset nor restart was credited as quota recovery.
+
+The successful block used the unchanged quickstart sequence:
+reset → check-only types → C1 → complete acceptance → reset → check-only types
+→ complete acceptance → failure-preserving shutdown. Every command exited 0.
+There was no explicit Supabase stop/start between the two complete runs. The
+project network persisted throughout; internal database/component recreation
+was solely the pinned CLI's prescribed reset behavior. Browser preparation had
+already passed once; existing installed dependencies were retained.
+
+| Invocation / finalized safe report | Cases / result | Signups / identities | Scanner findings |
+| --- | --- | --- | --- |
+| C1, `run-wkpgIu`, 20:58:59.858453 UTC | A/B pass, expected controlled C inner failure; wrapper PASS with all required probe artifacts | 1 / 1 | 0 |
+| Complete run 1, `run-kUdcyH`, 21:01:11.155558 UTC | **32/32 PASS: 24 Feature 001 + 8 Feature 002** | 65 / 65 | 0 |
+| Complete run 2, `run-HWfEa0`, 21:04:05.255774 UTC | **32/32 PASS: 24 Feature 001 + 8 Feature 002** | 65 / 65 | 0 |
+| Successful block total | No skipped, interrupted, failed or extra case in either complete run | **131 / 131** | **0** |
+
+Each complete run used workers=1, repeatEach=1, retries=0. Each had F01–F08 caps
+2/2/2/4/2/2/2/2 = 18 and the unchanged Feature 001 total 47. All safe case cleanup
+receipts passed, with no Auth budget failure. Real transport holds, fault
+routes, observers and socket controls were disposed by the existing harness;
+the managed browser container was absent after every invocation. Each invocation
+used its own finalized artifact directory and live credential-registry scan.
+Local-only movie traffic assertions and visible poster recovery passed in both
+runs; no external movie provider was required.
+
+Read-only owner observations after run 1 found 32 rooms, 66 Auth users including
+C1, 26 assigned rooms and four catalog rows. The prescribed second reset restored
+zero rooms/users/assignments and four catalog rows. After run 2 there were 32
+rooms, 65 users and 26 assignments. Every observation had zero Waiting
+assignments, zero unexpected candidate IDs and zero active candidate calls.
+The second run's separate identities/rooms and clean reset therefore did not
+depend on leftover assignment or browser state from run 1. R01 bytes and file
+metadata remained identical to the T061 canonical snapshot after both resets.
+
+The failure-preserving driver exited 0. Shutdown finalized at 21:04:14.149148 UTC;
+zero Otteroom runtime containers and zero managed browser containers remained.
+The prior runner interruption did not recur in either unchanged full run; no
+product, test, timeout, dependency or configuration fix was applied.
+
+T063 is independently deferred: 131 + 66 = 197 exceeds 150. Its conservative
+earliest admission is **22:01:12.155558 UTC**, after C1 and the first 65-attempt
+run have expired; even if the second 65 remains counted, the envelope is
+`65 + 2 manual allowance + 66 reserved = 133/150`. Waiting occurs outside the harness with the source stack
+stopped. **T001–T062 are checked; T063–T064 remain unchecked** until fresh-clone
+evidence and closure pass.
+
+### 2026-09-10 — Phase 8 T063 fresh-checkout validation
+
+**T063: PASS.** A real `git clone --single-branch --branch main` from
+`git@github.com:maxjamchuk/otteroom.git` created
+`/tmp/otteroom-phase8-fresh-4lcdc5pz` at 22:01:51 UTC. The live remote ref and the
+clean clone both resolved to the committed Phase 7 baseline
+`74f549bf25ce945f1aeee923422f2451367bfe8a`. The source worktree was not copied;
+its uncommitted Phase 8 evidence is absent from the clone. Initial node_modules,
+env, Expo/build output, Supabase temporary state and test artifacts were absent.
+
+Independent R02 admission at 22:01:24 UTC followed the outside-harness wait:
+the prior C1 and first complete run had expired; the second run remained
+conservatively counted. **65 prior + 2 manual allowance + 66 reserved = 133/150**.
+Only after admission, the two stopped disposable-project volumes
+`supabase_db_otteroom-room-session` and `supabase_storage_otteroom-room-session`
+were removed to create fresh runtime state. No source running stack, browser,
+dependencies, env, export or artifacts were reused. npm cache and pinned Docker
+images are installation inputs, separate from movie-runtime resources. Neither
+volume removal nor startup was credited as restoring quota; other projects and
+their volumes were untouched.
+
+| Fresh-clone command / inspection | Actual result |
+| --- | --- |
+| Clean checkout / exact SHA | PASS; branch main, expected committed Phase 7 SHA, no tracked changes |
+| `npm ci` | Exit 0; separate installed node_modules directory, no dependency/lockfile modification |
+| `npm run supabase:start` → `npm run env:local` | Exit 0 each; new runtime and clone-local ignored env, values withheld |
+| `npm run db:reset` | Exit 0; committed migrations and exact fixture catalog reproduced |
+| `npm run db:types:check` | Exit 0, consistent; only check mode, no intentional or manual write generation |
+| `npm run lint` → `npm run typecheck` | Exit 0 each |
+| `npm run test:client` | Exit 0; **23 suites, 414/414 tests** |
+| `npm run db:test` | Exit 0; **2 files, 588/588 assertions**, candidate 300 + room 288, including real-session concurrency |
+| `npm run web:export` + T047 command read from cloned quickstart | Exit 0 each; all four distinct local PNGs present byte-identically and referenced by the exported entry; each 240×360 and within 65,536 bytes |
+| `npm run playwright:install` | Exit 0; pinned Docker runtime preparation |
+| `npm run test:e2e:security`, `run-GBJalh`, 22:05:48.643243 UTC | Wrapper exit 0; expected controlled C-probe inner failure, complete probe artifacts, **1 signup / 1 identity**, scanner **0** |
+| Unfiltered `npm run test:e2e`, `run-fnfEEx`, 22:07:59.702618 UTC | Exit 0; **32/32 PASS: Feature 001 24/24 + Feature 002 F01–F08 8/8**; **65 signups / 65 identities**, scanner **0** |
+| Final tracked-file/type comparison | Clean clone; canonical bytes and metadata unchanged |
+| `npm run supabase:stop` / browser cleanup | Exit 0; driver exit 0; at 22:08:08.419356 UTC, zero project runtime containers and zero managed browser containers |
+
+Fresh R01 SHA-256 before check, after check and after the complete lifecycle:
+`f6b77ecf056b1ccb68f2c43a48fccde2a305a5fe8ee20d0124120050d0415a69`.
+All three snapshots retain size 7,370, mtime_ns and ctime_ns
+`1788991311115590722`, and inode `571767`. The committed canonical artifact was
+never regenerated or rewritten. All-four asset hashes match T047 and T061.
+
+Actual fresh-block consumption is **66 signups / 66 identities**, without 429,
+automatic retries or quota changes. Every complete case has a successful cleanup
+receipt and its expected signup cap. Both scanners ran after managed process and
+browser teardown using the existing live credential registry. No trace, HAR,
+video, storage-state export, raw Auth/Realtime/request dump or poster screenshot
+was enabled. Candidate metadata/assignment used local Supabase; posters were
+local bundled assets. All F-case movie-traffic guards passed, including exact
+poster failure/retry, with no external movie service or provider secret.
+
+**T001–T063 are checked.** T064 remains pending until the final source audit.
+
+### 2026-09-10 — Final G8 closure (T064)
+
+**G8: PASS. FEATURE 002 GREEN.** This final entry supersedes the historical
+pending/blocked states above without discarding their evidence. T061–T064 were
+reread against their exact command and cleanup requirements. G1–G7 evidence,
+T061's complete static/client/database/export checks, both successful T062
+complete runs and the genuine T063 fresh-clone lifecycle are green. No required
+case was skipped or substituted. The earlier incomplete attempt remains recorded
+and charged; no product or test correction was needed for the subsequent passes.
+
+Coverage reconciliation passed for **21/21 FR, 3/3 NFR, 8/8 success criteria,
+17/17 product scenarios, 2/2 stories and F01–F08**. Every existing matrix row in
+tasks.md retains its implementation/test/checkpoint links; actual unit, database,
+packaging and full browser executions supply the evidence. Browser coverage was
+repeated in both T062 runs and the fresh clone:
+
+| Browser case | Product scenarios evidenced |
+| --- | --- |
+| F01 | 1, 2, 3, 4, 5, 8, 12 |
+| F02 | 9, 10, 11 |
+| F03 | 15 |
+| F04 | 6 |
+| F05 | 7, 13 |
+| F06 | 14 |
+| F07 | 16 |
+| F08 | 17 |
+
+US1's automatic shared display/isolation/failure recovery and US2's preserved
+assignment through repeat/reload/reconnect/acquisition/poster retries are both
+demonstrated. C1 passes with zero finalized scanner findings; R01 remains check
+only with stable canonical bytes/metadata; R02 uses separately admitted windows,
+preserves the 150 limit and includes failed/prior/manual allowance. Successful
+repeatability and fresh blocks consumed **131 + 66 = 197** measured signups and
+identities across separately sufficient windows. There was no HTTP 429, automatic
+retry or reset/restart credited as quota recovery.
+
+Final source audit found all **131 protected tracked files byte-identical** to
+the starting baseline. Feature 001 code/specifications, migrations and RPC,
+generated types, original PNGs, candidate modules/UI, dependencies/lockfile,
+R01 scripts and C1 policies are unchanged. Task descriptions are identical after
+normalizing checkbox state, and quickstart changes are append-only. No new
+versionable implementation file, unresolved decision, additional candidate flow,
+movie provider, polling or Realtime channel was introduced. The application still
+has its single existing room channel. The live origin/main ref was rechecked and
+still matches the exact starting SHA; the disposable clone's tracked tree is clean.
+
+Final `git diff --check` and explicit whitespace checks pass. There are zero
+untracked versionable files to whitespace-check. Source changes are limited to
+this evidence log and the four Phase 8 task checkboxes. All Otteroom Supabase
+runtime and managed browser containers are stopped/removed, Metro port 8081 is
+closed, and unrelated services were left untouched. No fresh-clone artifact was
+created inside the source repository. No commit, push, source branch/tag change,
+generated-type write or Feature 003 work occurred.
+
+Final task state: **T001–T064 checked; zero unchecked Feature 002 tasks.** Exact
+source `git status --short`:
+
+```text
+ M specs/002-first-movie-candidate/quickstart.md
+ M specs/002-first-movie-candidate/tasks.md
+```
