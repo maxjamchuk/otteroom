@@ -896,3 +896,206 @@ versionable file, candidate client/registry/state/hook/UI, browser case,
 Realtime channel or external movie dependency was introduced.
 T001–T020 are checked; T021–T064 remain unchecked. Work stops at G4 without
 a commit or push.
+
+## Phase 5 G5 Validation Record — 2026-09-09
+
+Historical partial run, superseded by the final Phase 5 G5 Completion Record
+below after the user's explicit scope clarification.
+
+**Result: T021–T032 PASS; PHASE 5 BLOCKED on the scope of T033–T035.
+G5 is not complete.** Started with an empty `git status --short` on `main`
+at `05c863a22b7f5a8b4806e1015544298aee75b536`
+(`chore: update candidate database types`). Used installed Node v24.20.0
+and npm 11.19.0; no dependencies were installed.
+
+The execution brief explicitly prohibits a candidate-card component, Image
+rendering, and poster retry UI in this phase. Committed T033–T035 require that
+standalone card and its component tests, and G5 requires those tests. A scope
+clarification was requested; no answer has been received. Those tasks were
+not executed, the plan/task descriptions were not rewritten, and neither
+T033–T035 nor the complete G5 task T036 is checked. The passing commands below
+are evidence for the implemented client layer, not evidence of a complete G5.
+
+### Candidate Client Evidence
+
+The following tests were added before their corresponding implementation.
+Initial focused runs failed because the new module was absent; each focused
+suite subsequently passed. T031 then expanded the hook's deferred-completion
+and retry coverage before the final regression run.
+
+| Tasks | New implementation and test paths | Passing tests |
+| --- | --- | --- |
+| T021–T022 | `src/candidates/contracts.ts`; `__tests__/candidates/contracts.test.ts` | 32 |
+| T023–T024 | `src/candidates/service.ts`; `__tests__/candidates/service.test.ts` | 15 |
+| T025–T026 | `src/candidates/posters.ts`; `__tests__/candidates/posters.test.ts` | 3 |
+| T027–T028 | `src/candidates/state.ts`; `__tests__/candidates/state.test.ts` | 21 |
+| T029–T032 | `src/candidates/use-room-candidate.ts`; `__tests__/candidates/use-room-candidate.test.ts` | 23 |
+
+- The parser requires one row with exactly five keys, closed outcomes, valid
+  available fields, and four explicit nulls for not_ready/not_found. Generated
+  SQL nullability is not trusted; malformed data yields fixed safe errors.
+- The service awaits the existing shared anonymous bootstrap and calls only
+  the typed ensure_room_candidate RPC with p_room_id. Auth, transport, database
+  and parsing failures become a fixed CandidateServiceError without raw details.
+- The registry contains exactly four literal requires of the committed PNGs.
+  Tests preserve both native numeric and web object source forms, reject unknown
+  keys, and check exact file mappings. The unchanged six-test asset suite also
+  passes: all four PNGs remain valid, 240×360 and within 65,536 bytes.
+- Pure state anchors the first metadata before image loading and rejects later
+  differing metadata without replacement. Only a current onLoad marks success;
+  acquisition and poster failures/retries have separate attempt transitions.
+- Hook tests prove Waiting/absent-room zero requests, automatic Ready acquisition
+  for either role, one in-flight request across rerenders and actual Strict Mode
+  effect replay, and retained success/callbacks through same-room Ready refetches.
+  Root StrictMode is used as the test wrapper, with observed repeated effect
+  setup/cleanup; the initial nested wrapper did not exercise the required replay
+  and was corrected. See the [React Strict Mode reference](https://react.dev/reference/react/StrictMode).
+- Deferred promises exercise retired room success/failure, A → B → A generations,
+  current retry versus obsolete completions, render-time ownership, cleanup and
+  old image callbacks. Explicit retries retain the same room; poster retries
+  preserve metadata/source and cause no candidate request or Auth bootstrap.
+  Reconnect-equivalent refetches neither reacquire nor automatically retry.
+
+These are isolated client tests using existing test-double conventions. They do
+not claim real RPC response-loss, browser reconnect, visible poster loading or
+cross-participant database acceptance.
+
+### Validation Commands and R01
+
+| Command / inspection | Actual result |
+| --- | --- |
+| `npm run supabase:start` → `npm run env:local` | Exit 0 each; required by the existing T036 check-only type path; safe wrapper, ignored public environment values withheld |
+| `npm run db:types:check` | Exit 0, consistent; no write generation or reset |
+| `npm run lint` | Final run exit 0, no warnings |
+| `npm run typecheck` | Exit 0 |
+| `npm run test:client` | Final run exit 0: 22/22 suites, 376/376 tests (282 existing + 94 new) |
+| `npm run web:export` | Exit 0; existing application exports to ignored `dist/`, with `/`, `/_sitemap`, `/+not-found`, `/room/[code]` routes |
+| `npm run supabase:stop` | Exit 0; no project containers remain running |
+| `git diff --check` and new-file whitespace inspection | PASS |
+
+The first lint pass reported an unnecessary useMemo dependency warning. The
+poster descriptor now owns its explicit attempt, used in the image key while
+preserving same-key resolution on retry. Lint, typecheck and all client tests
+were rerun successfully after that correction. No lint suppression was added.
+
+Canonical `src/types/database.generated.ts` SHA-256 remains
+`f6b77ecf056b1ccb68f2c43a48fccde2a305a5fe8ee20d0124120050d0415a69`.
+Bytes, mtime and inode were unchanged across check-only validation and the
+command sequence; no temporary generated-type file remains. Actual canonical
+write-generation commands in this phase: **0**; real check commands: **1**.
+
+### Applicability and Scope Protection
+
+This slice validates the isolated candidate client layer and existing client
+regressions/export. Candidate bundle inclusion remains unproven until a screen
+imports the registry. No card/component rendering test, browser E2E, C1 run,
+database reset/test, fresh-checkout trial or manual browser acceptance was run.
+Complete G5 is blocked as described above; later real-stack/fresh-checkout
+acceptance remains in its approved phases. GoTrue signup attempts: **0**.
+No R02 quota, browser capture or credential-safe diagnostics setting changed.
+
+All 116 tracked files other than tasks.md and this quickstart remain
+byte-identical to the starting HEAD, including Feature 001 implementation and
+specifications, PNGs, migrations/RPC, database tests, generated types, dependency
+manifests/lockfile and R01 scripts. The only new files are the five client modules
+and five tests listed above. No candidate UI, another Realtime channel, polling,
+direct catalog/assignment read, external movie source or dependency was added.
+
+Only T021–T032 are newly checked: T001–T032 checked, **T033–T064 unchecked**.
+T037 and later were not executed. No commit or push was performed.
+
+## Phase 5 G5 Completion Record — 2026-09-09
+
+**Result: G5 PASS; PHASE 5 GREEN; T021–T036 complete.** The user clarified
+that committed T033–T035 authorize the standalone card and its component tests;
+only room-screen integration remains excluded until phase 6. There is no
+remaining scope conflict. This final record supersedes the temporary blocked
+result above without discarding its T021–T032 evidence.
+
+Continued on `main` at `05c863a22b7f5a8b4806e1015544298aee75b536` with the
+existing Phase 5 work intact. All ten earlier client/test files are byte-identical
+to their continuation-start snapshots. No earlier task was reverted or redone,
+and no upstream planning artifact was modified. Runtime remains the installed
+Node v24.20.0 and npm 11.19.0; no dependencies were installed.
+
+### T033–T035 Component Evidence
+
+- Added `__tests__/candidates/candidate-card.test.tsx` before the component:
+  eight baseline cases for inactive rooms, acquisition loading, title/year/local
+  source/accessibility/bounds, onLoad-only completion, and safe transport/
+  not_ready/not_found errors with explicit same-room retry.
+- Extended that test file before implementation with six cases for poster
+  error/retry, unknown keys, recoverable configuration failure, stable Image
+  callbacks/refetches, retired-room Image callbacks, and error after successful
+  display. Both pre-implementation focused runs failed on the missing component.
+- Added only `src/candidates/candidate-card.tsx`: a standalone presentation
+  component receiving the existing hook model. It renders no inactive card,
+  shows title/year and the unchanged registered Image source, bounds the poster
+  to width 240 with 2:3 aspect ratio, provides title-derived accessible text,
+  and uses the approved generic loading/error/retry copy. Internal candidate
+  IDs and future movie controls are absent from rendered content.
+- Tests exercise the real card, hook, state, registry, service and parser with
+  test doubles only at shared Auth/Supabase boundaries. On poster failure they
+  retain the metadata object and visible title/year; pressing Retry candidate
+  replaces the mounted Image instance while retaining the exact source, advances
+  only posterAttempt and leaves candidate RPC/Auth-bootstrap counts at one.
+  Old onLoad/onError callbacks cannot affect the replacement. Remount and
+  onLoadEnd alone remain loading; the current Image onLoad completes recovery.
+- Unknown keys retain metadata with a generic error and no substitute Image;
+  retry never reacquires the candidate. A controlled registry failure recovers
+  through the same key and current Image onLoad. Repeated Ready refetches keep
+  the mounted Image, callbacks and successful model stable.
+- The first implementation run passed 12 cases; two assertions used a matcher
+  unavailable in the installed testing library. They were corrected to the
+  supported toHaveProp check for the same accessibilityState values. Focused
+  final result: **14/14 PASS**, with no changes to T021–T032 implementation.
+
+These component tests dispatch Image events through the rendered component;
+they do not claim browser decoding, real network recovery or F01–F08 acceptance.
+
+### Complete T036 Command Results
+
+| Command / inspection | Actual result |
+| --- | --- |
+| `npm run supabase:start` → `npm run env:local` | Exit 0 each; existing safe setup for the local check-only type path; ignored public values withheld |
+| `npm run db:types:check` | Exit 0, consistent; no canonical write or database reset |
+| `npm run lint` | Exit 0, no warnings |
+| `npm run typecheck` | Exit 0 |
+| `npm run test:client` | Exit 0: **23/23 suites, 390/390 tests**; 282 baseline + 94 earlier Phase 5 + 14 card cases |
+| `npm run web:export` | Exit 0; four existing routes exported to ignored `dist/`; unchanged application web entry bundle |
+| `npm run supabase:stop` | Exit 0; no project containers remain running |
+| `git diff --check` and whitespace checks on all new files | PASS |
+
+All seven candidate suites pass, including the unchanged Phase 1 asset suite
+and all-four registry/native-number/web-object source checks. Every committed
+PNG remains valid, exactly 240×360, within 65,536 bytes and byte-identical to HEAD.
+The existing room/auth/config/route client suites are green. Application bundle
+inclusion of candidate posters is still deferred until phase 6 imports the
+registry into the room application, as required by T036.
+
+R01: canonical SHA-256 remains
+`f6b77ecf056b1ccb68f2c43a48fccde2a305a5fe8ee20d0124120050d0415a69`;
+bytes, mtime and inode are unchanged across the complete checkpoint, and no
+temporary generated-type file remains. This continuation ran one check command;
+total real Phase 5 check commands: **2**, canonical write commands: **0**.
+Supabase shutdown ran in finally. Actual GoTrue signup attempts: **0**.
+
+### Final Scope and Applicability
+
+The complete Phase 5 change consists of six new candidate modules/components,
+six new candidate test files, task checkboxes and these quickstart records.
+All 116 other tracked files remain byte-identical to the initial Phase 5 HEAD:
+Feature 001 implementation/specifications, application routes, migrations/RPC,
+database tests, generated types, dependencies, PNGs and R01 scripts.
+
+No room page imports the card or candidate hook. No candidate-specific channel,
+polling, direct catalog read, external movie source or future interaction was
+added. Browser/C1 acceptance and F01–F08 were not run; diagnostics settings and
+R02 quota were unchanged. Database tests/reset are not applicable to this client
+slice because no schema/RPC changed. Fresh installation/checkout and manual
+room/browser acceptance remain in the approved later phases: dependencies/setup
+are unchanged and this standalone component has no application route yet.
+
+Only after all checks passed were T033–T036 checked. Final state:
+**T001–T036 checked; T037–T064 unchecked.** No Phase 6 task, commit or push
+was performed. Phase 5 is ready for review before commit.
