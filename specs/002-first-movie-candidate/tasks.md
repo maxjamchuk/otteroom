@@ -128,9 +128,9 @@ The only new public application RPC is `public.ensure_room_candidate(p_room_id u
 
 **Purpose**: Perform the one intentional R01 update after the public database contract is final.
 
-- [ ] T019 Run the intentional R01 sequence `npm run db:reset`, `npm run db:types`, then `npm run db:types:check`; review the catalog, nullable room FK relationship, and RPC additions in canonical `src/types/database.generated.ts`. Perform this intentional write once after G3, never hand-edit output, and retain `scripts/database-types.mjs` semantics and the existing package scripts.
+- [x] T019 Run the intentional R01 sequence `npm run db:reset`, `npm run db:types`, then `npm run db:types:check`; review the catalog, nullable room FK relationship, and RPC additions in canonical `src/types/database.generated.ts`. Perform this intentional write once after G3, never hand-edit output, and retain `scripts/database-types.mjs` semantics and the existing package scripts.
 
-- [ ] T020 Record the canonical artifact hash, run a subsequent `npm run db:reset` followed only by `npm run db:types:check`, then lint/typecheck/client tests through the existing `package.json` scripts; require `src/types/database.generated.ts` unchanged and `__tests__/config/database-types.test.ts` green. Record G4 and the intentional-versus-check-only boundary in `specs/002-first-movie-candidate/quickstart.md`; any drift blocks client work.
+- [x] T020 Record the canonical artifact hash, run a subsequent `npm run db:reset` followed only by `npm run db:types:check`, then lint/typecheck/client tests through the existing `package.json` scripts; require `src/types/database.generated.ts` unchanged and `__tests__/config/database-types.test.ts` green. Record G4 and the intentional-versus-check-only boundary in `specs/002-first-movie-candidate/quickstart.md`; any drift blocks client work.
 
 **Checkpoint G4**: The reviewed canonical types survive a subsequent clean reset and check-only validation unchanged, ready for client work.
 

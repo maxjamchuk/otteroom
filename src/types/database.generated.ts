@@ -9,6 +9,30 @@ export type Json =
 export type Database = {
   public: {
     Tables: {
+      movie_candidates: {
+        Row: {
+          id: string
+          poster_key: string
+          release_year: number
+          sort_order: number
+          title: string
+        }
+        Insert: {
+          id: string
+          poster_key: string
+          release_year: number
+          sort_order: number
+          title: string
+        }
+        Update: {
+          id?: string
+          poster_key?: string
+          release_year?: number
+          sort_order?: number
+          title?: string
+        }
+        Relationships: []
+      }
       rooms: {
         Row: {
           code: string
@@ -17,6 +41,7 @@ export type Database = {
           guest_user_id: string | null
           host_user_id: string
           id: string
+          movie_candidate_id: string | null
           state: string
           updated_at: string
         }
@@ -27,6 +52,7 @@ export type Database = {
           guest_user_id?: string | null
           host_user_id: string
           id?: string
+          movie_candidate_id?: string | null
           state?: string
           updated_at?: string
         }
@@ -37,10 +63,19 @@ export type Database = {
           guest_user_id?: string | null
           host_user_id?: string
           id?: string
+          movie_candidate_id?: string | null
           state?: string
           updated_at?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "rooms_movie_candidate_id_fkey"
+            columns: ["movie_candidate_id"]
+            isOneToOne: false
+            referencedRelation: "movie_candidates"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Views: {
@@ -56,6 +91,16 @@ export type Database = {
           room_code: string
           room_id: string
           room_state: string
+        }[]
+      }
+      ensure_room_candidate: {
+        Args: { p_room_id: string }
+        Returns: {
+          candidate_id: string
+          outcome: string
+          poster_key: string
+          release_year: number
+          title: string
         }[]
       }
       join_room: {

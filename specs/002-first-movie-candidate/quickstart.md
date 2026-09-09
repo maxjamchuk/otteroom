@@ -775,3 +775,124 @@ the starting HEAD.
 
 Only T013–T018 are newly checked: T001–T018 complete, T019–T064 unchecked.
 Implementation stops at G3 without a commit or push.
+
+## Phase 4 G4 Validation Record — 2026-09-09
+
+**Result: G4 PASS; scope T019–T020 only.** Started with an empty
+`git status --short` on `main` at
+`f2aa8308626ef6f9825bcde40ad8a01f893d6d6f`
+(`feat: add room candidate assignment rpc`). Read all required inputs and the
+current migrations/type infrastructure. Used installed Node v24.20.0,
+npm 11.19.0 and project Supabase CLI 2.116.0. No dependencies were installed.
+
+The starting canonical `src/types/database.generated.ts` SHA-256 was
+`46f41c3ca2a88d65a2604f449b17aa10c36b535c8ee0a67047683fb37f80fb4b`.
+Both resets replayed exactly the five committed migrations through
+`20260909000001_room_candidate_rpc.sql`; no manual schema SQL was applied.
+
+| Command / inspection, in execution order | Actual result |
+| --- | --- |
+| `npm run supabase:start` → `npm run env:local` | Exit 0 each; safe wrapper and ignored public environment, values withheld |
+| First `npm run db:reset` | Exit 0; clean committed schema/RPC baseline |
+| `npm run db:types` | Exit 0, `written`; exactly one intentional canonical generation |
+| Immediate `npm run db:types:check` | Exit 0, `consistent`; canonical bytes, metadata and scoped Git diff unchanged |
+| Generated diff and read-only PostgreSQL metadata inspection | Only the approved catalog, nullable room FK and candidate RPC additions; exact schema/signature confirmed |
+| Second `npm run db:reset` → `npm run db:types:check` | Exit 0 each, `consistent`; no intervening write generation; T020 stability evidence below |
+| `npm run lint` | Exit 0 |
+| `npm run typecheck` | Exit 0 |
+| `npm run test:client` | Exit 0: 17/17 suites, 282/282 tests; includes all 8 existing database-types tests |
+| `npm run supabase:stop` | Exit 0; no project containers remain running |
+| `git diff --check` | PASS |
+
+### Generated Surface Review
+
+- `movie_candidates.Row` and `.Insert` have exactly five required, non-null
+  fields: id/title/poster_key are string, release_year/sort_order are number.
+  `.Update` makes those same fields optional without adding null. This matches
+  the five NOT NULL columns without defaults; Relationships is empty.
+- `rooms.Row.movie_candidate_id` is `string | null`; Insert and Update expose
+  `movie_candidate_id?: string | null`. The generated relationship names
+  `rooms_movie_candidate_id_fkey`, references movie_candidates.id and has
+  `isOneToOne: false`, consistent with multiple rooms sharing one fixture.
+- `ensure_room_candidate.Args` is `{ p_room_id: string }`. Returns is an array
+  of exactly candidate_id/outcome/poster_key/title as string and release_year
+  as number. The pinned generator emits no `| null` or closed outcome union for
+  this RETURNS TABLE result. This is the limitation explicitly anticipated by
+  the RPC contract and plan; runtime logical-nullability validation belongs to
+  Phase 5. The generated output was not manually corrected.
+- Existing create_room/join_room signatures, prior room fields, generic helpers
+  and other public sections remain unchanged. No unexpected public surface was
+  added. The live metadata inspection found only the two approved public tables
+  and three application RPCs, four catalog rows, zero rooms and zero Auth users.
+
+### R01 Check-Only Stability
+
+T020 captured the canonical artifact after T019, then compared it after the
+second clean reset/check and again after lint/typecheck/client tests:
+
+| Measurement | Before T020 reset | After reset/check and regressions |
+| --- | --- | --- |
+| SHA-256 | `f6b77ecf056b1ccb68f2c43a48fccde2a305a5fe8ee20d0124120050d0415a69` | `f6b77ecf056b1ccb68f2c43a48fccde2a305a5fe8ee20d0124120050d0415a69` |
+| File bytes | 7,370 | 7,370 |
+| mtime_ns | `1788966938747066009` | `1788966938747066009` |
+| ctime_ns | `1788966940057157360` | `1788966940057157360` |
+| inode | `444960` | `444960` |
+| Scoped binary Git diff SHA-256 | `45a3b83265cd331182c40c4ab7854df2cfd83f812c8c1762466f03efaf460da5` | `45a3b83265cd331182c40c4ab7854df2cfd83f812c8c1762466f03efaf460da5` |
+
+The complete Git diff also remained byte-identical during T020 and its
+regressions. No `.database.generated.*.tmp` files remained. This record and the
+two task-checkbox updates were added after that successful comparison.
+The immediate T019 check preserved the same canonical metadata as well.
+Total actual canonical write commands: **1**; real check commands: **2**.
+Existing database-types unit tests use synthetic output in disposable temporary
+directories and do not regenerate the repository artifact.
+
+The normal validation measurement can be reproduced with the pinned runtime
+and a started local stack, using the existing failure-preserving shutdown
+discipline. The following block performs only reset/check and stops the stack
+on success or failure:
+
+```sh
+python3 - <<'PY'
+from pathlib import Path
+import hashlib
+import subprocess
+
+p = Path('src/types/database.generated.ts')
+def snapshot():
+    data, stat = p.read_bytes(), p.stat()
+    diff = subprocess.check_output(['git', 'diff', '--binary'])
+    return (hashlib.sha256(data).hexdigest(), len(data), stat.st_mtime_ns,
+            stat.st_ctime_ns, stat.st_ino, diff)
+
+try:
+    before = snapshot()
+    subprocess.run(['npm', 'run', 'db:reset'], check=True)
+    subprocess.run(['npm', 'run', 'db:types:check'], check=True)
+    assert snapshot() == before
+    assert not list(p.parent.glob('.database.generated.*.tmp'))
+    print('G4 check-only PASS: canonical content, metadata and Git diff unchanged')
+finally:
+    subprocess.run(['npm', 'run', 'supabase:stop'], check=True)
+PY
+```
+
+### G4 Applicability and Scope Protection
+
+Under Constitution I, this slice reproduces intentional generation from the
+committed local schema and subsequent non-mutating validation, then checks
+existing TypeScript/client compatibility. Fresh install/clone, application
+startup/build/export, browser acceptance and another pgTAP run are not
+applicable to G4: T020 requires reset/type checks plus lint/typecheck/client
+tests; no migration, RPC, runtime application, dependency or setup contract
+changed. Full fresh-checkout evidence remains T063. No candidate display or
+browser acceptance result is claimed. GoTrue signup attempts: **0**.
+
+Changes are limited to the canonical generated types, T019/T020 checkboxes and
+this record. All 115 other tracked files remain byte-identical to the starting
+HEAD, including Phase 1 PNGs, Phase 2/3 migrations, database tests, Feature 001
+implementation/specification artifacts, dependencies and R01 scripts. No new
+versionable file, candidate client/registry/state/hook/UI, browser case,
+Realtime channel or external movie dependency was introduced.
+T001–T020 are checked; T021–T064 remain unchecked. Work stops at G4 without
+a commit or push.
