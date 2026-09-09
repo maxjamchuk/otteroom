@@ -170,3 +170,19 @@ describe('repository-owned Playwright runtime', () => {
     assert.equal(timed, 124);
   `));
 });
+
+it('Phase 6 discovery retains serial default acceptance and bounded runtime invocation options', () => verify(prelude + `
+  const { default: config } = await import('./playwright.config.ts');
+  const { parseInvocation } = await import('./scripts/run-e2e.mjs');
+  assert.deepEqual(config.projects.find(p => p.name === 'acceptance').testMatch,
+    ['room-session.spec.ts', 'first-movie-candidate.spec.ts']);
+  assert.equal(config.workers, 1); assert.equal(config.repeatEach, 1); assert.equal(config.retries, 0);
+  assert.equal(config.reporter[0][0], './e2e/support/safe-reporter.ts');
+  for (const field of ['trace', 'video', 'screenshot']) assert.equal(config.use[field], 'off');
+  assert.deepEqual(parseInvocation(['acceptance', '--grep', 'F01']).forwarded, ['--grep', 'F01']);
+  assert.deepEqual(parseInvocation(['acceptance', '--workers=2', '--repeat-each=2']).forwarded,
+    ['--workers', '2', '--repeat-each', '2']);
+  for (const args of [['acceptance', 'first-movie-candidate.spec.ts'], ['acceptance', '--workers=5'],
+    ['acceptance', '--repeat-each=4'], ['acceptance', '--retries=1'], ['security', '--grep', 'F01']])
+    assert.throws(() => parseInvocation(args));
+`));

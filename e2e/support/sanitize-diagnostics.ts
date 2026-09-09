@@ -95,3 +95,9 @@ export class DiagnosticBuffer {
 
   text(): string { return this.#records.join('\n'); }
 }
+
+// Only reviewed test files and numeric locations may survive an error boundary.
+// Input/stack contents and arbitrary paths never become diagnostic labels.
+export function safeDiagnosticLocation(value: string): string | undefined {
+  return value.match(/e2e\/(?:diagnostics\/credential-safety\.spec|room-session\.spec|first-movie-candidate\.spec|support\/(?:safe-diagnostics|room-harness|candidate-harness))\.ts:\d{1,5}:\d{1,5}/)?.[0];
+}

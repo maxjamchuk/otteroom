@@ -1,6 +1,8 @@
 import { Link, router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text } from 'react-native';
+import { CandidateCard } from '../../src/candidates/candidate-card';
+import { useRoomCandidate } from '../../src/candidates/use-room-candidate';
 import { invitationLink, parseRoomSegment } from '../../src/rooms/code';
 import { joinRoom } from '../../src/rooms/service';
 import { joinRoomState, joinErrorState, malformedInvitationState, type AcceptedRoomState } from '../../src/rooms/state';
@@ -22,7 +24,7 @@ export default function RoomRouteScreen() {
   }, [path, replace]);
 
   return (
-    <View style={styles.container}>
+    <ScrollView contentContainerStyle={styles.container}>
       {!route ? <Text accessibilityLiveRegion="polite">{malformedInvitationState().message}</Text>
         : failedPath === path ? <>
           <Text accessibilityLiveRegion="polite">{joinErrorState().message}</Text>
@@ -32,7 +34,7 @@ export default function RoomRouteScreen() {
         </> : replace ? <Text accessibilityLiveRegion="polite">Loading room…</Text>
           : <RoomEntry key={route.code} code={route.code} />}
       <Link href="/" replace style={styles.link}>Back to home</Link>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -75,6 +77,7 @@ function AcceptedRoom({ initial }: { initial: AcceptedRoomState & { invitation?:
   const { room, error, retry, retrying } = useRoomSubscription(initial);
   // An accepted RPC is immediately visible, including guest Ready before binding.
   const state = room ?? initial;
+  const candidate = useRoomCandidate(state);
   return <>
     <Text accessibilityRole="header" style={styles.title}>{state.title}</Text>
     <Text accessibilityLabel="Room code" selectable>{state.code}</Text>
@@ -89,11 +92,12 @@ function AcceptedRoom({ initial }: { initial: AcceptedRoomState & { invitation?:
         <Text>{retrying ? 'Reconnecting…' : 'Retry synchronization'}</Text>
       </Pressable>
     </>}
+    <CandidateCard model={candidate} />
   </>;
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: 'center', padding: 24, gap: 20 },
+  container: { flexGrow: 1, justifyContent: 'center', padding: 24, gap: 20 },
   title: { fontSize: 28, fontWeight: '600' },
   link: { color: '#2457A7', fontSize: 18, paddingVertical: 12 },
 });

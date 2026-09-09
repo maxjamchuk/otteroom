@@ -3,7 +3,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CredentialRegistry, registerCredentials, registerPng } from './credential-registry.ts';
-import { containsCredential, DiagnosticBuffer } from './sanitize-diagnostics.ts';
+import { containsCredential, DiagnosticBuffer, safeDiagnosticLocation } from './sanitize-diagnostics.ts';
 import { validPng } from '../../scripts/check-e2e-artifacts.mjs';
 
 export function validateContextOptions(options: BrowserContextOptions): void {
@@ -16,7 +16,7 @@ export function safeError(error?: unknown): Error {
   const controlled = error instanceof Error && error.message === 'CONTROLLED_AUTH_DIAGNOSTIC_FAILURE';
   // Retain only a checked source filename plus numeric location, never raw stack text.
   const location = error instanceof Error ?
-    (error.message + '\n' + error.stack).match(/e2e\/(?:diagnostics\/credential-safety\.spec|room-session\.spec|support\/safe-diagnostics)\.ts:\d{1,5}:\d{1,5}/)?.[0] : undefined;
+    safeDiagnosticLocation(error.message + '\n' + error.stack) : undefined;
   const result = new Error(controlled ? 'CONTROLLED_AUTH_DIAGNOSTIC_FAILURE' : 'E2E_SAFE_FAILURE' + (location ? ' at ' + location : ''));
   // Never retain original matcherResult, cause, stack, DOM or source location.
   result.stack = `Error: ${result.message}\n    at safeError (e2e/support/safe-diagnostics.ts:18:1)`;
@@ -201,7 +201,7 @@ export class SafeDiagnostics {
     await this.flush();
     if (this.#signups !== attempts || this.#identities.size !== identities || this.#signups > this.#signupCap) throw safeError();
     this.#info.annotations.push({ type: 'safe-auth-success', description: 'confirmed' });
-    await this.record({ component: 'anonymous-auth', status: this.#authStatus, outcome: `attempts=${attempts}; identities=${identities}; acceptance-N=47; local-limit=150` });
+    await this.record({ component: 'anonymous-auth', status: this.#authStatus, outcome: `attempts=${attempts}; identities=${identities}; acceptance-N=49; local-limit=150` });
   }
 
   stage(value: 'config' | 'capture-guards' | 'ui' | 'sanitizer' | 'scanner' | 'cleanup'): void {
@@ -264,6 +264,36 @@ export class SafeDiagnostics {
   async assertNoCredentialUi(): Promise<void> {
     const inspected = await this.#inspect();
     if (!inspected.safe) throw safeError();
+  }
+
+  // Ordinary UI inspection permits bundled images, but grants no capture rights.
+  // Inspect hidden attributes too; return only bounded values to the same private
+  // registry/sanitizer boundary. Never persist DOM, image bytes or request data.
+  async assertNoCredentialTextUi(): Promise<void> {
+    await this.flush();
+    const result = await this.page.evaluate(() => {
+      const all = [...document.querySelectorAll('*')];
+      if (all.length > 5000) return { complete: false, values: [] };
+      const values: string[] = [];
+      let bytes = 0;
+      const encoder = new TextEncoder();
+      const append = (value: string) => {
+        if (value.length > 1048576 || values.length >= 20000) return false;
+        bytes += encoder.encode(value).byteLength;
+        if (bytes > 1048576) return false;
+        values.push(value); return true;
+      };
+      if (!append(document.body?.innerText ?? '') || !append(document.title)) return { complete: false, values: [] };
+      for (const element of all) {
+        if ((element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) &&
+          !append(element.value)) return { complete: false, values: [] };
+        for (const attribute of element.attributes) if (!append(attribute.value)) return { complete: false, values: [] };
+      }
+      return { complete: true, values };
+    });
+    const safe = result.complete && inspectUiValues(result.values, this.#registry.values());
+    this.#info.annotations.push({ type: 'safe-ui-result', description: !result.complete ? 'incomplete' : safe ? 'safe' : 'credential' });
+    if (!safe) throw safeError();
   }
 
   async captureControlledFailure(error: unknown): Promise<void> {
@@ -365,7 +395,7 @@ export const test = base.extend<{ diagnostics: SafeDiagnostics }>({
 // Test and hook bodies cross this boundary BEFORE Playwright records an exception.
 // No soft assertions, raw attachments or secret-bearing test/step titles are allowed.
 export async function safeBody(diagnostics: SafeDiagnostics, body: () => Promise<void>): Promise<void> {
-  try { await body(); await diagnostics.assertNoCredentialUi(); await diagnostics.flush(); }
+  try { await body(); await diagnostics.assertNoCredentialTextUi(); await diagnostics.flush(); }
   catch (error) {
     try { await diagnostics.flush(); } catch { throw safeError(); }
     if (error instanceof Error && error.message === 'CONTROLLED_AUTH_DIAGNOSTIC_FAILURE') {

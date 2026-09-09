@@ -108,3 +108,44 @@ describe('bounded credential-safe PNG capture', () => {
     assert.equal(registry.size, 0); assert.equal(fs.existsSync(path.dirname(server.endpoint)), false);
   `));
 });
+
+it('ordinary image-bearing UI never grants screenshot eligibility for img, CSS backgrounds or SVG', () => verify(`
+  const { SafeDiagnostics } = await import('./e2e/support/safe-diagnostics.ts');
+  const registry = new CredentialRegistry(); const server = await startRegistryServer(registry);
+  process.env.OTTEROOM_CREDENTIAL_SOCKET = server.endpoint;
+  globalThis.window = { __otteroomMutationEpoch: 1 };
+  Object.assign(globalThis, { innerWidth: 800, innerHeight: 600, scrollX: 0, scrollY: 0, devicePixelRatio: 1 });
+  globalThis.HTMLInputElement = class {}; globalThis.HTMLTextAreaElement = class {}; globalThis.HTMLSelectElement = class {};
+  let visual = 'img', secret = 'synthetic-' + randomUUID(), leaked = false;
+  const element = { localName: 'img', attributes: [{ value: '/assets/local.png' }],
+    matches: () => visual !== 'background', getAnimations: () => [], checkVisibility: () => true,
+    getBoundingClientRect: () => ({ width: 240, height: 360, left: 0, top: 0, right: 240, bottom: 360 }) };
+  globalThis.getComputedStyle = () => ({ backgroundImage: visual === 'background' ? 'url(/assets/local.png)' : 'none' });
+  globalThis.document = { title: 'Ready', body: { get innerText() { return leaked ? secret : 'The Cardboard Comet 2020'; } }, querySelectorAll: () => [element] };
+  let captured = 0, closed = 0;
+  const page = { evaluate: async fn => fn(), screenshot: async () => { captured++; return png(); } };
+  const context = { tracing: {}, request: {}, addInitScript: async () => {}, newPage: async () => page,
+    on: () => {}, removeListener: () => {}, route: async () => {}, unrouteAll: async () => {}, close: async () => { closed++; } };
+  const d = await SafeDiagnostics.create(context, {}, { title: 'synthetic', annotations: [] });
+  try {
+    await d.register([secret]);
+    for (visual of ['img', 'background', 'svg']) {
+      element.localName = visual;
+      await d.assertNoCredentialTextUi();
+      await assert.rejects(d.assertNoCredentialUi(), /E2E_SAFE_FAILURE/);
+      await assert.rejects(page.screenshot(), /E2E_SAFE_FAILURE/);
+    }
+    leaked = true;
+    await assert.rejects(d.assertNoCredentialTextUi(), /E2E_SAFE_FAILURE/);
+    leaked = false; element.attributes = [{ value: secret }];
+    await assert.rejects(d.assertNoCredentialTextUi(), /E2E_SAFE_FAILURE/);
+    element.attributes = [{ value: '€'.repeat(400000) }];
+    await assert.rejects(d.assertNoCredentialTextUi(), /E2E_SAFE_FAILURE/);
+    element.attributes = Array(20001).fill({ value: 'safe' });
+    await assert.rejects(d.assertNoCredentialTextUi(), /E2E_SAFE_FAILURE/);
+    element.attributes = []; document.querySelectorAll = () => Array(5001).fill(element);
+    await assert.rejects(d.assertNoCredentialTextUi(), /E2E_SAFE_FAILURE/);
+    assert.equal(captured, 0);
+  } finally { await d.close(); await server.close(); registry.clear(); }
+  assert.equal(closed, 1); assert.equal(registry.size, 0);
+`));

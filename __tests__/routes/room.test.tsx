@@ -2,7 +2,9 @@ import { act, fireEvent, renderRouter, screen } from 'expo-router/testing-librar
 import { router } from 'expo-router';
 import { StrictMode, useEffect } from 'react';
 import RoomRouteScreen from '../../app/room/[code]';
-const mockJoin = jest.fn();
+const mockJoin = jest.fn(), mockEnsureCandidate = jest.fn();
+const candidate = { candidate_id: 'fixture-cardboard-comet', title: 'The Cardboard Comet', release_year: 2020, poster_key: 'cardboard-comet' };
+jest.mock('../../src/candidates/service', () => ({ ensureRoomCandidate: (id: string) => mockEnsureCandidate(id) }));
 const mockRefetch = jest.fn(), mockBootstrap = jest.fn(), mockRemove = jest.fn();
 type TestChannel = { on: jest.Mock; subscribe: jest.Mock; status: (value: string) => void; update: () => void; system: (payload: unknown) => void };
 const channels: TestChannel[] = [];
@@ -17,6 +19,7 @@ jest.mock('../../src/auth/anonymous-session', () => ({ bootstrapAnonymousSession
 jest.mock('../../src/lib/supabase', () => ({ getSupabase: () => ({ channel: mockChannel, removeChannel: mockRemove }) }));
 const host = { outcome: 'already_member', room_id: '11111111-1111-4111-8111-111111111111', room_code: 'ABCDEF0123', room_state: 'waiting', participant_role: 'host', participant_count: 1 };
 beforeEach(() => {
+  mockEnsureCandidate.mockReset().mockResolvedValue({ outcome: 'available', ...candidate });
   jest.clearAllMocks(); channels.length = 0; mockJoin.mockReset().mockResolvedValue(host);
   mockBootstrap.mockReset().mockResolvedValue({ user: { id: 'retained' } });
   mockRefetch.mockReset().mockResolvedValue({ id: host.room_id, code: host.room_code, state: 'ready' });
@@ -48,7 +51,7 @@ it('renders loading without room data while bootstrap/transport is pending', asy
   await act(async () => { resolve(host); });
   expect(screen.getByText('Waiting')).toBeVisible();
 });
-it('renders authoritative host Ready on recovery without post-Ready behavior', async () => {
+it('renders authoritative host Ready on recovery', async () => {
   mockJoin.mockResolvedValue({ ...host, room_state: 'ready', participant_count: 2 });
   await mount();
   expect(screen.getByText('Ready')).toBeVisible();
@@ -218,4 +221,105 @@ it('transport-only join keeps Waiting; system-error is generic and system-ok rec
   await act(async () => { channels[0].system({ extension: 'postgres_changes', status: 'ok' }); });
   expect(screen.getByText('Ready')).toBeVisible(); expect(mockJoin).toHaveBeenCalledTimes(1);
   expect(screen.queryByText('Unable to synchronize this room. Please try again.')).toBeNull();
+});
+
+
+describe('accepted room candidate integration', () => {
+  function loadedPoster() {
+    const poster = screen.getByTestId('candidate-poster');
+    expect(poster.props.source).toEqual(require('../../assets/candidates/cardboard-comet.png'));
+    fireEvent(poster, 'load');
+  }
+
+  it('Waiting including transport-only binding has no card, loading or acquisition', async () => {
+    await mount();
+    await act(async () => { channels[0].status('SUBSCRIBED'); });
+    expect(screen.getByText('Waiting for the second participant.')).toBeVisible();
+    expect(screen.queryByTestId('candidate-card')).toBeNull();
+    expect(screen.queryByTestId('candidate-status')).toBeNull();
+    expect(mockEnsureCandidate).not.toHaveBeenCalled();
+  });
+
+  it.each(['host', 'guest'])('automatically loads the same local card for immediate %s Ready', async role => {
+    let finish!: (value: unknown) => void;
+    mockEnsureCandidate.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    mockJoin.mockResolvedValue({ ...host, participant_role: role, room_state: 'ready', participant_count: 2 });
+    await mount();
+    expect(mockEnsureCandidate.mock.calls).toEqual([[host.room_id]]);
+    expect(screen.getByTestId('candidate-status')).toHaveTextContent('Loading movie…');
+    expect(screen.queryByTestId('candidate-title')).toBeNull();
+    await act(async () => { finish({ outcome: 'available', ...candidate }); });
+    expect(screen.getByTestId('candidate-title')).toHaveTextContent(candidate.title);
+    expect(screen.getByTestId('candidate-year')).toHaveTextContent('2020');
+    expect(screen.queryByText(candidate.candidate_id)).toBeNull();
+    act(loadedPoster);
+    expect(screen.queryByTestId('candidate-status')).toBeNull();
+    expect(screen.getByText('Ready')).toBeVisible();
+    expect(screen.getByText('2 of 2')).toBeVisible();
+    expect(channels).toHaveLength(1);
+  });
+
+  it('host acquires once after authoritative refetch and retains the card across UPDATE and sync recovery', async () => {
+    await mount();
+    expect(mockEnsureCandidate).not.toHaveBeenCalled();
+    await act(async () => { channels[0].system({ extension: 'postgres_changes', status: 'ok' }); });
+    act(loadedPoster);
+    const source = screen.getByTestId('candidate-poster').props.source;
+    await act(async () => { channels[0].update(); });
+    expect(mockEnsureCandidate.mock.calls).toEqual([[host.room_id]]);
+    await act(async () => { channels[0].status('CHANNEL_ERROR'); });
+    expect(screen.getByText('Unable to synchronize this room. Please try again.')).toBeVisible();
+    expect(screen.getByTestId('candidate-title')).toHaveTextContent(candidate.title);
+    expect(screen.queryByTestId('candidate-status')).toBeNull();
+    await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'Retry synchronization' })); });
+    await act(async () => { channels[1].system({ extension: 'postgres_changes', status: 'ok' }); });
+    expect(screen.getByTestId('candidate-poster').props.source).toEqual(source);
+    expect(mockEnsureCandidate).toHaveBeenCalledTimes(1);
+    expect(mockJoin).toHaveBeenCalledTimes(1);
+    expect(mockRemove).toHaveBeenCalledWith(channels[0]);
+  });
+
+  it('candidate failure retries safely while room and membership stay Ready', async () => {
+    mockJoin.mockResolvedValue({ ...host, room_state: 'ready', participant_count: 2 });
+    mockEnsureCandidate.mockRejectedValueOnce(new Error('private backend credential'));
+    await mount();
+    expect(screen.getByText('Ready')).toBeVisible();
+    expect(screen.getByText('2 of 2')).toBeVisible();
+    expect(screen.queryByText('private backend credential')).toBeNull();
+    expect(screen.getByTestId('candidate-status')).toHaveTextContent('Unable to load this movie. Please try again.');
+    await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'Retry candidate' })); });
+    act(loadedPoster);
+    expect(mockEnsureCandidate.mock.calls).toEqual([[host.room_id], [host.room_id]]);
+    expect(mockJoin).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('candidate-status')).toBeNull();
+  });
+
+  it('poster retry retains title/year and same source without acquiring again', async () => {
+    mockJoin.mockResolvedValue({ ...host, room_state: 'ready', participant_count: 2 });
+    await mount();
+    const source = screen.getByTestId('candidate-poster').props.source;
+    act(() => fireEvent(screen.getByTestId('candidate-poster'), 'error'));
+    expect(screen.getByTestId('candidate-title')).toHaveTextContent(candidate.title);
+    expect(screen.getByTestId('candidate-year')).toHaveTextContent('2020');
+    act(() => fireEvent.press(screen.getByRole('button', { name: 'Retry candidate' })));
+    expect(screen.getByTestId('candidate-poster').props.source).toEqual(source);
+    act(loadedPoster);
+    expect(mockEnsureCandidate).toHaveBeenCalledTimes(1);
+  });
+
+  it('canonical replacement/replay does not duplicate acquisition and a new RoomEntry discards a stale candidate', async () => {
+    let finish!: (value: unknown) => void;
+    mockJoin.mockResolvedValue({ ...host, room_state: 'ready', participant_count: 2 });
+    mockEnsureCandidate.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    renderRouter({ 'room/[code]': RoomRouteScreen }, { initialUrl: '/room/abcdef0123', wrapper: StrictMode });
+    await act(async () => {});
+    expect(mockEnsureCandidate.mock.calls).toEqual([[host.room_id]]);
+    mockJoin.mockResolvedValue({ ...host, room_id: '22222222-2222-4222-8222-222222222222', room_code: '012345ABCD' });
+    await act(async () => { router.setParams({ code: '012345ABCD' }); });
+    await act(async () => { finish({ outcome: 'available', ...candidate }); });
+    expect(screen.getByText('Waiting')).toBeVisible();
+    expect(screen.getByText('012345ABCD')).toBeVisible();
+    expect(screen.queryByTestId('candidate-card')).toBeNull();
+    expect(mockEnsureCandidate).toHaveBeenCalledTimes(1);
+  });
 });

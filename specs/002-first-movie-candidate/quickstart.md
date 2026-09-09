@@ -1099,3 +1099,336 @@ are unchanged and this standalone component has no application route yet.
 Only after all checks passed were T033–T036 checked. Final state:
 **T001–T036 checked; T037–T064 unchecked.** No Phase 6 task, commit or push
 was performed. Phase 5 is ready for review before commit.
+
+## Phase 6 T047 Export Evidence — 2026-09-09
+
+After the room route imported the existing candidate hook/card, `npm run
+web:export` exited 0 and produced four routes and the application entry
+`dist/_expo/static/js/web/entry-6d1df4305674f89169a6c9f1fe0d2174.js`.
+The following dependency-free inspection was executed successfully. It checks
+all four distinct source hashes against the actual emitted PNG bytes and checks
+that each emitted filename is referenced by that application entry. No poster
+asset was regenerated or changed.
+
+```sh
+node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+const digest = bytes => createHash('sha256').update(bytes).digest('hex');
+function files(directory) {
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
+    const file = path.join(directory, entry.name);
+    return entry.isDirectory() ? files(file) : [file];
+  });
+}
+const output = files('dist');
+const pngs = output.filter(file => file.endsWith('.png'));
+const bundles = output.filter(file => /_expo\/static\/js\/web\/entry-.*\.js$/.test(file));
+assert.equal(bundles.length, 1);
+const bundle = fs.readFileSync(bundles[0], 'utf8');
+const keys = ['cardboard-comet', 'pebble-bay-lanterns', 'cloud-tram-four', 'clockwork-orchard'];
+const hashes = new Set();
+for (const key of keys) {
+  const source = fs.readFileSync(`assets/candidates/${key}.png`);
+  const hash = digest(source); hashes.add(hash);
+  assert(source.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])));
+  assert.equal(source.readUInt32BE(16), 240); assert.equal(source.readUInt32BE(20), 360);
+  assert(source.length <= 65536);
+  const matches = pngs.filter(file => digest(fs.readFileSync(file)) === hash);
+  assert.equal(matches.length, 1);
+  assert(bundle.includes(key));
+  assert(bundle.includes(path.basename(matches[0])));
+  console.log(JSON.stringify({ key, bytes: source.length, sha256: hash, bundled: matches[0] }));
+}
+assert.equal(hashes.size, 4);
+console.log('PASS: four distinct byte-identical local PNGs, each referenced by the exported application entry.');
+NODE
+```
+
+Actual result: **PASS, four distinct byte-identical local PNGs**, each 240×360
+and at most 65,536 bytes. Emitted files are under `dist/assets/assets/candidates/`:
+
+| Key | Bytes | Emitted filename |
+| --- | ---: | --- |
+| cardboard-comet | 5011 | `cardboard-comet.9d86abd22e30c292f7c8c1b5fba0c810.png` |
+| pebble-bay-lanterns | 6521 | `pebble-bay-lanterns.5a8f5743cc09da2ba4acfb8f99fc3c8c.png` |
+| cloud-tram-four | 5616 | `cloud-tram-four.6e596fbd0c6a35b69571c43c6230fd4b.png` |
+| clockwork-orchard | 7711 | `clockwork-orchard.65bf13471388c481135e3fe053dab1bb.png` |
+
+Source and emitted SHA-256 values, respectively by the same key order:
+
+```text
+5a243057dc4b4cc4e3e80f1f962d17231cf8c28abb324fc4e5e129917884a89e
+3b8b642fa0dca328c6a0cae9e340d0f243357b65cb471f65931e751f5653e4d7
+b5f35244b2baa18340d702772995b5029f4841eae6ac89d3ed6eec67f25931d3
+0d24c74d6f93c305809f2d8e7d9f585a828faec87689ca1c48948ff3fcb2dd13
+```
+
+## Phase 6 G6 Validation Record — 2026-09-09
+
+**Result: G6 PASS; PHASE 6 GREEN; T037–T048 complete.** Started with a clean
+working tree on `main` at `1a96faeaeaf7d19cf04337751354ef13ebd2f6bd`
+(`feat: add candidate client layer`). Only the Phase 6 tasks were implemented.
+Runtime: existing Node v24.20.0/npm 11.19.0, Supabase CLI 2.116.0 and the repository
+Docker Playwright 1.63.0 runtime (`mcr.microsoft.com/playwright:v1.63.0-noble`).
+No dependencies were installed or changed.
+
+### Route and Client Evidence (T037–T038)
+
+`app/room/[code].tsx` now passes the existing authoritative room-or-initial
+projection to the existing `useRoomCandidate`, then renders the existing
+`CandidateCard`. The canonical-code RoomEntry key and room subscription remain
+intact. A ScrollView with flexGrow content allows short screens to scroll while
+retaining the Waiting/Ready heading, code, participant count, invitation,
+synchronization error/retry and home navigation.
+
+Seven added route cases cover Waiting/transport-only zero acquisition; immediate
+host and guest Ready; loading and loaded title/year/local source; safe acquisition
+retry; poster retry without RPC; harmless assignment invalidation and subscription
+recovery retaining the card; and canonical replay/stale room-generation rejection.
+The pre-integration run failed the six cases requiring the absent integration;
+all 33 route cases pass after integration. The full client suite is **23 suites,
+401 tests**, including the unchanged Phase 5 candidate suites. No Phase 5 module
+or component needed modification.
+
+### C1 and Existing Acceptance Compatibility (T039–T044)
+
+- Added `assertNoCredentialTextUi` for ordinary pages and ordinary safeBody/extra
+  participant final checks. It checks body text, title, form values and attributes,
+  including hidden attributes, using the existing private registry and forbidden
+  value detector. Bounds are 5000 elements, 20000 values and 1 MiB UTF-8, enforced
+  before sending values from the page and again at the existing inspection
+  boundary. No DOM or request data is persisted by this check.
+- New executable tests reject synthetic credentials in text/attributes and
+  oversized inputs, exercise successful and failing nested participant bodies
+  with actual withParticipants cleanup, and preserve finalized scanner failures.
+  The original strict screenshot inspector and controlled capture method are
+  byte-identical to HEAD: images, backgrounds and SVG remain capture-ineligible.
+  Capture/trace/HAR/video/storage-state prohibitions and the artifact scanner are
+  unchanged. No poster screenshot was taken.
+- `e2e/support/room-harness.ts` extracts shared real room/context/identity/snapshot/
+  socket helpers. Eight extracted helper bodies match their previous versions
+  exactly except the ordinary credential-check method name. No extra identities
+  or application channel were introduced.
+- Owner snapshots return the exact nine-field row plus separate `xmin::text`
+  metadata from one SELECT. Normal client reads remain `id,code,state`.
+  assertReady now waits for candidate display completion before legacy whole-row
+  baselines, including E12. E06 holds automatic candidate forwarding until the
+  real membership UPDATE has been observed with Ready/NULL, then permits the
+  separate assignment UPDATE. Its winner/loser, capacity and identity checks
+  remain intact: one membership transition plus one candidate assignment.
+- Acceptance discovery explicitly includes the original room file and F01.
+  Added only fixed F01/file labels and phase-6 N=49 diagnostics. One worker,
+  repeatEach 1, retries 0, bounded wrapper flags and security serial execution
+  remain unchanged. Tests reject future/arbitrary candidate labels.
+
+### Real F01 Evidence (T045–T046)
+
+`e2e/first-movie-candidate.spec.ts` uses the new narrowly scoped
+`e2e/support/candidate-harness.ts`, the shared room harness, and actual Anonymous
+Auth, local Supabase/PostgreSQL/RPC, existing Realtime, Expo web and Docker
+Chromium. There are no Supabase mocks or synthesized successful responses.
+
+- Host Waiting: NULL assignment, no card or speculative loading, **zero automatic
+  candidate requests**. A separately counted authenticated direct probe returns
+  exact not_ready with four NULL fields; whole row and xmin remain unchanged.
+- Guest joins using its separately authenticated context. Guest Ready initiates
+  acquisition immediately; host Ready follows existing PostgreSQL system-ok,
+  membership UPDATE and authoritative refetch, without host navigation/reload.
+- Routes installed before Ready hold one automatic request from each caller.
+  The barrier checks exact room argument and each caller's own JWT subject in
+  memory. Both arrive before release: **held=2, forwarded=0**, then **forwarded=2**
+  to the real RPC. This proves overlapping browser requests; the separate Phase 3
+  PostgreSQL lock test remains the evidence for database-session row-lock overlap.
+- Both real responses are available with identical `fixture-cardboard-comet`,
+  `The Cardboard Comet`, `2020`, `cardboard-comet`. Both render the same title/year
+  and local poster, without the internal ID. The visible wrapper and painted
+  background have positive visible bounds; the hidden accessibility image is
+  actually decoded at **240×360**. The successful HTTP image bytes match the
+  source SHA-256, and current onLoad has cleared loading/error state. Presence of
+  the hidden img alone is not treated as display evidence.
+- The owner snapshot records the same persisted FK for both results, unchanged
+  membership/room identity/creation metadata and Ready state. A real assignment
+  invalidation is held until display succeeds, then delivered unchanged through
+  the original channel. The resulting Ready refetch preserves the card and keeps
+  automatic request counts at **host=1, guest=1**. There is no RPC/Realtime loop.
+- Sequential host/guest direct probes, then two overlapping direct probes per
+  participant, all return the original candidate. Their final counters are
+  **host probes=4, guest probes=3**, including the initial host not_ready probe.
+  Full committed row and xmin stay equal after assignment: **one assignment
+  UPDATE**, no further write. Realtime observes exactly two room UPDATEs overall
+  (membership plus assignment). Display observers report zero conflicting data.
+- HTTP and WebSocket origins are observed before either application navigation,
+  derived from configured local app/Supabase URLs. **External page destinations=0**;
+  candidate metadata and the actually loaded PNG remain local. Installation and
+  runner-owned Docker control connections are outside page traffic.
+- Contexts retain their participant identities. F01 consumes **exactly two**
+  signup attempts and two successful identities; all probes/invalidation handling
+  consume zero additional identities. All observers/routes/contexts are cleaned.
+
+Acquisition failure/retry and same-poster retry wiring are covered by route and
+existing candidate component tests. Dedicated browser failures/reloads/reconnects
+F02–F08 were neither implemented nor run in this phase.
+
+### Complete T048 Commands and Results
+
+| Command / inspection | Actual result |
+| --- | --- |
+| `npm run supabase:start` → `npm run env:local` | Exit 0; local services/public environment configured, values withheld |
+| `npm run db:reset` | Exit 0; clean schema and fixture catalog from committed migrations |
+| `npm run db:types:check` | Exit 0; canonical artifact consistent, zero write-mode invocations |
+| `npm run lint` | Exit 0, no warnings |
+| `npm run typecheck` | Exit 0 |
+| `npm run test:client` | Final exit 0: **23/23 suites, 401/401 tests** |
+| `npm run db:test` | Exit 0: **588/588 assertions**, candidate 300 + existing room 288 |
+| `npm run web:export` + T047 inspection above | Exit 0; four routes and all four byte-identical bundled PNGs referenced by application entry |
+| `npm run playwright:install` | Exit 0; pinned Docker runtime prepared |
+| `npm run test:e2e:security` | Wrapper exit 0; A/B pass, exactly one expected controlled C failure, required artifacts present, scan findings=[] |
+| Unfiltered `npm run test:e2e` | Exit 0: **25/25 cases**, including all original 24 plus F01; **49 signups/49 identities**, scan findings=[] |
+| `npm run supabase:stop` | Exit 0; project stack stopped after validation |
+| `git diff --check`, new-file whitespace checks and baseline hashes | PASS |
+
+The initial complete G6 browser block passed. Final review then added explicit
+F01 title/year visibility checks, moved the ordinary C1 byte bound ahead of page
+serialization, and strengthened its participant-cleanup test. Lint/typecheck/
+all client tests and **C1 plus the complete unfiltered acceptance** were rerun
+successfully against those final changes. No application, database, export or
+Phase 5 implementation changed between these two browser blocks. This rerun
+validates the final Phase 6 diagnostics; it does not execute Phase 8 tasks.
+
+### R01 / R02 and Final Boundaries
+
+R01: exactly **one** real check-only command, **zero** `npm run db:types` write
+commands. Canonical SHA-256 remains
+`f6b77ecf056b1ccb68f2c43a48fccde2a305a5fe8ee20d0124120050d0415a69`.
+Migrations, RPC, database tests, R01 script and generated types are unchanged.
+
+R02 was recalculated before admission: E01=3, E02=2, E03=4, E04=4, E05=3,
+E06=3, E07=5, E08=4, E09=2, E10=2, E11=1, E12=11, Auth=3: **47**.
+F01 adds **2**, so acceptance **N=49**, C1 plus acceptance **50**.
+The prior retained real browser record was from 2026-09-06; the Phase 5 record
+reports zero signups, no project stack was running before G6 setup, and this
+phase made no Auth/manual probes before its browser blocks. Current-hour prior
+recorded usage was zero. After the first block, sanitized reports established
+50 consumed and 100 remaining; a second full block reserved 50. A proposed
+3-signup targeted follow-up was replaced before execution by that full block.
+No targeted invocation or extra manual signup was run.
+
+| Finalized UTC | Invocation | Actual signups / identities |
+| --- | --- | ---: |
+| 2026-09-09 17:23:27 | Initial C1 | 1 / 1 |
+| 2026-09-09 17:24:53 | Initial full acceptance | 49 / 49 |
+| 2026-09-09 17:28:23 | Final C1 | 1 / 1 |
+| 2026-09-09 17:29:42 | Final full acceptance | 49 / 49 |
+| Total | Two admitted blocks, limit unchanged at 150/hour | **100 / 100** |
+
+All four safe summaries confirm cleanup and no budget failure. There was no
+HTTP 429, automatic Auth retry, quota change, recovery wait or Supabase restart
+between blocks. Reset was solely the required pre-gate clean database reset;
+it was never counted as quota recovery. Docker browser runtimes were removed by
+their owning wrappers, and Supabase was stopped only after validation.
+
+Three files were created: `e2e/first-movie-candidate.spec.ts`,
+`e2e/support/candidate-harness.ts`, and `e2e/support/room-harness.ts`.
+Thirteen tracked files changed: the room route; its route tests; three config
+security/runtime test files; the existing room E2E file; safe diagnostics,
+reporter and sanitizer; Playwright config; the E2E wrapper; tasks.md and this log.
+The other **117 tracked baseline files** remain byte-identical, including all
+Feature 001 specifications and core room/Auth/subscription code, Phase 1 PNGs,
+Phase 5 candidate modules/tests, dependency manifests and the protected DB files.
+
+Fresh checkout remains T063/Phase 8; this phase changes no dependencies or setup
+prerequisites and uses the existing reproducible commands. No second application
+Realtime channel, polling, external movie provider or future movie interaction
+was added. Only after successful evidence were **T037–T048** checked; final task
+state is **T001–T048 checked, T049–T064 unchecked**. Phase 7 has not started.
+No commit, push, branch switch or tag was performed.
+
+## Phase 6 Independent Focused Review — 2026-09-09
+
+**Result: PHASE 6 READY FOR COMMIT.** Reviewed the complete uncommitted Phase 6
+implementation against the constitution, specification, display contract and
+T037–T048 on `main`, HEAD `1a96faeaeaf7d19cf04337751354ef13ebd2f6bd`.
+Found **0 BLOCKING, 1 MAJOR and 1 MINOR** defects; both defects are now fixed,
+with no unresolved finding. No Phase 7 work was performed.
+
+- **MAJOR, T045 cleanup:** the original candidate harness awaited every pending
+  `Response.body()` in both health inspection and cleanup. A response whose body
+  never finishes could prevent the owning context's finally cleanup from running
+  until the outer runner timeout. Cleanup now releases the request gate, removes
+  observers/routes, and clears references without awaiting uncancellable response
+  bodies. Late completions are guarded by disposal and already have rejection
+  observers; the existing context owner closes the browser context. Health
+  inspection uses the existing bounded 15-second condition barrier.
+- **MINOR, T045 RPC accounting:** the original route glob excluded query strings,
+  and counters lived only in its handler. A later same-result candidate request
+  with a query string could bypass the claimed automatic count. A shared exact
+  pathname predicate now matches routing and observation; the request observer
+  counts automatic calls and labelled contract probes independently of routing.
+  Final health checks also reconcile response counts. Neighboring RPCs and room
+  refetches do not contribute to candidate counters.
+
+Added four executable synthetic harness regressions to the existing
+`__tests__/config/e2e-diagnostics.test.ts`: query/late/probe accounting, aborting a
+held caller when its peer never arrives, cleanup with an unfinished response body,
+and the bounded health deadline using a virtual clock. Before the fix, the
+accounting and unfinished-body checks failed; held-caller cleanup already passed.
+These tests exercise the actual harness with synthetic transports and create
+zero Auth identities. They do not implement browser scenarios F02–F08.
+
+Independent compatibility inspection found eight extracted room helper bodies
+identical to HEAD except the ordinary credential-check method name. All existing
+room test declarations remain unchanged. The ninth-field/xmin snapshot, E06's
+separate membership/assignment UPDATE observations and candidate settling preserve
+the existing room oracles. RoomEntry generation, the authoritative room-or-initial
+projection and the candidate hook's ID/Ready dependencies prevent assignment
+invalidation from resetting the card or acquiring again. No application fix was
+needed.
+
+The strict screenshot inspector and controlled C1 capture method are byte-identical
+to HEAD. Credential registration, finalized artifact scanning, capture bans and
+Docker runtime ownership remain intact. Ordinary text/attribute inspection grants
+no screenshot eligibility. Candidate RPC origin and actual painted poster origin,
+decode, dimensions and served-byte hash are checked separately. Other page traffic
+retains the display contract's configured local app/Supabase origin rules; the
+observers cover only the two test pages, without intercepting Docker/npm/control
+traffic or installing a global network-blocking route.
+
+| Review validation | Actual result |
+| --- | --- |
+| `npm run lint` | Exit 0 |
+| `npm run typecheck` | Exit 0 |
+| `npm run test:client` | Exit 0; **23 suites, 405 tests** |
+| T047 dependency-free inspection of existing production export | Exit 0; four distinct byte-identical bundled PNGs referenced by the entry |
+| `npm run supabase:start` → `npm run env:local` | Exit 0; existing project stack restored for targeted validation, values withheld |
+| `npm run test:e2e:security` | Wrapper exit 0; A/B pass, expected controlled C failure; scan findings=[]; 1 signup/identity |
+| `npm run test:e2e -- --grep F01` | Exit 0; F01 passes against the corrected real-stack harness; scan findings=[]; 2 signups/identities |
+| `npm run supabase:stop` | Exit 0; project stack stopped, unrelated project left running |
+| Protected-file byte comparison | 42 selected DB/Feature 001/Phase 1/Phase 5/dependency/security/runtime files identical to HEAD |
+
+The corrected real F01 again proves held=2/forwarded=0 before release, automatic
+RPC counts=1/1 after the real assignment invalidation/refetch, probes=4/3,
+one assignment UPDATE, unchanged repeated-read xmin, matching metadata and visible
+240×360 local PNGs whose actual served bytes match the unchanged source SHA-256.
+All 24 existing browser cases and the 588-assertion database suite remain the
+previous G6 evidence. They were not rerun solely for counting: review changes are
+confined to the F01-only candidate harness, its synthetic tests and this log;
+shared production, room harness, C1 and runtime behavior was not changed by review.
+
+R02 was independently recounted from the four original finalized safe summaries:
+1 + 49 + 1 + 49 = **100 signups / 100 identities**, with cleanup and no budget
+failures. This review reserved 3 additional attempts, plus a conservative allowance
+of 2 for the user-reported manual Host/Guest flow: admission envelope **105 <= 150**.
+The two manual identities are an allowance, not a measured test result. The review
+C1 finalized at **17:56:45 UTC** (`run-lzW65b`) with 1/1, and F01 finalized at
+**17:57:33 UTC** (`run-MuDxIN`) with 2/2, both with cleanup and no budget failures.
+Total measured automated usage is **103/103**. No 429, Auth retry, quota change,
+database reset or quota-recovery restart occurred during this review. Both Docker
+browser runtimes were removed by their wrappers.
+
+Migrations/RPC, DB tests, generated types, Phase 5 candidate modules, Phase 1 PNGs,
+Feature 001 source/specifications and dependencies are unchanged. No type
+generation, commit, push, branch/tag operation, or T049–T064 execution occurred.
+Task state remains **T001–T048 checked; T049–T064 unchecked**.

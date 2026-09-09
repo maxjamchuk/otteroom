@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Reporter, TestCase, TestResult } from '@playwright/test/reporter';
-import { sanitizeDiagnostic } from './sanitize-diagnostics.ts';
+import { sanitizeDiagnostic, safeDiagnosticLocation } from './sanitize-diagnostics.ts';
 
 type SafeInput = {
   status?: unknown;
@@ -15,6 +15,7 @@ function scenarioFor(title: unknown): string {
   if (typeof title !== 'string') return 'unclassified';
   if (title.startsWith('@baseline ')) return 'baseline';
   if (title.startsWith('@auth ')) return 'auth';
+  if (title.startsWith('@candidate F01 ')) return 'candidate';
   if (title.startsWith('@us1 E01 ')) return 'us1';
   if (/^@us2-join E(?:02|04|10|11) /.test(title)) return 'us2-join';
   if (/^@us2-realtime E03 /.test(title)) return 'us2-realtime';
@@ -35,6 +36,7 @@ function browserCaseFor(title: unknown): string {
     ['@us3 E12 delayed ', 'E12-navigation'], ['@us3 E12 direct ', 'E12-mutation'],
   ]) if (title.startsWith(prefix)) return label;
   const scenario = scenarioFor(title);
+  if (scenario === 'candidate') return 'F01';
   if (['us1', 'us2-join', 'us2-realtime', 'us4'].includes(scenario)) {
     return title.match(/^@[^ ]+ (E(?:0[1-9]|1[0-2])) /)?.[1] ?? 'none';
   }
@@ -74,7 +76,7 @@ export function safeResult(test: { title?: unknown; expectedStatus?: unknown; re
     ui: [...(result.annotations ?? [])].reverse().find(item => item.type === 'safe-ui-result' && ['safe', 'incomplete', 'credential'].includes(item.description ?? ''))?.description ?? 'none',
     uiReason: [...(result.annotations ?? [])].reverse().find(item => item.type === 'safe-ui-reason' && ['safe', 'inspection-bound', 'nontext-visual', 'canvas', 'iframe', 'img', 'svg', 'object', 'embed', 'background-image', 'animation'].includes(item.description ?? ''))?.description ?? 'none',
     location: typeof result.error?.message === 'string' ?
-      result.error.message.match(/E2E_SAFE_FAILURE at (e2e\/(?:diagnostics\/credential-safety\.spec|room-session\.spec|support\/safe-diagnostics)\.ts:\d{1,5}:\d{1,5})/)?.[1] ?? 'none' : 'none',
+      safeDiagnosticLocation(result.error.message) ?? 'none' : 'none',
   };
 }
 
