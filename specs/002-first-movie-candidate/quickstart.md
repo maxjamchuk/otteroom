@@ -618,3 +618,160 @@ registry, UI, channel, E2E case or external movie dependency was introduced.
 Feature 001 specification artifacts and Phase 1 PNGs are unchanged.
 Only T007–T012 are newly completed; T013–T064 remain unchecked. Work stops at G2
 without a commit or push.
+
+
+## Phase 3 G3 Validation Record — 2026-09-09
+
+**Result: G3 PASS; scope T013–T018 only.** Started with an empty
+`git status --short` on `main` at
+`28168750ee71d607ad07b194eff74cb352243aa7`
+(`feat: add movie candidate schema`). Required documents were read completely;
+the requirements checklist passed 16/16 without edits. Used installed Node
+v24.20.0/npm 11.19.0, Supabase CLI 2.116.0 and local PostgreSQL 17.6.
+No installation, branch change, dependency or configuration-contract change.
+
+Created only
+`supabase/migrations/20260909000001_room_candidate_rpc.sql`.
+Extended `supabase/tests/database/room_candidate.test.sql`; the committed
+Phase 2 migration and `room_session.test.sql` were not edited.
+
+| Command / inspection | Actual result |
+| --- | --- |
+| `npm run supabase:start` → `npm run env:local` | Exit 0 each; existing safe wrapper and ignored public environment; no values printed |
+| Initial `npm run db:reset` → `npm run db:test`, before changes | Exit 0 each; 2 files, baseline 475/475 assertions |
+| `npm run db:test -- supabase/tests/database/room_candidate.test.sql`, tests written before RPC | Expected exit 1: missing function; 19 failed of 73 emitted assertions before the first ordinary result comparison stopped the file; remote fixtures/connections cleaned |
+| Focused candidate run after RPC and harness corrections | Exit 0; 294/294 assertions, before the six additional broken-reference assertions |
+| Final `npm run db:reset` → `npm run db:test` | Exit 0 each; all five migrations replayed; 2 files, 588/588 assertions, no failed or skipped assertion |
+| Owner-only post-suite function/ACL/schema/cleanup inspection | Exact contract below; four catalog rows, zero rooms/Auth fixtures, zero application/test triggers or test helper functions; dblink extension rolled back |
+| `npm run supabase:stop` | Exit 0; no containers for this project remain; unrelated project containers left running |
+| `git diff --check` and direct SQL whitespace checks | PASS; new migration included in explicit whitespace inspection |
+
+The final total is **288 unchanged Feature 001 assertions + 300 candidate
+assertions = 588**. The candidate file retains all **187 Phase 2 assertions**
+and adds **113 Phase 3 assertions**. During development, the harness needed
+parentheses around JSON row extraction before field subtraction and a correction
+to its extra UPDATE counter oracle: reused backends can retain unflushed local
+statistics across transactions. It now measures the counter delta within each
+open transaction before COMMIT. An owner-only rollback trial confirmed that
+behavior; [PostgreSQL's statistics documentation](https://www.postgresql.org/docs/17/monitoring-stats.html)
+describes these unflushed local counts. These were test corrections; the approved
+lock/row-version contract and production RPC were not weakened or redesigned.
+
+### RPC, Security and Atomic Behavior
+
+The deployed signature is exactly:
+
+`public.ensure_room_candidate(p_room_id uuid) RETURNS TABLE (outcome text, candidate_id text, title text, release_year smallint, poster_key text)`
+
+The function is PL/pgSQL, SECURITY DEFINER, owned by `postgres`, with only
+`search_path=""` in proconfig. Its exact ACL contains EXECUTE for `postgres`
+and non-grantable EXECUTE for `authenticated`; PUBLIC and anon have none.
+An actual anon call fails with SQLSTATE 42501 even with a subject claim.
+An authenticated role without auth.uid() separately raises 42501 before
+handling the room input. There is no caller-provided identity argument.
+
+| Observed case | Exact result / preservation |
+| --- | --- |
+| Own Waiting | One `not_ready` row; all four candidate fields NULL; complete room, membership, timestamps, xmin and ctid unchanged |
+| NULL/nonexistent/unrelated Waiting/unrelated Ready/unrelated assigned room | Identical one-row `not_found`, four NULL fields; no row update or private metadata disclosure |
+| Own first Ready/NULL, including retry after the injected rollback | One complete `available`: fixture-cardboard-comet / The Cardboard Comet / 2020 / cardboard-comet, matching the actual minimum-sort catalog row |
+| First assignment | Only movie_candidate_id and transaction updated_at change; all other fields, membership and Ready state preserved |
+| Host and guest repeats | Same complete result; whole rows, timestamps, xmin and ctid preserved |
+| Existing non-lowest assignment | fixture-clockwork-orchard / The Clockwork Orchard / 2023 / clockwork-orchard returned unchanged; no reselection/update |
+| Empty catalog | Own Waiting still returns not_ready; own Ready raises P0001, no business row; Ready/NULL and membership preserved; all four fixtures restored by subtransaction rollback |
+| Actual AFTER UPDATE exception | P0001, no partial assignment; a nontransactional test sequence observes exactly one attempted assignment before rollback; complete Ready/NULL row and physical version preserved |
+| Impossible missing referenced candidate | Rollback-only privileged removal of the FK/referenced row provokes P0001; no fallback candidate; assignments/rows preserved and catalog/validated FK restored |
+
+All real RPC business calls use authenticated participant roles/subject claims.
+Privileged connections only arrange faults/fixtures and inspect postconditions.
+The function has one fixed UPDATE statement, schema-qualified references, no
+dynamic SQL, advisory locking, test hooks, helper RPC or hard-coded fixture ID.
+Both table RLS policies/grants remain intact: clients cannot browse/mutate the
+catalog or directly read/change room assignment. The room projection remains
+id/code/state and the publication remains public.rooms only.
+
+### Deterministic Session Evidence
+
+The candidate test reuses Feature 001's local dblink controller, authenticated
+caller setup, bounded observation and terminal-result draining conventions.
+The supabase_admin controller installs the rollback-scoped extension/helpers
+and immediately revokes all dblink entry EXECUTE from PUBLIC/anon/authenticated.
+A separate postgres owner connection commits exactly two UUID-only Auth rows
+and one Ready/NULL room. No GoTrue signup is involved.
+
+For both first acquisition and overlapping repeat access:
+
+1. Independent host/guest backend PIDs are verified against their individual
+   auth.uid(), authenticated role and explicit READ COMMITTED transaction.
+2. The owner coordinator holds the exact room FOR UPDATE. Both real RPC calls
+   are dispatched asynchronously before collection; both are observed busy and
+   waiting through its pg_blocking_pids chain, including queued callers.
+   Ungranted tuple/transaction-ID locks corroborate the live waits.
+3. Only after this barrier is the owner released. Before the winning caller
+   commits, the second RPC is again observed busy and directly blocked by that
+   winner's tuple/transaction lock.
+4. The winner's result is collected/drained and its transaction commits.
+   The owner records its committed full room and xmin before the second commit;
+   the second result is then collected/drained and committed.
+5. Both results are identical five-field available rows. The FK matches both,
+   exactly one trial room exists, all four catalog rows are unchanged, and
+   host/guest/state/creation fields remain intact.
+
+The per-caller room UPDATE deltas are **winner=1, second=0** on first
+acquisition. The initial xmin changes once; the final full row/xmin exactly
+equal the winner's committed snapshot. Overlapping repeats give **host=0,
+guest=0**, preserving that same whole row/xmin throughout. Sequential tests
+also compare ctid to detect same-transaction same-value UPDATEs.
+
+Observation/draining deadlines are eight seconds, remote statement/lock limits
+are bounded, and cleanup checks backend exit within five seconds. No sleep,
+timing guess, sequential substitute or production synchronization hook proves
+overlap. A separate cancellation trial cancels an actual blocked RPC at the
+observed barrier (57014), then verifies the same bounded cleanup of both callers,
+the owner, locks, committed room and both synthetic identities.
+
+### Reproduce G3 and Scope Protection
+
+Use the installed pinned runtime and existing Docker prerequisites:
+
+```sh
+set -eu
+cleanup_g3_services() {
+  g3_validation_exit=$?
+  trap - EXIT INT TERM
+  set +e
+  npm run supabase:stop
+  g3_stop_exit=$?
+  if [ "$g3_validation_exit" -ne 0 ]; then
+    exit "$g3_validation_exit"
+  fi
+  exit "$g3_stop_exit"
+}
+trap cleanup_g3_services EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+npm run supabase:start
+npm run env:local
+npm run db:reset
+npm run db:test
+```
+
+Under Constitution I, G3 reproduces the actual database/security/concurrency
+slice through local backend startup, clean replay and full pgTAP regression.
+Lint, TypeScript/client tests, application startup/export, browser acceptance,
+fresh install and fresh checkout are not applicable to this database-only gate:
+T018 requires reset/database tests, and no client, build, dependency or setup
+contract changed. They were not run or claimed as G3 evidence; later gates own
+them. Both generated-type commands remain deliberately deferred to Phase 4/R01;
+no type consistency claim is made before T019.
+
+GoTrue signup attempts: **0**, including fault/cancellation/diagnostic trials;
+C1/browser E2E were not run and no browser diagnostics/capture settings changed.
+No candidate client service, registry, state, hook, UI, extra Realtime channel,
+polling or external movie dependency was created. Generated database types,
+package.json/package-lock.json, Phase 1 PNGs, the Phase 2 migration and all
+Feature 001 implementation/specification artifacts remain byte-identical to
+the starting HEAD.
+
+Only T013–T018 are newly checked: T001–T018 complete, T019–T064 unchecked.
+Implementation stops at G3 without a commit or push.
