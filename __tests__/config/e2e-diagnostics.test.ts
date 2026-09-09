@@ -337,7 +337,7 @@ it('ordinary safeBody final check inspects image-bearing text, fails credentials
   assert.equal(closed, 5); assert.equal(registry.size, 0);
 `));
 
-it('explicitly discovers F01 with fixed safe labels while rejecting future or arbitrary labels', () => verify(prelude + `
+it('explicitly discovers F01–F08 with fixed safe labels while rejecting future or arbitrary labels', () => verify(prelude + `
   const { default: config } = await import('./playwright.config.ts');
   const { safeResult } = await import('./e2e/support/safe-reporter.ts');
   const { safeDiagnosticLocation } = await import('./e2e/support/sanitize-diagnostics.ts');
@@ -346,17 +346,21 @@ it('explicitly discovers F01 with fixed safe labels while rejecting future or ar
   const f01 = safeResult({ title: '@candidate F01 shared first candidate', repeatEachIndex: 0 },
     { status: 'passed', error: { message: 'E2E_SAFE_FAILURE at e2e/first-movie-candidate.spec.ts:12:3' } });
   assert.equal(f01.scenario, 'candidate'); assert.equal(f01.browserCase, 'F01');
+  for (let i = 1; i <= 8; i++) {
+    const label = 'F0' + i, result = safeResult({ title: '@candidate ' + label + ' fixed case' }, { status: 'passed' });
+    assert.equal(result.scenario, 'candidate'); assert.equal(result.browserCase, label);
+  }
   assert.equal(f01.location, 'e2e/first-movie-candidate.spec.ts:12:3');
   for (const file of ['first-movie-candidate.spec', 'support/candidate-harness', 'support/room-harness'])
     assert.equal(safeDiagnosticLocation('E2E_SAFE_FAILURE at e2e/' + file + '.ts:12:3'), 'e2e/' + file + '.ts:12:3');
-  for (const title of ['@candidate F02 future', '@candidate F08 future', '@candidate ' + sentinel()]) {
+  for (const title of ['@candidate F00 future', '@candidate F09 future', '@candidate F080 invalid', '@candidate ' + sentinel()]) {
     const result = safeResult({ title }, { status: 'failed' });
     assert.equal(result.scenario, 'unclassified'); assert.equal(result.browserCase, 'none');
   }
   assert.equal(safeDiagnosticLocation('e2e/arbitrary.ts:12:3'), undefined);
   for (const file of ['scripts/run-e2e.mjs', 'e2e/support/safe-diagnostics.ts']) {
     const source = fs.readFileSync(file, 'utf8');
-    assert.equal(/acceptance[ -]N=49/.test(source), true);
+    assert.equal(/acceptance[ -]N=65/.test(source), true);
     assert.equal(source.includes('N=47'), false);
   }
   const runner = fs.readFileSync('scripts/run-e2e.mjs', 'utf8');
@@ -449,4 +453,101 @@ it('candidate health inspection has a bounded deadline even when a response body
     mock.timers.tick(15001); await rejected;
     await h.close();
   } finally { finish(Buffer.alloc(0)); mock.timers.reset(); await h.close(); }
+`));
+
+it('pre-forward faults never fetch or continue; a fresh barrier gates both explicit retries', () => verify(candidatePrelude + `
+  h.configureInitial(['abort', 'abort']); h.limitAutomatic([2, 2]);
+  let forwarded = 0, fetched = 0, aborted = 0;
+  const send = index => {
+    const req = request(index); pages[index].emit('request', req);
+    return pages[index].routes[0].handler({ request: () => req,
+      continue: async () => { forwarded++; }, fetch: async () => { fetched++; throw Error(); }, abort: async () => { aborted++; } });
+  };
+  try {
+    const first = [send(0), send(1)]; await h.held(); h.release(); await Promise.all(first);
+    assert.equal(forwarded, 0); assert.equal(fetched, 0); assert.equal(aborted, 2);
+    h.arm(['continue', 'continue']);
+    const a = send(0); await turn(); assert.equal(forwarded, 0); assert.throws(() => h.release());
+    const b = send(1); await h.held(); h.release(); await Promise.all([a, b]);
+    assert.equal(forwarded, 2); assert.equal(fetched, 0); assert.equal(aborted, 2);
+  } finally { await h.close(); }
+`));
+
+it.each(['valid', 'missing-commit', 'upstream-failure'])('commit-loss ordering fails closed for %s', trial => verify(candidatePrelude + `
+  import cp from 'node:child_process';
+  import { syncBuiltinESMExports } from 'node:module';
+  const trial = '${trial}', events = [], row = { ...room, host_user_id: ids[0], guest_user_id: ids[1],
+    movie_candidate_id: null, creation_request_id: randomUUID(), created_at: 'fixed', updated_at: 'fixed' };
+  const before = { row, xmin: '10' };
+  cp.spawnSync = () => {
+    events.push('snapshot');
+    return { status: 0, stdout: JSON.stringify([{ row: { ...row, movie_candidate_id: trial === 'missing-commit' ? null : 'fixture-cardboard-comet' }, xmin: '11' }]) };
+  }; syncBuiltinESMExports();
+  h.configureInitial(['commit-loss', 'commit-loss']);
+  const send = index => {
+    const req = request(index); pages[index].emit('request', req);
+    return pages[index].routes[0].handler({ request: () => req,
+      continue: async () => { throw Error('unexpected delivery'); },
+      fetch: async options => {
+        assert.deepEqual(options, { maxRetries: 0, maxRedirects: 0, timeout: 15000 }); events.push('fetch');
+        return { ok: () => trial !== 'upstream-failure', body: async () => Buffer.from(JSON.stringify([{ outcome: 'available',
+          candidate_id: 'fixture-cardboard-comet', title: 'The Cardboard Comet', release_year: 2020, poster_key: 'cardboard-comet' }])),
+          dispose: async () => { events.push('dispose'); } };
+      }, abort: async () => { events.push('abort'); } });
+  };
+  const calls = [send(0), send(1)];
+  try {
+    await h.held(); h.release(); await turn();
+    if (trial === 'valid') {
+      assert.equal(events.includes('abort'), false);
+      await h.loseCommittedResponses(before); await Promise.all(calls);
+      assert.equal(events.filter(e => e === 'snapshot').length, 1);
+      assert.equal(events.indexOf('snapshot') > events.lastIndexOf('fetch'), true);
+      assert.equal(events.indexOf('abort') > events.indexOf('snapshot'), true);
+      assert.equal(events.filter(e => e === 'dispose').length, 2);
+    } else await assert.rejects(h.loseCommittedResponses(before));
+  } finally { await h.close(); await Promise.all(calls); }
+  assert.equal(events.filter(e => e === 'dispose').length, 2);
+`));
+
+it('second-room selection accepts two owned rooms but rejects reused requests or incorrect returned IDs', () => verify(prelude + `
+  const { selectCreatedTrial } = await import('./e2e/support/room-harness.ts');
+  const old = { id: randomUUID(), code: 'ABCDEF0123', state: 'ready' };
+  const fresh = { id: randomUUID(), code: '012345ABCD', state: 'waiting' };
+  const priorRequest = randomUUID(), request = randomUUID();
+  const result = [{ outcome: 'created', room_id: fresh.id, room_code: fresh.code }];
+  assert.deepEqual(selectCreatedTrial(result, [old, fresh], request, priorRequest, old.id), fresh);
+  for (const [rows, rooms, id] of [[result, [old, fresh], priorRequest], [result, [old], request],
+    [[{ ...result[0], room_id: old.id }], [old, fresh], request], [result, [fresh, fresh], request]])
+    assert.throws(() => selectCreatedTrial(rows, rooms, id, priorRequest, old.id));
+`));
+
+it.each(['path', 'metro'])('poster fault matches exact resolved %s asset identity with queries and fails once', form => verify(candidatePrelude + `
+  try {
+    const source = '${form}' === 'path' ? 'http://127.0.0.1:8081/assets/candidates/cardboard-comet.png?hash=first' :
+      'http://127.0.0.1:8081/assets/?unstable_path=.%2Fassets%2Fcandidates/cardboard-comet.png&hash=first';
+    const fault = await h.failPosterOnce(0, source), route = pages[0].routes.at(-1);
+    assert.equal(route.match(new URL(source.replace('hash=first', 'platform=web&hash=second'))), true);
+    for (const url of [source.replace('cardboard-comet', 'clockwork-orchard'), 'http://remote.invalid/assets/candidates/cardboard-comet.png',
+      'http://127.0.0.1:8081/assets/candidates/clockwork-orchard.png']) assert.equal(route.match(new URL(url)), false);
+    let aborted = 0, forwarded = 0;
+    const send = () => route.handler({ request: () => ({ resourceType: () => 'image' }),
+      abort: async () => { aborted++; }, continue: async () => { forwarded++; } });
+    await send(); await send();
+    assert.equal(aborted, 1); assert.equal(forwarded, 1); assert.equal(fault.failed, 1); assert.equal(fault.retried, 1);
+    assert.equal(h.stats.every(v => v.automatic === 0 && v.auth === 0), true);
+    await assert.rejects(h.failPosterOnce(0, 'data:image/png;base64,AAAA'));
+  } finally { await h.close(); }
+  assert.equal(pages.every(page => page.routes.length === 0), true);
+`));
+
+it('candidate traffic guards ignore unrelated runtime resources while rejecting external candidate data and posters', () => verify(candidatePrelude + `
+  try {
+    for (const [path, type] of [['/runtime.js', 'script'], ['/runtime-ping', 'fetch'], ['/font.woff', 'font']])
+      pages[0].emit('request', { ...request(0), url: () => 'https://runtime.invalid' + path, resourceType: () => type });
+    assert.equal(h.stats[0].external, 0);
+    pages[0].emit('request', { ...request(0), url: () => 'https://provider.invalid/rest/v1/rpc/ensure_room_candidate' });
+    pages[0].emit('request', { ...request(0), url: () => 'https://provider.invalid/posters/cardboard-comet.png', resourceType: () => 'image' });
+    assert.equal(h.stats[0].external, 2); await assert.rejects(h.assertHealthy());
+  } finally { await h.close(); }
 `));

@@ -15,7 +15,7 @@ function scenarioFor(title: unknown): string {
   if (typeof title !== 'string') return 'unclassified';
   if (title.startsWith('@baseline ')) return 'baseline';
   if (title.startsWith('@auth ')) return 'auth';
-  if (title.startsWith('@candidate F01 ')) return 'candidate';
+  if (/^@candidate F0[1-8] /.test(title)) return 'candidate';
   if (title.startsWith('@us1 E01 ')) return 'us1';
   if (/^@us2-join E(?:02|04|10|11) /.test(title)) return 'us2-join';
   if (/^@us2-realtime E03 /.test(title)) return 'us2-realtime';
@@ -36,7 +36,7 @@ function browserCaseFor(title: unknown): string {
     ['@us3 E12 delayed ', 'E12-navigation'], ['@us3 E12 direct ', 'E12-mutation'],
   ]) if (title.startsWith(prefix)) return label;
   const scenario = scenarioFor(title);
-  if (scenario === 'candidate') return 'F01';
+  if (scenario === 'candidate') return title.match(/^@candidate (F0[1-8]) /)![1];
   if (['us1', 'us2-join', 'us2-realtime', 'us4'].includes(scenario)) {
     return title.match(/^@[^ ]+ (E(?:0[1-9]|1[0-2])) /)?.[1] ?? 'none';
   }

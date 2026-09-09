@@ -91,12 +91,12 @@ export async function executeInvocation(invocation, { artifactRoot = path.join(r
       status: outcome === 0 ? 'passed' : 'failed', artifacts: scan.fileCount, findings: scan.findings,
       innerExit: exitCode, probeArtifactsComplete: completeProbe,
       scenarios: results.map(result => ({ scenario: ['A', 'B', 'C', 'baseline', 'auth', 'candidate', 'us1', 'us2-join', 'us2-realtime', 'us3', 'us4', 'capacity-smoke'].includes(result.scenario) ? result.scenario : 'other', status: result.status === 'passed' ? 'passed' : 'failed',
-        browserCase: ['F01', 'E01', 'E02', 'E03', 'E04', 'E05', 'E06', 'E07', 'E08', 'E09', 'E10', 'E11', 'E12-read', 'E12-subscription', 'E12-navigation', 'E12-mutation'].includes(result.browserCase) ? result.browserCase : 'none',
+        browserCase: ['F01', 'F02', 'F03', 'F04', 'F05', 'F06', 'F07', 'F08', 'E01', 'E02', 'E03', 'E04', 'E05', 'E06', 'E07', 'E08', 'E09', 'E10', 'E11', 'E12-read', 'E12-subscription', 'E12-navigation', 'E12-mutation'].includes(result.browserCase) ? result.browserCase : 'none',
         worker: Number.isInteger(result.worker) && result.worker >= 0 && result.worker < 4 ? result.worker : -1,
         repetition: Number.isInteger(result.repetition) && result.repetition >= 1 && result.repetition <= 3 ? result.repetition : 0,
         signups: Number.isInteger(result.signups) ? result.signups : 0, identities: Number.isInteger(result.identities) ? result.identities : 0 })),
     }) + '\n');
-    if (results.some(result => result.budgetFailure === true)) process.stderr.write('AUTH_BUDGET_FAILURE HTTP 429: acceptance N=49, local anonymous_users=150. Check configured limit and remaining hourly allowance; stop/start only after config change, never retry/reset/restart to evade quota.\n');
+    if (results.some(result => result.budgetFailure === true)) process.stderr.write('AUTH_BUDGET_FAILURE HTTP 429: acceptance N=65, local anonymous_users=150. Check configured limit and remaining hourly allowance; stop/start only after config change, never retry/reset/restart to evade quota.\n');
   } catch (error) { process.stderr.write(runtimeDiagnostic(error) + '\n'); outcome = signalExit(signal) ?? 1; }
   finally {
     try { await server?.close(); } catch { process.stderr.write('E2E_CLEANUP_FAILED\n'); outcome = 1; }

@@ -1432,3 +1432,155 @@ Migrations/RPC, DB tests, generated types, Phase 5 candidate modules, Phase 1 PN
 Feature 001 source/specifications and dependencies are unchanged. No type
 generation, commit, push, branch/tag operation, or T049–T064 execution occurred.
 Task state remains **T001–T048 checked; T049–T064 unchecked**.
+
+### 2026-09-09 — Phase 7 G7a evidence (T049–T059)
+
+**G7a: PASS.** Started from clean `main` at
+`89b6ed11921f8c603b653282e660738163b74da2`. Implemented only the Phase 7
+acceptance/harness work; production candidate/room code remains unchanged.
+The existing explicit Playwright file discovery and sanitizer file-location
+allowlist already cover the two spec files and shared harness paths, so those
+files needed no edit. Fixed reporter/controller labels now cover F01–F08, and
+Auth diagnostics report the complete acceptance allocation N=65. Default
+workers=1, retries=0, repeatEach=1 and capture prohibitions remain unchanged.
+
+Preparation regressions exercise the actual native-TypeScript harness with
+synthetic transports, separately from real acceptance: pre-forward faults never
+fetch/continue; retry requests both reach their barrier before release; two
+successful real-shape upstream responses alone cannot authorize response loss;
+missing committed FK/upstream failure fails closed; cleanup releases held callers
+and remains bounded with unfinished bodies. Second-room result validation accepts
+multiple owned rooms but rejects an old request ID or an incorrect/duplicate
+returned room. These infrastructure tests create zero identities.
+
+The first development candidate run (`run-3movUQ`, 18:30:42 UTC) passed F01–F07
+and failed F08's PNG-path precondition, with 18 signups/identities, cleanup and
+zero scanner findings. The installed Expo Metro represents development asset
+identity in `?unstable_path=.../cardboard-comet.png`, while export URLs use PNG
+pathnames. The corrected exact matcher preserves origin/path **and** this asset
+identity parameter, tolerating unrelated cache/platform queries without matching
+another image. Added a failing-then-passing Metro regression alongside the ordinary
+pathname case. No application defect, source asset change or upstream contract
+conflict was found. Targeted real F08 then passed (`run-Yp3dhk`, 18:33:11 UTC),
+preceded by C1 `run-Q8rWCt` (18:32:42 UTC); total targeted cost 3 identities,
+with complete cleanup and zero scanner findings.
+
+| Final G7a command/check | Actual result |
+| --- | --- |
+| `npm run supabase:start` → `npm run env:local` | Exit 0; existing local stack; public environment values withheld |
+| `npm run lint` | Exit 0 |
+| `npm run typecheck` | Exit 0 |
+| `npm run test:client` after the Metro regression | Exit 0; **23 suites, 414 tests** |
+| `npm run db:reset` | Exit 0; five existing migrations applied; clean schema/seed |
+| `npm run db:types:check` | Exit 0; canonical artifact consistent, no write generation |
+| `npm run db:test` | Exit 0; **588 assertions**: candidate 300, room session 288 |
+| `npm run playwright:install` | Exit 0; existing pinned Docker runtime prepared |
+| `npm run test:e2e:security` | Wrapper exit 0; A/B pass, expected controlled C failure; `run-XhRo0d`, 18:35:42 UTC; 1/1 signup/identity; findings=[] |
+| `npm run test:e2e -- --grep '@candidate'` | Exit 0; **8/8** F01–F08; `run-yDeTqt`, 18:36:51 UTC; **18/18** signups/identities; findings=[] |
+
+The DB suite includes the unchanged real PostgreSQL lock races: independent
+claimed authenticated host/guest sessions, both outstanding at the observable
+row-lock barrier, second caller blocked by the uncommitted winner, assignment
+UPDATE deltas 1/0, overlapping repeat deltas 0/0, and identical final row/xmin.
+No production test hook or new migration was introduced.
+
+| Browser case / task | Product scenarios | Verified real-stack evidence | Signups / identities |
+| --- | --- | --- | --- |
+| F01 / T046 regression | 1–5, 8, 12 | Waiting automatic RPC=0; two first requests held before release; matching available data and loaded local PNG; assignment UPDATE=1; repeat probes=4/3, unchanged xmin | 2/2 |
+| F02 / T052 | 9–11 | Initial application RPC=1/1, separate host/guest reloads make exactly 2/2; actual socket loss/system-ok/refetch for each participant and delayed genuine assignment UPDATE/Ready refetch add zero RPCs; displayed candidate, identities, membership and committed row/xmin preserved | 2/2 |
+| F03 / T053 | 15 | Original host actually disconnected while Waiting; guest joins and displays assignment; real host binding/refetch recovers Ready and automatically acquires the same candidate; committed row/xmin unchanged | 2/2 |
+| F04 / T054 | 6 | Four distinct ordinary authenticated members/two rooms; exact foreign and absent not_found rows with four NULL fields in both directions before/concurrent/repeated/reload/reconnect/retry access; real catalog and assignment-column reads return 403; generic acquisition failure/retry UI; each own candidate and committed row/xmin intact | 4/4 |
+| F05 / T055 | 7, 13 | Both first requests held then aborted with fetch=0/forwarded=0; Ready/NULL whole row and xmin unchanged before retry; both explicit retries held then released; matching complete displays; observed membership UPDATE=1 plus assignment UPDATE=1 | 2/2 |
+| F06 / T056 | 14 | Host failure then guest failure in two fresh rooms through the same two contexts; real UI creates the second room with a new creation request ID; no length-one owned-room assumption; successful peer display and each established row/xmin preserved through the other peer's retry | 2/2 total across both trials |
+| F07 / T057 | 16 | Both bounded route.fetch calls return real available rows held in memory; neither browser has metadata; independent owner snapshot verifies matching committed FK, Ready, unchanged membership and new xmin **before** either delivery is aborted; both responses disposed; both show recoverable errors; synchronized retries preserve the exact committed row/xmin and complete displays | 2/2 |
+| F08 / T058 | 17 | Peer resolves the actual bundled source before the fresh host's first image request; exactly one targeted PNG failure; ID/title/year retained with generic incomplete UI; explicit same-source retry loads/decodes 240×360 and paints the visible wrapper through current onLoad; candidate RPC delta=0, Auth HTTP delta=0, whole row/xmin unchanged | 2/2 |
+
+All **17/17** product scenarios map to the executable cases above; both stories
+are demonstrated. The existing component/hook regressions additionally exercise
+obsolete image callbacks, same-source remount and onLoadEnd not granting success.
+Browser F08 uses actual failed/successful local image transport, without synthetic
+successful image events or a remote substitute.
+
+C1 remains enforced by the original safe contexts, ordinary text/attribute
+inspection, private credential registry, fixed reporter and finalized scanner.
+Strict screenshot eligibility and capture implementation are unchanged. No trace,
+HAR, video, storage export or raw Auth/HTTP/Realtime dump was enabled. Candidate
+RPC/catalog destinations and fixture-image identity are classified specifically;
+the actual displayed source must be on the local app origin and its served bytes
+must match the original PNG SHA-256. Unrelated runtime scripts/fonts/data/sockets
+are observed without a global movie-provider network restriction. No external
+movie resource, Storage poster or movie API is used by these cases.
+
+R02 admission used the retained prior summaries rather than assuming a fresh
+window. Before the development block at 18:29:07 UTC, the conservative retained
+current-hour cost was 52 automated + 2 manual allowance + 19 reserved = **73 <=
+150**. The 100 oldest Phase 6 automated attempts had all expired conservatively
+by 18:29:42 UTC (using summary finalization as the expiry anchor); the later 3
+review attempts stayed counted. The targeted fix block cost 3, including its C1.
+Final G7a admission was 25 observed + 2 manual allowance + 19 reserved = **46 <=
+150**. Phase 7 measured usage through G7a is **41/41** (19 development + 3 targeted
++ 19 final G7a), including the failed development case. Recovery, reload, reconnect
+and F06's second room create zero extra identities. No 429, automatic Auth retry,
+limit change or quota-evasion restart occurred; required resets were not credited
+as quota recovery. All finalized runs cleaned their contexts and removed their
+owned Docker browser runtimes.
+
+Canonical types remain byte-identical at SHA-256
+`f6b77ecf056b1ccb68f2c43a48fccde2a305a5fe8ee20d0124120050d0415a69`.
+Source PNGs, migrations/RPC, DB tests, generated types, dependencies, R01 scripts,
+Feature 001 specifications/source/acceptance cases and the room application's
+single-channel behavior remain unchanged. T049–T059 were checked only after this
+successful evidence; G7b/T060 is recorded separately below. T061–T064 have not
+been executed. No commit, push, branch or tag operation was performed.
+
+### 2026-09-09 — Phase 7 G7b evidence (T060)
+
+**Result: PHASE 7 GREEN.** After all eight cases had individual successful
+execution and G7a passed, reserved the separate 66-attempt G7b block:
+44 observed current-hour attempts + 2 conservative manual allowance + 66 =
+**112 <= 150**. Existing/failed development usage stayed counted; no fresh-window
+assumption, limit increase or quota-evasion restart was used.
+
+| G7b command/check | Actual result |
+| --- | --- |
+| `npm run db:reset` | Exit 0; existing migrations/fixture seed restored |
+| `npm run db:types:check` | Exit 0; unchanged canonical SHA-256 shown above |
+| `npm run test:e2e:security` | Wrapper exit 0; A/B pass plus expected controlled C failure; `run-UZbvfx`, 18:40:04 UTC; 1 signup/identity; finalized findings=[] |
+| Unfiltered `npm run test:e2e` | Exit 0; **32/32** cases: 8 candidate + 24 Feature 001; `run-kz4teD`, 18:42:33 UTC; **65/65** signups/identities; finalized findings=[] |
+| `npm run supabase:stop` | Exit 0; local project stack stopped; no owned Docker browser runtime remains |
+| `git diff --check` and versionable-file audit | Pass; only the ten Phase 7 files below changed; no untracked versionable file |
+
+F01–F08 each passed with allocation **2, 2, 2, 4, 2, 2, 2, 2**, total 18.
+The unchanged 24-case Feature 001 suite used 47; combined 65 plus C1's one = 66.
+All 32 result records confirm cleanup and no budget failure. Feature 001 create,
+join, capacity race, both recovery paths, isolation and security assertions pass
+without skipping or rewriting those tests. Both Feature 002 story contracts and
+all 17 scenarios in G7a's executable mapping pass again in the combined suite.
+
+Total actual Phase 7 usage, including development failure, is **107 signups /
+107 identities**: development C1 + candidates = 19; targeted C1 + F08 = 3;
+final G7a = 19; G7b = 66. All eight finalized invocation summaries have cleanup
+receipts and zero scanner findings. C1's controlled inner failures are expected
+and each security wrapper exits 0. There was no 429 or automatic retry. No
+repeatability block or disposable/fresh checkout was started.
+
+Created versionable files: **none**. Modified files:
+
+- `__tests__/config/e2e-diagnostics.test.ts`
+- `__tests__/config/playwright-runtime.test.ts`
+- `e2e/first-movie-candidate.spec.ts`
+- `e2e/support/candidate-harness.ts`
+- `e2e/support/room-harness.ts`
+- `e2e/support/safe-diagnostics.ts`
+- `e2e/support/safe-reporter.ts`
+- `scripts/run-e2e.mjs`
+- `specs/002-first-movie-candidate/quickstart.md`
+- `specs/002-first-movie-candidate/tasks.md`
+
+Final protected-file comparison confirms application/Feature 001 code and
+specifications, original PNGs, migrations/RPC, DB tests, generated DB types,
+dependencies and R01 scripts unchanged. No additional application Realtime
+channel, polling, movie provider or future movie interaction was introduced.
+Task descriptions remain byte-identical after normalizing checkboxes:
+**T001–T060 checked; T061–T064 unchecked**. No unresolved Phase 7 item remains.
+Branch stays `main` at the original HEAD; no commit or push was made.

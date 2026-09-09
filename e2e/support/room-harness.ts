@@ -303,3 +303,36 @@ export async function linkGuest(guest: SafeDiagnostics, room: RoomProjection, in
   await assertAccepted(await joined, room, 'joined', 'guest', 'ready');
   await assertReady(guest.page, guest, room);
 }
+
+export function selectCreatedTrial(rows: unknown, rooms: RoomProjection[], request: unknown, priorRequest: string, priorRoom: string) {
+  if (typeof request !== 'string' || !/^[0-9a-f-]{36}$/.test(request) || request === priorRequest ||
+    !Array.isArray(rows) || rows.length !== 1 || rows[0]?.outcome !== 'created' || rows[0].room_id === priorRoom) throw new Error('E2E_SAFE_FAILURE');
+  const matches = rooms.filter(room => room.id === rows[0].room_id && room.code === rows[0].room_code && room.state === 'waiting');
+  if (matches.length !== 1) throw new Error('E2E_SAFE_FAILURE');
+  return matches[0];
+}
+
+// A second logical create via the real UI and retained Auth storage. No signup
+// waiter/startHost and no assumption that this participant owns only one room.
+export async function createWaitingWithSession(page: Page, diagnostics: SafeDiagnostics, api: PublicApi,
+  previous: ReturnType<typeof committedRoomSnapshot>) {
+  await diagnostics.assertAuthAccounting(1, 1);
+  const participant = await ownParticipant(page);
+  expect((await page.goto('/'))?.status() === 200).toBe(true);
+  await expect(page.getByRole('button', { name: 'Create Room' })).toBeVisible();
+  const created = page.waitForResponse(response => new URL(response.url()).pathname === '/rest/v1/rpc/create_room');
+  const recovered = page.waitForResponse(response => new URL(response.url()).pathname === '/rest/v1/rpc/join_room');
+  await page.getByRole('button', { name: 'Create Room' }).click();
+  const response = await created;
+  expect(response.ok()).toBe(true);
+  const request = response.request().postDataJSON();
+  const room = selectCreatedTrial(await response.json(), await ownRooms(page, api), request?.p_creation_request_id,
+    previous.row.creation_request_id, previous.row.id);
+  await assertAccepted(await recovered, room, 'already_member', 'host', 'waiting');
+  await assertWaiting(page, diagnostics, room);
+  await diagnostics.assertAuthAccounting(1, 1);
+  expect(await ownParticipant(page) === participant).toBe(true);
+  const invitation = await page.getByLabel('Invitation link', { exact: true }).innerText();
+  expect(invitation === new URL(`/room/${room.code}`, page.url()).href).toBe(true);
+  return { api, room, invitation, participant };
+}

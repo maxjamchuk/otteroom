@@ -171,7 +171,7 @@ describe('repository-owned Playwright runtime', () => {
   `));
 });
 
-it('Phase 6 discovery retains serial default acceptance and bounded runtime invocation options', () => verify(prelude + `
+it('Phase 7 discovery retains serial default acceptance and bounded runtime invocation options', () => verify(prelude + `
   const { default: config } = await import('./playwright.config.ts');
   const { parseInvocation } = await import('./scripts/run-e2e.mjs');
   assert.deepEqual(config.projects.find(p => p.name === 'acceptance').testMatch,
@@ -179,10 +179,32 @@ it('Phase 6 discovery retains serial default acceptance and bounded runtime invo
   assert.equal(config.workers, 1); assert.equal(config.repeatEach, 1); assert.equal(config.retries, 0);
   assert.equal(config.reporter[0][0], './e2e/support/safe-reporter.ts');
   for (const field of ['trace', 'video', 'screenshot']) assert.equal(config.use[field], 'off');
-  assert.deepEqual(parseInvocation(['acceptance', '--grep', 'F01']).forwarded, ['--grep', 'F01']);
+  for (const selector of ['@candidate', 'F01', 'F02', 'F03', 'F04', 'F05', 'F06', 'F07', 'F08'])
+    assert.deepEqual(parseInvocation(['acceptance', '--grep', selector]).forwarded, ['--grep', selector]);
   assert.deepEqual(parseInvocation(['acceptance', '--workers=2', '--repeat-each=2']).forwarded,
     ['--workers', '2', '--repeat-each', '2']);
   for (const args of [['acceptance', 'first-movie-candidate.spec.ts'], ['acceptance', '--workers=5'],
     ['acceptance', '--repeat-each=4'], ['acceptance', '--retries=1'], ['security', '--grep', 'F01']])
     assert.throws(() => parseInvocation(args));
+`));
+
+
+it('discovers exactly eight candidate cases and the approved 18/65 signup allocation without starting browsers', () => verify(prelude + `
+  import fs from 'node:fs';
+  import ts from 'typescript';
+  const source = fs.readFileSync('e2e/first-movie-candidate.spec.ts', 'utf8');
+  const ast = ts.createSourceFile('candidate.ts', source, ts.ScriptTarget.Latest, true);
+  const titles = [], budgets = {};
+  function walk(node) {
+    if (ts.isCallExpression(node) && node.expression.getText(ast) === 'test' && ts.isStringLiteral(node.arguments[0]))
+      titles.push(node.arguments[0].text);
+    if (ts.isPropertyAssignment(node) && /^F0[1-8]$/.test(node.name.getText(ast)))
+      budgets[node.name.getText(ast)] = Number(node.initializer.getText(ast));
+    ts.forEachChild(node, walk);
+  }
+  walk(ast);
+  assert.deepEqual(titles.map(title => title.split(' ')[1]), ['F01','F02','F03','F04','F05','F06','F07','F08']);
+  assert.deepEqual(budgets, { F01:2, F02:2, F03:2, F04:4, F05:2, F06:2, F07:2, F08:2 });
+  assert.equal(Object.values(budgets).reduce((a,b) => a+b, 0), 18);
+  assert.equal(47 + Object.values(budgets).reduce((a,b) => a+b, 0), 65);
 `));
