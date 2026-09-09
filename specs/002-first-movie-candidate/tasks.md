@@ -68,17 +68,17 @@ The only new public application RPC is `public.ensure_room_candidate(p_room_id u
 
 **Purpose**: Establish the four local fixture assets before schema or candidate UI work.
 
-- [ ] T001 Add fixture-file validation in `__tests__/candidates/assets.test.ts` using existing Node/Jest facilities: require exactly the four approved paths in the fixture table above, valid PNG signatures, 240×360 IHDR dimensions, size at most 65,536 bytes each, distinct file contents, and no extra fixture PNG; first observe failure for missing assets. Keep expected metadata test-only, with no client selection catalog.
+- [x] T001 Add fixture-file validation in `__tests__/candidates/assets.test.ts` using existing Node/Jest facilities: require exactly the four approved paths in the fixture table above, valid PNG signatures, 240×360 IHDR dimensions, size at most 65,536 bytes each, distinct file contents, and no extra fixture PNG; first observe failure for missing assets. Keep expected metadata test-only, with no client selection catalog.
 
-- [ ] T002 [P] Create the original geometric poster `assets/candidates/cardboard-comet.png` for The Cardboard Comet: exactly 240×360 pixels, at most 64 KiB, no external artwork or remote resource reference; own only this asset and do not edit a shared registry.
+- [x] T002 [P] Create the original geometric poster `assets/candidates/cardboard-comet.png` for The Cardboard Comet: exactly 240×360 pixels, at most 64 KiB, no external artwork or remote resource reference; own only this asset and do not edit a shared registry.
 
-- [ ] T003 [P] Create the original geometric poster `assets/candidates/pebble-bay-lanterns.png` for Lanterns of Pebble Bay: exactly 240×360 pixels, at most 64 KiB, no external artwork or remote resource reference; own only this asset and do not edit a shared registry.
+- [x] T003 [P] Create the original geometric poster `assets/candidates/pebble-bay-lanterns.png` for Lanterns of Pebble Bay: exactly 240×360 pixels, at most 64 KiB, no external artwork or remote resource reference; own only this asset and do not edit a shared registry.
 
-- [ ] T004 [P] Create the original geometric poster `assets/candidates/cloud-tram-four.png` for Cloud Tram Number Four: exactly 240×360 pixels, at most 64 KiB, no external artwork or remote resource reference; own only this asset and do not edit a shared registry.
+- [x] T004 [P] Create the original geometric poster `assets/candidates/cloud-tram-four.png` for Cloud Tram Number Four: exactly 240×360 pixels, at most 64 KiB, no external artwork or remote resource reference; own only this asset and do not edit a shared registry.
 
-- [ ] T005 [P] Create the original geometric poster `assets/candidates/clockwork-orchard.png` for The Clockwork Orchard: exactly 240×360 pixels, at most 64 KiB, no external artwork or remote resource reference; own only this asset and do not edit a shared registry.
+- [x] T005 [P] Create the original geometric poster `assets/candidates/clockwork-orchard.png` for The Clockwork Orchard: exactly 240×360 pixels, at most 64 KiB, no external artwork or remote resource reference; own only this asset and do not edit a shared registry.
 
-- [ ] T006 Run `npm run lint`, `npm run typecheck`, and `npm run test:client`, including `__tests__/candidates/assets.test.ts`; inspect the four original PNGs for usable distinct artwork and record G1 command/results in `specs/002-first-movie-candidate/quickstart.md`. Require exact file/key coverage and all existing checks green before schema work.
+- [x] T006 Run `npm run lint`, `npm run typecheck`, and `npm run test:client`, including `__tests__/candidates/assets.test.ts`; inspect the four original PNGs for usable distinct artwork and record G1 command/results in `specs/002-first-movie-candidate/quickstart.md`. Require exact file/key coverage and all existing checks green before schema work.
 
 **Checkpoint G1**: Local PNG validity and existing static/client checks pass; no candidate UI behavior is introduced.
 

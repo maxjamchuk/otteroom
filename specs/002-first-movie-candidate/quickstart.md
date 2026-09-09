@@ -369,3 +369,73 @@ fresh-checkout result, finalized C1 scan results, local poster/export/network
 assertions, and successful shutdown. Use existing safe diagnostic outputs;
 do not paste credentials or raw RPC/network data. This planning workflow creates
 the guide only and supplies no runtime pass claim.
+
+## Phase 1 G1 Validation Record — 2026-09-09
+
+Implementation scope: T001–T006 only. Started on `main` with an empty
+`git status --short` at `c4cfece5a9463d194a3b3f06cdd662d498f44a7d`
+(`docs: define first movie candidate feature`). The existing installed Node
+v24.20.0/npm 11.19.0 runtime was used; no dependencies or configuration changed.
+The results in this section are implementation evidence for G1 only; later
+database, application, packaging and browser checks above remain future work.
+
+T001 discovery confirmed the planned root `assets/candidates/` directory and
+filenames had no collisions. The existing Expo/Metro PNG support and
+`@/assets/*` TypeScript alias need no configuration change. The new
+`__tests__/candidates/assets.test.ts` uses existing Jest and Node built-ins;
+its expectations are test-only, with no runtime catalog or poster registry.
+
+| Command / inspection | Actual result |
+| --- | --- |
+| `npm run test:client -- --runTestsByPath __tests__/candidates/assets.test.ts` before asset creation | Expected exit 1: six checks failed with ENOENT for the absent directory/files |
+| Same focused command after asset creation | Exit 0: one suite, 6/6 tests passed |
+| `npm run lint` | Exit 0 |
+| `npm run typecheck` | Exit 0 |
+| `npm run test:client` | Exit 0: 17/17 suites, 282/282 tests passed, including the 276 existing tests |
+| `file assets/candidates/*.png` and binary metadata/size inspection | Exactly four non-interlaced, 8-bit RGB PNGs, each 240×360 and below 65,536 bytes |
+| Open each original PNG for visual inspection | All four decode and show distinct, usable artwork; no preview copies created |
+
+The automated asset checks validate exact directory membership and regular
+files, PNG signatures, chunk ordering/CRCs, IHDR dimensions/profile, complete
+IDAT inflation and reconstructed pixel rows, nonempty visible color content,
+the size cap, and distinct file and decoded-pixel contents. Only IHDR/IDAT/IEND
+chunks are present; no ancillary metadata or external resource references are
+embedded. Validation is deterministic and uses no network or renderer dependency.
+
+| Approved file | Dimensions | Bytes | PNG validation |
+| --- | --- | ---: | --- |
+| `assets/candidates/cardboard-comet.png` | 240×360 | 5,011 | PASS |
+| `assets/candidates/pebble-bay-lanterns.png` | 240×360 | 6,521 | PASS |
+| `assets/candidates/cloud-tram-four.png` | 240×360 | 5,616 | PASS |
+| `assets/candidates/clockwork-orchard.png` | 240×360 | 7,711 | PASS |
+
+All artwork was drawn locally with one-off Python standard-library code:
+geometric shapes, gradients and hand-defined pixel lettering, rendered at 3×
+resolution and reduced with integer box averaging, then encoded as RGB PNG
+with zlib compression. No third-party artwork, fonts, downloads, random input,
+Pillow, image service or new package was used. Each complete render/encoding
+ran twice in memory and produced byte-identical output before writing its
+single source file. No permanent generator was added: the approved deliverable
+is the four fixed PNG files plus the repeatable Jest validation.
+
+Visual distinctions are a faceted paper comet on navy, gold lanterns over teal
+water, a red suspended tram among pale clouds, and a gold gear tree on plum.
+The four approved filename stems provide exact poster-key coverage without
+introducing the later client registry.
+
+G1 applicability under Constitution I: fresh installation/clone validation is
+not applicable to this asset-only checkpoint, which explicitly reuses installed
+dependencies; no dependency or setup contract changed, and T063 owns the full
+fresh-checkout run. Application build/export and local application startup are
+not applicable to proving these currently unreferenced source images: G1
+requires static/client checks, while T047/G6 proves bundle inclusion after UI
+imports exist. No packaging or visible application behavior is claimed here.
+The reproduced G1 scenario is four valid, distinct local fixtures. Database,
+Supabase and browser acceptance are not applicable without schema or application
+changes and were not run; this checkpoint consumed zero Auth signups.
+
+G1 is green. Changes are limited to the four PNGs, the asset test, task checkboxes
+and this validation record. Feature 001, application code, SQL/migrations/RPC,
+generated database types, dependencies and lockfile remain unchanged. No movie
+provider or runtime network dependency was introduced. T007–T064 remain
+unchecked; implementation stops at this checkpoint without a commit or push.
