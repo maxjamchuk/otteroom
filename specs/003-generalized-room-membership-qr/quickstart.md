@@ -514,3 +514,176 @@ identity/window accounting, C1/scanner result, export/poster/QR result and clean
 Identify any non-applicable check with concrete phase reason. Preserve useful
 failed-run history and consumed quota, superseding it only with actual evidence.
 This planning file contains no completed implementation evidence or task boxes.
+
+## Implementation evidence
+
+### 2026-09-10 — Phase 1 baseline and applicability (T001)
+
+Source main HEAD: `3c25659000ad5e8e7af66c43a9ffe460c94faade`. Initial `git status --short` was empty.
+Captured SHA-256 of all 146 tracked files before editing; 142 existing files are protected
+outside the four permitted modified paths. Group hashes below are SHA-256 of
+sorted `path + NUL + file SHA-256 + newline` entries; individual originals are
+also reproducible with `git show <starting-HEAD>:<path>`.
+
+| Protected group | Files | Manifest SHA-256 |
+| --- | ---: | --- |
+| Feature 001 specifications | 10 | `a1f8f94d22ae72026344b348da0d53311eddc6eb399325c6600ed7e0893c79a3` |
+| Feature 002 specifications | 9 | `29c981b4baa14c52795b3cc308be3f46b445db5bcfda887c79c0987ce76cf8ab` |
+| Product documents | 2 | `b2615db5def6498507782580762f34e23de8ce8755b49b0a907e06ecce4cd43d` |
+| Historical migrations | 5 | `157061795ea7689a0bb037e3fc9fe191de53d3481661cf003411d65d44c10366` |
+| Original PNG posters | 4 | `781b24282bdcbd3f86dc92f2b4ad27f6672c6cf49cd52b7c9ab2609b26487bad` |
+| Candidate implementation | 6 | `8c5475fdffa35120604263eb236006558f0a471c7c63195993065d372bff829f` |
+| Room application routes | 3 | `5361a62ec84dcd935e16a71e4548667ab3ac130c067748e130f63f02f4fce9f8` |
+
+Canonical database types SHA-256: `f6b77ecf056b1ccb68f2c43a48fccde2a305a5fe8ee20d0124120050d0415a69`.
+Canonical inode/size/mtime_ns/ctime_ns: `444960/7370/1788966938747066009/1788966940057157360`.
+
+Default shell Node22.22.0/npm10.9.4 is not the project toolchain. All implementation
+and validation commands use the already-installed
+`/home/maks/.nvm/versions/node/v24.20.0/bin` first in PATH:
+`node --version` = v24.20.0; `npm --version` = 11.19.0. Framework pins remain
+the committed package/lock baseline. No toolchain installation was needed.
+
+Applicable scope: only locked QR/SVG/jsQR dependencies, standalone component and
+test, and this evidence log/task bookkeeping. G1 requires the existing full
+static/client/DB/type-check/web/native/C1/32-case acceptance path with cleanup.
+Omit only the not-yet-created generalized migration runner. QR route integration,
+QR browser decode/join, G01–G09 and every T007+ task are outside this phase.
+Standalone tests prove encoder/error behavior; current application exports do
+not claim inclusion of an unimported QR component. No G1 pass is claimed yet.
+
+Initial Docker inventory: no Otteroom Supabase or managed browser container.
+Other-project containers remain untouched. Planned G1 reservation is 66
+signups/identities (47 room +18 candidate +1 C1); quota admission and actual
+attempts will be recorded before/after browser execution.
+
+### 2026-09-10 — Phase 1 dependencies (T002)
+
+Sequential `npx expo install react-native-svg`, exact QR install, exact dev-only
+jsQR install, then `npm ci` all exited 0 under Node24.20.0/npm11.19.0.
+Resolved SVG15.15.4, QR6.3.24 and jsQR1.4.0 match the reviewed contract. Existing
+framework declarations and resolved framework versions are unchanged. Only the
+three approved direct dependencies and their transitive dependencies were added;
+no scanner/camera, custom transformer, form or state package was introduced.
+The installer reported 13 moderate audit findings and existing install-script
+warnings; no audit fix, override or unrelated package update was applied.
+G1 has not yet run.
+
+### 2026-09-10 — Standalone QR tests and component (T003–T005)
+
+Tests were created before `src/rooms/invitation-qr.tsx`. The exact focused command
+`npm run test:client -- --runTestsByPath __tests__/rooms/invitation-qr.test.tsx`
+first exited 1 because the component did not exist (one failed suite, zero tests
+executed). This was expected pre-implementation evidence, not a behavior pass.
+After implementation the same command exited 0: **1 suite /11 tests PASS**.
+
+The healthy path uses the actual package and qrcode encoder, with nonempty real
+module geometry. Tests assert the one required value prop, accessible wrapper,
+black stroke, opaque white margin/background, M correction, rendered240 and
+quietZone48/viewBox336; stable same-value rerender and isolated changed value.
+Real empty/oversized encoder rejection, injected transient encoder failure and
+downstream SVG render failure stay inside the keyed local boundary. Retry uses
+the same value; successful retry returns to actual encoder/rendering. Tests
+assert generic text, preserved independent sibling content, no render-time parent
+update warning, and **zero createRoom/joinRoom/refetchRoom/ensureRoomCandidate
+calls**, including every failure/retry. The encoder is never replaced for healthy
+geometry checks. No onError callback schedules a parent update.
+
+`app/room/[code].tsx` remains byte-identical and does not import the component.
+No browser QR decode/join or generalized membership work was performed.
+
+G1 admission: existing source summaries have filesystem UTC timestamps no later
+than 2026-09-09 21:04:05; fresh-checkout evidence records the later prior-day
+22:08 cleanup (historical headings use the local date). At this work's
+2026-09-10 16:16 UTC baseline no project runtime was present. Those prior
+automated attempts are outside the hourly window; no signup probe or manual
+Auth action was performed in this phase. Reserve66 for C1 plus existing32, with
+all new/failed attempts charged if they occur. Stack startup is ordinary G1
+setup, never a quota-recovery mechanism.
+
+### 2026-09-10 — First G1 attempt: typecheck correction
+
+The normal driver completed npm ci, safe local start/env, clean reset,
+db:types:check and lint, then typecheck stopped on TS7006 in the new QR test's
+console-warning inspection callback. The local test-only correction explicitly
+types that inspected argument as unknown; production behavior and the contract
+are unchanged. The failure-preserving EXIT trap invoked Supabase shutdown.
+No browser/C1 test had started: this attempt consumed **0 signups /0 identities**.
+G1 remains incomplete; rerun the complete command path after the correction.
+
+### 2026-09-10 — G1 continuation after interrupted command session
+
+Second normal driver completed npm ci, start/env/reset, check-only types, lint,
+typecheck, all **24 client suites /425 tests**, both DB suites **588/588**, and
+web export. Its command session was lost during native export; at 16:40 UTC no
+native completion metadata or new browser summary existed and no driver/Node
+process remained. Supabase was still running. This interruption is not recorded
+as a native/export or G1 pass. No C1/E2E invocation had started: additional Auth
+consumption remains0. Resume from native export plus every remaining command,
+keeping the existing stack without reset/restart. Record durable bounded step
+receipts and explicitly verify shutdown; preceding completed checks remain valid
+because application/package/test files have not changed.
+
+### 2026-09-10 — Phase 1 / G1 complete (T006): PHASE 1 GREEN
+
+Source remains `main` at `3c25659000ad5e8e7af66c43a9ffe460c94faade`.
+The successful checks below supersede the incomplete G1 entries above; their
+failure/interruption history and zero-Auth accounting are retained. Following
+the test-only type annotation fix, the second driver passed every command
+through web export. Native export and all remaining commands then passed on
+the same running stack, without a reset/restart or intervening code change.
+Node24.20.0/npm11.19.0 and the exact T002 dependency versions were used throughout.
+
+| Executed command/check | Result |
+| --- | --- |
+| `npm ci` | PASS; original dependency declarations and existing resolved package versions preserved |
+| `npm run supabase:start` / `npm run env:local` / `npm run db:reset` | PASS; only the five committed historical migrations applied |
+| `npm run db:types:check` | PASS; check only, canonical bytes and file metadata unchanged |
+| `npm run lint` / `npm run typecheck` | PASS, including the required-value TypeScript contract assertions |
+| `npm run test:client` | PASS: 24 suites /425 tests, including all 11 standalone QR tests |
+| `npm run db:test` | PASS: 2 suites /588 assertions (room288 + candidate300) |
+| `npm run web:export` | PASS: current application static web export |
+| `npx expo export --platform ios --platform android --output-dir dist/native-validation` | PASS: both platform metadata entries and emitted bundles verified |
+| Four existing fixture posters | PASS: PNG, 240x360, <=65536 bytes; byte-identical copies found in both web and native exports |
+| `npm run playwright:install` | PASS: existing managed Playwright Docker runtime |
+| `npm run test:e2e:security` | PASS: expected controlled failure probe verified; scanner findings0 |
+| `npm run test:e2e` | PASS: existing32/32 (Feature00124/24 + Feature0028/8), scanner findings0 |
+| `npm run supabase:stop` and managed browser cleanup | PASS; driver exit0/cleanup0, no owned container or test/export process remains |
+| `git diff --check` and new-file whitespace check | PASS; only the six approved Phase 1 paths differ |
+
+Canonical database types retain SHA-256
+`f6b77ecf056b1ccb68f2c43a48fccde2a305a5fe8ee20d0124120050d0415a69`
+and inode/size/mtime_ns/ctime_ns
+`444960/7370/1788966938747066009/1788966940057157360`.
+No `db:types` write occurred. The nonexistent Feature003 migration runner is
+inapplicable to G1; membership migration/concurrency receipts belong to Phase 2.
+
+Poster byte sizes are cardboard-comet5011, pebble-bay-lanterns6521,
+cloud-tram-four5616 and clockwork-orchard7711. Native export emitted iOS and
+Android bundles; these and the web export validate the current application,
+without claiming route-integrated QR, physical-device testing or browser QR
+decoding. Owned ignored export output was removed after inspection.
+
+Safe browser receipts: C1 `run-HkAC3R` completed at
+`2026-09-10T16:42:32Z`; acceptance `run-oF8EFB` completed at
+`2026-09-10T16:44:59Z`. C1 has two passing controls and its one expected failing
+capture probe, which the security gate accepted with complete safe artifacts.
+Both runners recorded successful cleanup and zero scanner findings. Existing
+safe summaries remain in ignored test-results for review. Trace/HAR/video,
+storage-state export, raw Auth/request/Realtime dumps and QR diagnostic capture
+were never enabled; C1 implementation is unchanged.
+
+Measured R02 consumption: Feature001 **47 signups /47 identities**, Feature002
+**18/18**, C1 **1/1**, total **66/66**. The earlier failed and interrupted
+pre-browser attempts each consumed0. No additional browser invocation, manual
+signup, 429 retry or quota-limit change occurred. Prior recorded use was outside
+the hourly window, so no quota wait was needed. Supabase was not restarted to
+evade quota; continuation preserved the running stack until normal shutdown.
+
+Final baseline audit: all142 protected existing files remain byte-identical,
+including Feature001/002 specifications, product documents, historical
+migrations/RPCs, generated types, candidates, PNGs, room routes and C1 harness.
+Only package.json, package-lock.json, this log and tasks.md were modified;
+only the standalone QR component and its tests were added. The room route does
+not import the component. No generalized membership, new DB surface, G01-G09 or
+T007+ work was performed. T001-T006 are complete; T007-T067 remain unchecked.
