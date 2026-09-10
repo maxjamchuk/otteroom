@@ -1,0 +1,516 @@
+# Quickstart and Validation: Generalized Room Membership & QR Join
+
+**Status**: Planned validation, not executed evidence. **Date**: 2026-09-10.
+No command below is claimed to pass during planning. Future implementation must
+record actual commands/results, test counts, schema/type hashes, Auth accounting
+and cleanup before marking its phase green.
+
+## Prerequisites and command ownership
+
+Use repository root `/home/maks/work/otteroom`, source branch main, existing
+Node 24.20.0/npm11.19.0, committed lockfile and project CLI Supabase2.116.0.
+Docker must be available. Retain existing Playwright1.63.0 managed Docker runtime
+on this Linux host; do not replace it with ad hoc browser/dependency workarounds.
+No hosted Supabase, Dashboard SQL, Auth account, movie API, scanner or phone is
+required for automated acceptance.
+
+All commands in this file are for future implementation/validation. The new
+`scripts/check-room-membership-migration.mjs` does not exist at planning time.
+Schema/type/client changes must be implemented together before cutover validation;
+do not run a new DB against the obsolete client and call that a green phase.
+
+### QR dependencies — Phase 1 implementation only
+
+Run sequentially, review package/lock changes and preserve the pinned framework:
+
+```sh
+npx expo install react-native-svg
+npm install --save-exact react-native-qrcode-svg@6.3.24
+npm install --save-dev --save-exact jsqr@1.4.0
+npm ci
+```
+
+Expo57's selected SVG version must match 15.15.4. Do not force incompatible
+peers or add a scanner/transformer. jsQR is test-only. Phase 1 tests the standalone
+component/real local encoder and keeps existing application checks green;
+integrated QR export/decode evidence waits until its Phase 3 route import.
+
+## Version-limited existing-row migration evidence
+
+Future paths:
+
+- `scripts/check-room-membership-migration.mjs`
+- `supabase/tests/migration/room_membership.before.sql`
+- `supabase/tests/migration/room_membership.after.sql`
+
+Invoke with the local stack running and no application/test traffic:
+
+```sh
+node scripts/check-room-membership-migration.mjs
+```
+
+The runner owns this exact sequence, using project-local CLI resolution and
+the established bounded owner-only Docker/psql technique:
+
+1. Verify local project identity and no competing run. Reset with
+   `supabase db reset --local --version 20260909000001 --no-seed`.
+2. Run before.sql through `docker exec -i supabase_db_otteroom-room-session
+   psql -X -U postgres -d postgres -v ON_ERROR_STOP=1 -qAt`. Create only controlled
+   synthetic Auth fixtures and three legacy rooms: Waiting; Ready without
+   candidate; Ready with a valid non-lowest fixture assignment. Fix known room
+   IDs/codes/request IDs/timestamps. Snapshot expected values in bounded memory,
+   never in diagnostic files. These are zero GoTrue signup operations.
+3. Run the actual pending migration with `supabase migration up --local`.
+   Its transaction executes `ANALYZE public.rooms` as postgres after the
+   generated-expression/schema cutover and before COMMIT. Require successful
+   completion; SET EXPRESSION removes the changed column's statistics.
+4. after.sql checks exact IDs/codes/request IDs/creator/room timestamps/state
+   and candidate FK preserved; target2/count1 or2; host→voting creator;
+   guest→voter; exactly one row per room/user; new stable member IDs; creator
+   recovery flags; no old columns/overloads or guest-dependent constraint/policy.
+   Legacy member joined_at is migration materialization time. Do not compare
+   pre/post xmin across the necessary rewrite. With these nonempty fixtures,
+   verify as owner that pg_catalog.pg_statistic contains statistics for
+   public.rooms.state after ANALYZE. Do not wait for autovacuum or require
+   fixed planner estimate values. The final empty clean reset also executes
+   ANALYZE successfully, but need not produce statistics for absent rows.
+5. Exercise migrated creator/voter recovery and existing candidate through real
+   authenticated SQL roles/claims, not owner-as-caller. Verify repeated calls
+   do not insert/update membership and the assigned non-lowest movie is retained.
+6. Remove only owned fixtures, then restore a full latest clean reset in
+   guaranteed cleanup on success/failure/interruption. Propagate verification
+   and cleanup failures. Never generate types inside this runner.
+
+Record safe counts/booleans only; drain/suppress raw CLI or SQL output that might
+contain private fixture/session data. The before/after scripts live outside the
+default database test directory so a normal pgTAP run cannot reset its own schema.
+Normal reset and pgTAP afterward verify reproducibility independently of this
+nonempty upgrade test.
+
+## R01 — One intentional update, then check only
+
+Only inside Phase 2, after the complete migration/RPC/public DB contract and
+database evidence are final:
+
+```sh
+npm run db:reset
+npm run db:test
+npm run db:types
+npm run db:types:check
+```
+
+Review the sole intentional canonical update in src/types/database.generated.ts
+with the entire cutover. No manual nullability patch. Then independently:
+
+```sh
+sha256sum src/types/database.generated.ts
+stat -c '%i %s %Y %Z' src/types/database.generated.ts
+npm run db:reset
+npm run db:types:check
+sha256sum src/types/database.generated.ts
+stat -c '%i %s %Y %Z' src/types/database.generated.ts
+```
+
+Require byte equality and unchanged canonical inode/size/mtime/ctime through
+check-only validation. Every subsequent check/fresh clone uses db:types:check;
+no preceding write to conceal drift. R01 wrapper semantics remain unchanged.
+
+## Database and client acceptance
+
+Full `npm run db:test` must cover both evolved existing suites. Do not target a
+fixed old assertion count: retain their safety classes and record the actual
+new totals. Prior baseline 588 (288 room +300 candidate) is historical evidence,
+not the future expected test count.
+
+| Area | Required executable proof |
+| --- | --- |
+| Schema | Exact rooms/member columns/types/defaults/keys/FKs/checks; state generated from count; no final host/guest; candidate check generalized; no count above target |
+| Creation | Four target/mode cases; min/NULL/type rejection; exact settings; same-request sequential/concurrent/lost-ack recovery; conflicting valid retry returns original; one room/member; named code conflicts |
+| Join | Intermediate Waiting, final Ready; valid existing-member before full; non-voting creator zero; only a non-creator without membership reaches new-voter capacity/admission; malformed/unknown/full no writes; real same-identity, last-slot and multiple-slot races |
+| Failure | Inject member insertion/count update fault in test scope; no partial room/member/count; accepted lost response recovers existing membership; missing creator membership and persisted non-creator non-voter cause exceptional room RPC failure without repair/promotion or a normal outcome |
+| Security | Exact public/helper owner/definer/search_path/ACL; missing subject; private helper false for foreign/missing; direct roster/catalog/writes denied; own room projection including NVC allowed, foreign denied |
+| Candidate | Generalized Waiting not_ready; all authorized members incl NVC share one Ready assignment; empty/broken catalog exceptional; no rotation, repeated no-update, rollback and real candidate race retained |
+| Cleanup | No production test trigger/helper, synthetic room/user or open dblink caller remains; original fixture catalog/assets unchanged |
+
+In `supabase/tests/database/room_session.test.sql`, implement the exact
+[creator/member integrity fault evidence](contracts/room-rpcs.md#creator-and-member-integrity-fault-evidence):
+privileged savepoint setup removes creator membership for both original voting
+choices in Waiting and Ready, leaving the room snapshot untouched. The creator's
+real authenticated join_room must throw, return no joined/full/already_member
+row, insert no voter membership and preserve count/state/configuration, all
+other memberships, timestamps and room xmin. A separate privileged corruption
+of an admitted non-creator to is_voter=false must also fail the real room RPC
+projection without writes. Roll back each fault savepoint, verify the exact
+original member ID/flag and count invariant, and prove normal creator re-entry
+still has its original one-slot or zero-slot contribution. Restore role/claims
+and enclosing fixture state on every exit. These tests add zero GoTrue signups
+and leave browser cases, R02 budgets and concurrency barriers unchanged.
+
+Concurrency follows [room-rpcs.md](contracts/room-rpcs.md): owner lock barrier,
+independent authenticated caller PIDs/claims, observable pg_blocking_pids and
+pg_locks waits, then direct loser→winner blocking before first commit. Verify
+per-session member INSERT and rooms UPDATE deltas 1/0 for duplicate/final slot,
+1/1 for two available slots, and one each for three NVC-room joiners; count equals
+voter rows after commits. An idempotent loser preserves first-commit xmin.
+Browser simultaneous dispatch alone cannot establish this database evidence.
+
+Client suite covers exact eight-field parser/nulls, integer target2..2147483647,
+count/state/flag combinations, malformed rejection, typed create args, explicit
+choice, default2, input errors, request/config freeze, count/mode rendering,
+Ready and intermediate Waiting stale responses, one-channel lifecycle, same-code
+replay, error recovery, QR/error/value and candidate/poster regressions. Runtime
+success is never inferred from a snapshot or a mock invocation alone.
+
+## Complete browser inventory and R02 accounting
+
+Use real local Anonymous Auth, RPCs, PostgreSQL, Realtime and Expo web. Each
+case owns isolated participant contexts. Same-case sequential rooms reuse their
+identities with new deliberate creation IDs; no identity cache crosses cases.
+Every reload, reconnect, repeated entry, same-context retry and fault recovery
+below adds **zero** signups. Observe attempts and successful identities before
+navigation and enforce both caps. No hidden setup user or service-role caller.
+
+### Existing room regression inventory, deliberately evolved
+
+Each room created below explicitly chooses target2/creatorVotes=true. Replace
+old roles, columns, exact six-field results and copy with the new contract;
+preserve every stated invariant. Separate rows below are the actual 24 trials,
+including the Auth test; their allocations are freshly audited.
+
+| Existing test ID / trial | New identities | Preserved guarantee |
+| --- | ---: | --- |
+| E01 rapid create | 1 | One logical creation despite duplicate action |
+| E01 pre-acceptance create failure | 1 | No usable partial room; retry same request |
+| E01 committed create response loss | 1 | Recover original committed room |
+| Auth persistence/independence/explicit storage clear | 3 | Original + independent + deliberately cleared-original identity; reload itself adds zero |
+| E02 link and re-entry | 2 | Canonical invitation/common join and member recovery |
+| E03 live bound UPDATE | 2 | Real automatic Ready convergence |
+| E03 commit before binding readiness | 2 | system-ok authoritative refetch recovers missed event |
+| E04 manual normalization | 2 | Code path equals link admission |
+| E04 pre-acceptance join failure | 2 | Preserved room and recoverable retry |
+| E05 full rejection | 3 | No third voter/private transient UI |
+| E06 final-slot race | 3 | One joined/one full, exact membership mutation |
+| E07 creator Waiting reload | 1 | Same identity/member |
+| E07 creator Ready reload | 2 | Same assembled room |
+| E07 creator socket loss | 2 | Real reconnect, no new member |
+| E08 voter Ready reload | 2 | Existing voter recovery |
+| E08 voter socket loss | 2 | Real reconnect and same assignment |
+| E09 repeat/overlapping join | 2 | Existing member never consumes another slot |
+| E10 malformed manual | 1 | Corrective error, no room RPC |
+| E10 malformed direct route | 1 | Invalid route never mutates |
+| E11 nonexistent canonical code | 1 | not_found without membership |
+| E12 private read | 2 | Unrelated room zero-row read |
+| E12 live subscription isolation | 3 | No unauthorized room UPDATE delivery |
+| E12 stale navigation | 3 | Retired room response cannot cross route generation |
+| E12 direct mutations | 3 | No direct room/member privilege bypass |
+| **24 trials** | **47** | Same invariant classes; obsolete representation replaced |
+
+The Auth test's deliberate clear is a standalone existing identity test, never
+a recovery or quota workaround. E06 holds candidate traffic when measuring
+membership-only writes; candidate assignment's separate legitimate UPDATE must
+not create a false duplicate-admission finding. E12 private fields become
+creator_user_id/member fields and new five-column projections; no broad roster
+read replaces protected owner setup.
+
+### Existing candidate regression inventory
+
+These cases use explicit two-voter/voting-creator configuration and generalized
+room/member snapshots. Candidate invariants do not change.
+
+| Case | New identities | Preserved behavior |
+| --- | ---: | --- |
+| F01 | 2 | Waiting RPC0/not_ready; synchronized first acquisition; one assignment; harmless invalidation/repeat |
+| F02 | 2 | Both reload/reconnect/repeated access preserve assignment/xmin |
+| F03 | 2 | Disconnected Waiting creator recovers peer-established candidate |
+| F04 | 4 | Two unrelated rooms; exact missing/foreign null response and isolated recovery |
+| F05 | 2 | Both pre-forward failures leave Ready/NULL; retry assigns once |
+| F06 | 2 | Two sequential rooms reuse both identities; alternate failed participant |
+| F07 | 2 | Real upstream commit, snapshot before response abort, same assignment on retry |
+| F08 | 2 | Exact local PNG failure, retained metadata, same-poster retry with RPC delta0 |
+| **8 trials** | **18** | No rotation, external movie traffic or weakened C1 |
+
+### New Feature 003 grouped cases
+
+File: `e2e/generalized-room-membership-qr.spec.ts`. Fixed names carry
+`@membership G01` through `G09`. G03/G04 are complete link/code cases available
+in Phase 2; the other seven are introduced in Phase 3. No placeholders/skips
+are counted as passing cases.
+
+| Case | Exact bounded trial and executable result | New identities / reuse |
+| --- | --- | --- |
+| G01 — Configuration and invitations | One creator validates default2, below-minimum/fraction/non-number and absent choice; creates four separate rooms for 2/yes,3/yes,2/no,3/no. Check initial count/state/flags, no candidate; configuration immutable, code/link/QR visible, independently decoded QR equals text. No new admission here | **1** creator reused across four deliberate rooms |
+| G02 — Creation recovery | For each creator mode: pre-forward create failure/retry; real committed response loss/retry including different valid supplied config; overlapping same-request real calls. Six separate logical rooms, each exactly one room/member and original chosen configuration/invitation, one/zero creator slots | **1** creator reused; all retries/overlap0 |
+| G03 — Three voting members | Creator3/yes sees1/3; link voter gives2/3 Waiting; that voter reloads while Waiting, disconnects real Realtime; manual-code third voter gives3/3. Creator sees each count automatically, returning voter recovers Ready. Hold all three first candidate RPCs until arrived, release together; one identical candidate/title/year/visible local poster. Creator/voters reload/reconnect/re-entry retain membership/candidate | **3**, all reused through recovery; QR-independent |
+| G04 — Non-voting creator assembly | Creator3/no observes0/3→1/3→2/3→3/3 through sequential link/code joins, all four converge; creator zero throughout. Waiting no automatic candidate request; real own probes not_ready. Synchronize four first candidate calls; same movie/poster. Creator/voter reload/reconnect and acquisition failure after established assignment recover same. Fail exact local poster request before reload, retain metadata, same-image retry with candidate RPC delta0 | **4**, recovery0; QR-independent |
+| G05 — Same-identity first join | Creator3/yes at1/3. Decode actual QR into new voter's entry; hold two real same-subject join calls before forwarding either. Exactly one member/increment, result2/3 and another slot still free. Repeat/overlap QR/link/code entry as that member; no extra count | **2**; multiple calls/pages reuse the same voter session |
+| G06 — Multiple available slots | Creator3/no at0/3 re-enters own QR/link/code and stays non-voting. Hold three distinct real new-voter requests, release together; exactly three members admitted,3/3 Ready. Creator repeats QR/link/code/reload/reconnect after assembly; no promotion/extra slot | **4**, same four sessions throughout |
+| G07 — Final slot and full re-entry | Creator3/yes + prior voter give2/3. Two new distinct joiners overlap for final slot: exactly joined/full, one admission. Loser attempts QR/link/code, always full with all-null projection; existing winner/prior voter/creator recover through invitations without new slots | **4**; loser reused as late-entry tester |
+| G08 — Generalized isolation | Room A: voting creator and two voters Ready3/3. Fourth identity creates unrelated room B as non-voting creator. Ordinary JWT requests prove own access, foreign ID/code reads denied, no roster/catalog browse, no direct member/config/assignment mutation. Compare protected snapshots and no UUID UI. Existing E12 retains live subscription isolation | **4**, B creator reused for attacks, no owner credential in browser |
+| G09 — Join failure boundaries | Same C/J/K contexts across three target2/voting-creator rooms: J pre-forward fail then retry once admitted; J fail then K fills so J retry full; J route.fetch commits, owner snapshot confirms membership before response abort, then retry already_member in assembled room | **3**, all retries/three rooms reuse identities |
+| **9 cases** | All 36 spec scenarios mapped below | **26** |
+
+G02/G05/G06/G07 hold all outgoing requests until the expected participants have
+arrived, then forward real calls. Verify request subjects in memory, outcomes
+and persisted memberships/counts. SQL tests separately prove actual lock waits.
+Use route.fetch with maxRetries0/maxRedirects0 for committed-response-loss probes;
+inspect successful upstream response and independently committed DB state
+before aborting delivery. Never fulfill synthetic successful RPC responses.
+
+G04 poster fault must intercept the actual local bundled PNG request exactly
+once before allowing retry; routing disables HTTP cache, but the interception
+must still be observed. If the case uses another logical room to isolate image
+state, reuse the same four Auth identities and verify the new request ID/room.
+The visible wrapper, decoded positive image dimensions, matching local source
+and onLoad completion remain the F08-grade evidence. Metadata does not disappear
+on poster retry and the candidate RPC counter must not increase.
+
+## All 36 product scenarios mapped
+
+Gates refer to the phase checkpoints in plan.md. The mapping records future
+executable evidence, never documentation-only acceptance.
+
+| Spec scenario | Implementation boundary | Browser evidence | Gate |
+| --- | --- | --- | --- |
+| 1 | Home configuration | G01 | G3 |
+| 2 | Input + create validation | G01 | G3 |
+| 3 | Atomic create/voting creator | G01 | G3 |
+| 4 | Atomic create/count UI | G01, G03 | G2/G3 |
+| 5 | Atomic create/non-voting creator | G01 | G3 |
+| 6 | Atomic create/non-voting creator | G01, G04, G06 | G2/G3 |
+| 7 | Invitation component/shared target | G01 | G3 |
+| 8 | QR encoding/existing route | G01, G05 | G3 |
+| 9 | Explicit choice validation | G01 | G3 |
+| 10 | Immutable DB write surface + UI | G01, G08; pgTAP before/after assembly | G2/G3 |
+| 11 | Request/config freeze + atomic create | G02; pgTAP real create race/rollback | G3 |
+| 12 | Existing link route + generalized join | G03, G04 | G2 |
+| 13 | Manual normalization + same join | G03 | G2 |
+| 14 | QR target + same join | G05 | G3 |
+| 15 | Count summary/projection | G03 | G2 |
+| 16 | Locked final admission/generated Ready | G03 | G2 |
+| 17 | Existing Realtime + five-field refetch | G03, G04 | G2 |
+| 18 | NVC membership/count/observation | G04 | G2 |
+| 19 | Unique member + room lock/recovery | G05, G07; SQL duplicate race | G3 |
+| 20 | Creator existing-member recovery | G03, G07 | G2/G3 |
+| 21 | NVC fixed member flag/recovery | G04, G06 | G2/G3 |
+| 22 | Auth/route recovery | G03, G04 | G2 |
+| 23 | Persisted member + Realtime reconnect | G03 | G2 |
+| 24 | No membership removal on disconnect | G03, G04 | G2 |
+| 25 | Locked final-slot admission | G07; SQL exact winner/loser | G3 |
+| 26 | Locked multiple-slot admission | G06; SQL three-caller race | G3 |
+| 27 | Full check for new identities | G07 | G3 |
+| 28 | Existing-member check precedes full | G07 | G3 |
+| 29 | RLS/helper/RPC private boundary | G08, evolved E12/F04 | G2/G3 |
+| 30 | Existing normalization/closed outcomes | E10 manual/direct, E11 | G2 |
+| 31 | Atomic rollback + retry/current capacity | G09 | G3 |
+| 32 | Idempotent join after committed response loss | G09 | G3 |
+| 33 | Denied direct room/member mutations | G08; pgTAP ACL/invariant tests | G3 |
+| 34 | Generalized candidate authorization/Ready | G03, G04 | G2 |
+| 35 | Preserved candidate/poster/recovery layer | G03, G04, F02/F05/F06/F07/F08 | G2 |
+| 36 | Generated Waiting + no candidate | G01/G03/G04/G05/G06; direct SQL not_ready | G2/G3 |
+
+US1 is independently demonstrable through G01/G02 (configuration/invitations,
+without completing a group); US2 through G03/G04/G05 (successful assembly and
+QR admission); US3 through G05–G09 and preserved candidate/reconnect regressions.
+All stories are complete at G3; G4 proves repeatability/fresh-checkout behavior.
+
+### Requirements and success criteria
+
+| Requirements | Concrete implementation/test coverage | Success criteria |
+| --- | --- | --- |
+| FR-001–004 | Configuration UI/validation, immutable RPC/member fields; G01/G02/G08 + client/SQL | SC-001, SC-012 |
+| FR-005–008 | Atomic creator membership and 1/0 initialization; G01/G03/G04/G06 | SC-001, SC-004, SC-005 |
+| FR-009–012 | Existing code/link + local QR, normal voter join; G01/G03/G04/G05 | SC-006 |
+| FR-013–018 | Unique member/row lock/existing-before-full; G05/G06/G07/G09 + SQL races | SC-003, SC-004, SC-005, SC-007 |
+| FR-019 | Creator/request unique key/frozen retry; G02 + SQL unique-index wait/rollback | SC-012 |
+| FR-020–024 | Persistent membership, five-field refetch, mode/count UI/no IDs; G03/G04/G06/G07 + existing E03/E07/E08 | SC-002, SC-004, SC-005, SC-008, SC-009 |
+| FR-025–027 | Summary bounds and serialized admission; G05/G06/G07 + real pgTAP wait/write oracles | SC-003, SC-007 |
+| FR-028–029 | Private helper/RLS, no table writes/roster; G08 + E12/F04 + ACL tests | SC-009 |
+| FR-030–032 | Distinct invalid/not_found, generic failures, committed recovery; E10/E11, G02/G09 | SC-012 |
+| FR-033–035 | Candidate member authorization/count Ready; G03/G04 + retained F01–F08 | SC-011 |
+| NFR-001 | Realtime automatic intermediate/final convergence; G03/G04/G06 + lifecycle regressions | SC-002, SC-008 |
+| NFR-002 | SQL+browser duplicate/available/final-slot/recovery trials | SC-003, SC-004, SC-005, SC-007 |
+| NFR-003 | Function/table/helper ACL, foreign denial/no UUID, C1 | SC-009, SC-012 |
+| NFR-004 | Shared RN controls/SVG, native module bundles, web QR independent decode/join | SC-001, SC-005, SC-006 |
+| Release boundary | No future interactions in all cases; preserved fixture scaffolding only | SC-010 |
+
+Coverage targets: 35/35 FR, 4/4 NFR, 12/12 SC, 36/36 scenarios and 3/3 stories.
+No runtime PASS is claimed by this map. C1 is checked before browser gates,
+R01 at G2 then every DB-dependent gate, R02 per case/block below.
+
+## Auth quota admission — binding R02 arithmetic
+
+`anonymous_users=150` remains unchanged. Defaults: one worker, repeatEach1,
+retries0. A case deadline of90s and suite deadline600s are safeguards for grouped
+work, not waits, retries or product latency requirements. Preserve bounded
+event/lock barriers. Update only historical budget commentary/diagnostic labels.
+
+| Block | Arithmetic | Required allowance |
+| --- | --- | ---: |
+| Phase 1 existing suite + C1 | 47+18+1 | 66 |
+| Phase 2 existing32 + G03/G04 + C1 | 47+18+3+4+1 | 73 |
+| G-only optional selection + C1 | 26+1 | 27 |
+| One final complete acceptance | 47+18+26 | 91 |
+| C1 + final complete | 1+91 | 92 |
+| C1 once + two complete runs | 1+91+91 | 183, exceeds one window |
+| Fresh checkout with C1 | 1+91 | 92 |
+| Repeatability + fresh checkout | 183+92 | 275, separate recovered windows |
+
+Optional targeted runs cost additional allowance if performed alongside full
+gates; they are never free because the cases overlap. Track actual dispatched
+signup attempts, successful identities, partial/failed runs and manual use in
+the same hour/IP. Record safe timestamps/counts, never Auth payloads. Merely
+creating a browser context is not a signup; restoring one adds none.
+
+If prior use is unknown or allowance insufficient, wait outside the test harness
+until it recovers; a full signup-free hour from the last counted attempt provides
+a conservative admission point. Do not add an Auth probe to check quota. HTTP
+429 fails/aborts the run as environment-budget failure; no automatic retry,
+storage clearing, rate-limit increase, restart or DB reset to evade the counter.
+The C1 probe's one identity is counted separately and is excluded from discovery.
+
+## Normal green command path
+
+With sufficient quota, after implementation of the applicable phase, run in a
+shell that guarantees cleanup. Example shell sequence (check only, not R01 write):
+
+```sh
+set -eu
+trap 'OTTEROOM_CHECK_EXIT=$?; trap - EXIT; if ! npm run supabase:stop; then exit 1; fi; exit "$OTTEROOM_CHECK_EXIT"' EXIT
+npm ci
+npm run supabase:start
+npm run env:local
+node scripts/check-room-membership-migration.mjs
+npm run db:reset
+npm run db:types:check
+npm run lint
+npm run typecheck
+npm run test:client
+npm run db:test
+npm run web:export
+npx expo export --platform ios --platform android --output-dir dist/native-validation
+npm run playwright:install
+npm run test:e2e:security
+npm run test:e2e
+git diff --check
+```
+
+Phase 1 omits only the not-yet-created migration runner; its existing schema
+and canonical types are checked normally. Phase 2 must first have completed the
+separate intentional R01 update. Capture canonical hash/metadata before and
+after check-only execution. Inspect web export for all four original PNGs;
+at G3 require the imported QR component in the application bundle and actual
+browser decode/join. Native export is module/bundle evidence, not native camera
+or device runtime evidence. Keep output under ignored dist and clean disposable
+validation outputs after inspection.
+
+The managed browser controller closes its web process/owned browser container;
+the shell trap stops only the project's Supabase stack. Explicitly check cleanup
+results and fail if any owned runtime remains. Run no unrelated Docker cleanup.
+No failure is hidden by broad `|| true`; trap cleanup is also checked/recorded.
+
+At Phase 2 unfiltered discovery contains exactly 34 tests (existing32 + G03/G04).
+At Phase 3/final it contains exactly41. All use the existing safe reporter and
+scanner. Never call raw Playwright to bypass diagnostics. An optional separately
+budgeted selection is `npm run test:e2e -- --grep '@membership'` after C1;
+it does not replace complete regression.
+
+## Repeatability — same stack, outside-harness quota windows
+
+For Phase 4, this block is the normal final validation: complete run #1 supplies
+that checkpoint. Do not run an additional 92-signup normal invocation first.
+Keep one cleanup-owning shell/driver alive through both runs and the
+outside-harness wait; its EXIT cleanup runs only after run #2 or failure.
+
+1. Admit at least92 remaining attempts. Start the local stack, derive env, run
+   migration/full static/client/DB/export/type checks and C1 once, then complete
+   acceptance #1:41 tests, at most91 signups (92 including C1). Record measured
+   counts and scanner0. Close all browser contexts; keep Supabase running.
+2. Do not dispatch acceptance #2 until another91 attempts are available. Wait
+   outside any Playwright/test process; keep the same stack running through
+   that interval. No stop/start, configuration change or automatic 429 retry.
+3. After quota admission, optional suite-level db:reset followed by
+   db:types:check only, then `npm run test:e2e` for complete #2. Same exact source,
+   fresh contexts,41 tests, at most91 signups, scanner0. C1 from this unchanged
+   stack/source block remains the prior gate; if it is rerun, explicitly add1.
+4. Record the total successful block183, actual windows/counts, then stop the
+   stack and verify cleanup. Separate allowance for fresh checkout is still
+   needed; reset/cleanup is not evidence of recovered Auth quota.
+
+Do not launch this as unattended repeat-each2 or keep a test waiting for an hour.
+If source changes between runs, resolve the defect/revalidate and record the
+additional cost; two different implementations do not prove repeatability.
+
+## Fresh checkout of the final implementation
+
+Use an exact committed implementation SHA containing Phase 3 code/tests (the
+current planning-only origin/main is not sufficient). Preserve source main;
+create a disposable clone outside its directory and record remote/SHA. A detached
+checkout inside the disposable clone does not create a source branch/tag.
+
+A local Git clone can verify only committed source without copying working-tree
+state. Execute this setup only when source HEAD is the reviewed implementation:
+
+```sh
+OTTEROOM_VALIDATION_SHA="$(git -C /home/maks/work/otteroom rev-parse HEAD)"
+OTTEROOM_FRESH_ROOT="$(mktemp -d /tmp/otteroom-003-fresh.XXXXXX)"
+git clone --quiet --no-hardlinks --no-checkout /home/maks/work/otteroom "$OTTEROOM_FRESH_ROOT/repo"
+git -C "$OTTEROOM_FRESH_ROOT/repo" checkout --detach "$OTTEROOM_VALIDATION_SHA"
+cd "$OTTEROOM_FRESH_ROOT/repo"
+git rev-parse HEAD
+git status --short
+```
+
+Record the local source path and exact SHA (or the remote source if a remote
+clone is chosen). Run the normal validation path inside this clone with its
+cleanup trap; after shutdown, leave that directory and remove only the mktemp
+directory allocated above. No source branch/history operation is needed.
+
+Before clone execution, verify the chosen version includes the final migration,
+canonical types, QR integration and all41 acceptance cases. Install with npm ci;
+do not copy node_modules, .env, caches, Auth storage or local service data.
+Start the local stack only after source-stack cleanup, derive local env from
+safe wrappers, and execute the complete normal green command path above. Require
+the migration compatibility runner and latest reset, check-only types with
+unchanged canonical hash/metadata, lint/typecheck/full client/pgTAP, web/native
+bundles, four posters, managed browser setup, C1, all41 cases and scanner0.
+
+Reserve92 independently of repeatability and wait outside the harness if needed.
+No db:types write or application patch is permitted to repair the fresh clone's
+normal validation. A failure must be fixed in the source and revalidated at an
+explicit version, not hidden in the clone. Stop all owned services, verify no
+container/process remains, remove only the disposable clone and its outputs.
+
+## Manual multi-browser and supplemental phone check
+
+Manual browser checks consume their own recorded identities; do not use the
+automated run's quota reservation without counting them. Three-voter/yes needs3,
+three-voter/no needs4; doing both with independent groups costs7. Re-entry/reload
+of each same context adds0.
+
+- Voting creator chooses3/yes → Waiting1/3 with invitations. A second browser
+  follows link →2/3 Waiting, no movie; a third enters code →3/3 Ready. All three
+  converge automatically and show the same existing title/year/visible poster.
+- Non-voting creator chooses3/no →0/3, shares the same link/QR, observes three
+  other identities join to3/3; all four see one candidate, creator stays zero.
+  Reopen creator's own invite while Waiting and Ready: never becomes a voter.
+- Reload/reconnect an admitted browser, then attempt a late new identity:
+  existing member recovers; new identity gets full without private room data.
+
+Phone supplement: the creator must open a LAN-reachable web origin, with local
+Supabase API/Realtime also reachable from the phone. Use only the public key and
+the phone-reachable public URL in ignored local configuration, then restore the
+normal loopback environment before automated tests. The same invitationLink
+helper produces identical LAN text/QR. External camera scan opens the usual
+route, no in-app scanner. A computer's localhost QR is not claimed reachable
+from a phone. Existing automated decoded-target/browser admission is required
+independently of this supplemental physical-device check.
+
+## Evidence log convention for implementation
+
+Append an evidence entry per completed green checkpoint with date, source SHA/
+working-tree scope, environment, commands actually run, results/test totals,
+canonical hash/metadata, migration-row and concurrency receipts, Auth attempt/
+identity/window accounting, C1/scanner result, export/poster/QR result and cleanup.
+Identify any non-applicable check with concrete phase reason. Preserve useful
+failed-run history and consumed quota, superseding it only with actual evidence.
+This planning file contains no completed implementation evidence or task boxes.
