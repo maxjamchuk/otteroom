@@ -20,7 +20,7 @@ test('@candidate F01 Waiting to shared automatic candidate and stable repeated a
         const guestId = await ownParticipant(guest.page);
         candidates.bind(room, [participant, guestId], api);
         const waiting = committedRoomSnapshot(room);
-        expect(waiting.row.state === 'waiting' && waiting.row.guest_user_id === null && waiting.row.movie_candidate_id === null).toBe(true);
+        expect(waiting.row.state === 'waiting' && waiting.row.voter_count === 1 && waiting.members.length === 1 && waiting.row.movie_candidate_id === null).toBe(true);
         await expect(page.getByTestId('candidate-card')).toHaveCount(0);
         await expect(page.getByTestId('candidate-status')).toHaveCount(0);
         expect(candidates.stats.every(value => value.automatic === 0 && value.probes === 0)).toBe(true);
@@ -30,7 +30,7 @@ test('@candidate F01 Waiting to shared automatic candidate and stable repeated a
 
         const joined = guest.page.waitForResponse(response => response.url().endsWith('/rpc/join_room'));
         expect((await guest.page.goto(invitation))?.status() === 200).toBe(true);
-        await assertAccepted(await joined, room, 'joined', 'guest', 'ready');
+        await assertAccepted(await joined, room, 'joined', { isCreator: false, isVoter: true }, 'ready');
         await candidates.held(); // Two distinct authenticated callers, zero forwarded.
         await transport.wait('updates', 1); await transport.wait('reads', 2);
         await assertReady(page, diagnostics, room, false);
@@ -41,7 +41,7 @@ test('@candidate F01 Waiting to shared automatic candidate and stable repeated a
         }
         const ready = committedRoomSnapshot(room);
         expect(ready.row.state === 'ready' && ready.row.movie_candidate_id === null &&
-          ready.row.host_user_id === participant && ready.row.guest_user_id === guestId && transport.stats.updates === 1).toBe(true);
+          ready.row.creator_user_id === participant && ready.members.some(m => m.user_id === guestId && m.is_voter) && transport.stats.updates === 1).toBe(true);
         // Delay only delivery of the REAL assignment invalidation until the card
         // succeeds. No fabricated Realtime event or application state injection.
         transport.holdUpdates();
@@ -52,7 +52,7 @@ test('@candidate F01 Waiting to shared automatic candidate and stable repeated a
         await transport.wait('updateHeld', 1);
         const assigned = committedRoomSnapshot(room);
         expect(assigned.row.movie_candidate_id === firstCandidate.candidate_id && assigned.xmin !== ready.xmin &&
-          assigned.row.host_user_id === participant && assigned.row.guest_user_id === guestId && assigned.row.state === 'ready' &&
+          assigned.row.creator_user_id === participant && assigned.members.some(m => m.user_id === guestId && m.is_voter) && assigned.row.state === 'ready' &&
           assigned.row.code === waiting.row.code && assigned.row.creation_request_id === waiting.row.creation_request_id &&
           assigned.row.created_at === waiting.row.created_at && transport.stats.updates === 2).toBe(true);
         const reads = transport.stats.reads;
@@ -98,12 +98,12 @@ async function preparePair(pair: [SafeDiagnostics, SafeDiagnostics], candidates:
 async function joinPair(pair: [SafeDiagnostics, SafeDiagnostics], room: RoomProjection, invitation: string) {
   const joined = pair[1].page.waitForResponse(r => new URL(r.url()).pathname === '/rest/v1/rpc/join_room');
   expect((await pair[1].page.goto(invitation))?.status() === 200).toBe(true);
-  await assertAccepted(await joined, room, 'joined', 'guest', 'ready');
+  await assertAccepted(await joined, room, 'joined', { isCreator: false, isVoter: true }, 'ready');
   for (const member of pair) await assertReady(member.page, member, room, false);
 }
 async function recoverable(member: SafeDiagnostics, metadata = false) {
   await expect(member.page.getByRole('heading', { name: 'Ready', exact: true })).toBeVisible();
-  await expect(member.page.getByText('2 of 2', { exact: true })).toBeVisible();
+  await expect(member.page.getByText('2 of 2 voters', { exact: true })).toBeVisible();
   await expect(member.page.getByTestId('candidate-status')).toHaveText('Unable to load this movie. Please try again.');
   await expect(member.page.getByRole('button', { name: 'Retry candidate', exact: true })).toBeVisible();
   await expect(member.page.getByTestId('candidate-title')).toHaveCount(metadata ? 1 : 0);
@@ -187,7 +187,7 @@ test('@candidate F03 Waiting host reconnects to the guest established candidate'
       const before = { ...transport.stats }; await transport.disconnect();
       await expect(diagnostics.page.getByText('Unable to synchronize this room. Please try again.', { exact: true })).toBeVisible();
       const joined = guest.page.waitForResponse(r => new URL(r.url()).pathname === '/rest/v1/rpc/join_room');
-      await guest.page.goto(invitation); await assertAccepted(await joined, room, 'joined', 'guest', 'ready');
+      await guest.page.goto(invitation); await assertAccepted(await joined, room, 'joined', { isCreator: false, isVoter: true }, 'ready');
       await c.available([0, 1]); await c.assertDisplay(1);
       await expect(diagnostics.page.getByRole('heading', { name: 'Waiting', exact: true })).toBeVisible();
       await expect(diagnostics.page.getByTestId('candidate-card')).toHaveCount(0); rpcCounts(c, [0, 1]);
@@ -198,7 +198,7 @@ test('@candidate F03 Waiting host reconnects to the guest established candidate'
       transport.releaseReadiness(); await transport.wait('reads', before.reads + 1);
       await c.available(); await displays(c); await assertReady(diagnostics.page, diagnostics, room);
       sameSnapshot(room, assigned);
-      expect(await ownParticipant(diagnostics.page) === ids[0] && assigned.row.guest_user_id === ids[1]).toBe(true);
+      expect(await ownParticipant(diagnostics.page) === ids[0] && assigned.members.some(m => m.user_id === ids[1] && m.is_voter)).toBe(true);
       await c.assertHealthy(); transport.assertHealthy();
       await diagnostics.record({ scenario: 'F03', outcome: 'host actually disconnected while Waiting; guest assigned; real system-ok/refetch recovered Ready and same candidate; automatic=1/1; row/xmin stable; recovery signups=0' });
     } finally { await closeHarnesses([c], [transport]); }
@@ -219,6 +219,9 @@ async function directCandidateDenial(member: SafeDiagnostics, api: PublicApi, fo
 }
 
 test('@candidate F04 unrelated rooms cannot disclose candidate metadata', async ({ diagnostics, browser, baseURL, viewport }, info) => {
+  // Two complete room lifecycles, four contexts and repeated isolation probes
+  // need a combined budget; each RPC/barrier/assertion keeps its own deadline.
+  test.setTimeout(60000);
   await safeBody(diagnostics, () => withParticipants(browser, { baseURL, viewport }, info, 3, async ([guestA, hostB, guestB]) => {
     const pairs: [SafeDiagnostics, SafeDiagnostics][] = [[diagnostics, guestA], [hostB, guestB]];
     const candidates: Candidates[] = [], transports: Transport[] = [];
@@ -281,7 +284,7 @@ test('@candidate F05 both pre-forward failures leave Ready unassigned until retr
       await joinPair(pair, room, invitation); await c.held();
       const before = committedRoomSnapshot(room);
       expect(before.row.state === 'ready' && before.row.movie_candidate_id === null &&
-        before.row.host_user_id === ids[0] && before.row.guest_user_id === ids[1]).toBe(true);
+        before.row.creator_user_id === ids[0] && before.members.some(m => m.user_id === ids[1] && m.is_voter)).toBe(true);
       c.release(); for (const member of pair) await recoverable(member);
       expect(c.stats.every(value => value.forwarded === 0 && value.fetched === 0 && value.aborted === 1)).toBe(true);
       sameSnapshot(room, before); await transport.wait('updates', 1);
@@ -289,7 +292,7 @@ test('@candidate F05 both pre-forward failures leave Ready unassigned until retr
       await retryBoth(pair, c); await c.available(); await displays(c);
       const after = committedRoomSnapshot(room);
       expect(after.row.movie_candidate_id === firstCandidate.candidate_id && after.xmin !== before.xmin &&
-        after.row.host_user_id === ids[0] && after.row.guest_user_id === ids[1] && after.row.state === 'ready').toBe(true);
+        after.row.creator_user_id === ids[0] && after.members.some(m => m.user_id === ids[1] && m.is_voter) && after.row.state === 'ready').toBe(true);
       await c.probe(0, 'available'); await c.probe(1, 'available'); sameSnapshot(room, after);
       await transport.wait('updates', 2); expect(transport.stats.updates === 2).toBe(true);
       await c.assertHealthy([2, 2]); transport.assertHealthy();
@@ -315,8 +318,8 @@ test('@candidate F06 either participant recovers the other established candidate
         await joinPair(pair, setup.room, setup.invitation); await c.held(); c.release();
         await recoverable(pair[failed]); await c.assertDisplay(failed === 0 ? 1 : 0);
         const assigned = committedRoomSnapshot(setup.room);
-        expect(assigned.row.movie_candidate_id === firstCandidate.candidate_id && assigned.row.host_user_id === ids[0] &&
-          assigned.row.guest_user_id === ids[1] && assigned.row.state === 'ready').toBe(true);
+        expect(assigned.row.movie_candidate_id === firstCandidate.candidate_id && assigned.row.creator_user_id === ids[0] &&
+          assigned.members.some(m => m.user_id === ids[1] && m.is_voter) && assigned.row.state === 'ready').toBe(true);
         await pair[failed].page.getByRole('button', { name: 'Retry candidate', exact: true }).click();
         await c.available(failed === 0 ? [1, 1] : [2, 2]); await displays(c); sameSnapshot(setup.room, assigned);
         snapshots.push(assigned);

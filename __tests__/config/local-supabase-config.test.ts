@@ -35,6 +35,18 @@ function validateLocalAuth(source: string) {
 const canonical = fs.readFileSync(path.join(process.cwd(), 'supabase/config.toml'), 'utf8');
 const fixture = '[auth]\nenable_anonymous_sign_ins = true\n[auth.rate_limit]\nanonymous_users = 150\n';
 
+it('keeps destructive migration fixtures outside normal recursive pgTAP discovery', () => {
+  const manifest = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+  expect(manifest.scripts['db:test']).toBe('supabase test db supabase/tests/database');
+  const suites = fs.readdirSync('supabase/tests/database', { recursive: true });
+  expect(suites.filter(name => String(name).endsWith('.sql')).sort()).toEqual([
+    'room_candidate.test.sql', 'room_session.test.sql',
+  ]);
+  for (const phase of ['before', 'after']) {
+    expect(fs.existsSync(`supabase/tests/migration/room_membership.${phase}.sql`)).toBe(true);
+  }
+});
+
 describe('committed local Supabase Auth policy', () => {
   it('validates actual local config and numeric quota', () => {
     expect(() => validateLocalAuth(canonical)).not.toThrow();

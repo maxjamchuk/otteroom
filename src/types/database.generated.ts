@@ -33,39 +33,74 @@ export type Database = {
         }
         Relationships: []
       }
+      room_members: {
+        Row: {
+          id: string
+          is_voter: boolean
+          joined_at: string
+          room_id: string
+          user_id: string
+        }
+        Insert: {
+          id?: string
+          is_voter: boolean
+          joined_at?: string
+          room_id: string
+          user_id: string
+        }
+        Update: {
+          id?: string
+          is_voter?: boolean
+          joined_at?: string
+          room_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "room_members_room_id_fkey"
+            columns: ["room_id"]
+            isOneToOne: false
+            referencedRelation: "rooms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       rooms: {
         Row: {
           code: string
           created_at: string
           creation_request_id: string
-          guest_user_id: string | null
-          host_user_id: string
+          creator_user_id: string
           id: string
           movie_candidate_id: string | null
+          required_voter_count: number
           state: string
           updated_at: string
+          voter_count: number
         }
         Insert: {
           code: string
           created_at?: string
           creation_request_id: string
-          guest_user_id?: string | null
-          host_user_id: string
+          creator_user_id: string
           id?: string
           movie_candidate_id?: string | null
+          required_voter_count?: number
           state?: string
           updated_at?: string
+          voter_count?: number
         }
         Update: {
           code?: string
           created_at?: string
           creation_request_id?: string
-          guest_user_id?: string | null
-          host_user_id?: string
+          creator_user_id?: string
           id?: string
           movie_candidate_id?: string | null
+          required_voter_count?: number
           state?: string
           updated_at?: string
+          voter_count?: number
         }
         Relationships: [
           {
@@ -83,14 +118,20 @@ export type Database = {
     }
     Functions: {
       create_room: {
-        Args: { p_creation_request_id: string }
+        Args: {
+          p_creation_request_id: string
+          p_creator_is_voter: boolean
+          p_required_voter_count: number
+        }
         Returns: {
+          is_creator: boolean
+          is_voter: boolean
           outcome: string
-          participant_count: number
-          participant_role: string
+          required_voter_count: number
           room_code: string
           room_id: string
           room_state: string
+          voter_count: number
         }[]
       }
       ensure_room_candidate: {
@@ -106,12 +147,14 @@ export type Database = {
       join_room: {
         Args: { p_room_code: string }
         Returns: {
+          is_creator: boolean
+          is_voter: boolean
           outcome: string
-          participant_count: number
-          participant_role: string
+          required_voter_count: number
           room_code: string
           room_id: string
           room_state: string
+          voter_count: number
         }[]
       }
     }

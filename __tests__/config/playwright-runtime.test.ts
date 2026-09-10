@@ -171,15 +171,16 @@ describe('repository-owned Playwright runtime', () => {
   `));
 });
 
-it('Phase 7 discovery retains serial default acceptance and bounded runtime invocation options', () => verify(prelude + `
+it('Feature 003 Phase 2 discovery retains serial default acceptance and bounded runtime invocation options', () => verify(prelude + `
   const { default: config } = await import('./playwright.config.ts');
   const { parseInvocation } = await import('./scripts/run-e2e.mjs');
   assert.deepEqual(config.projects.find(p => p.name === 'acceptance').testMatch,
-    ['room-session.spec.ts', 'first-movie-candidate.spec.ts']);
+    ['room-session.spec.ts', 'first-movie-candidate.spec.ts', 'generalized-room-membership-qr.spec.ts']);
   assert.equal(config.workers, 1); assert.equal(config.repeatEach, 1); assert.equal(config.retries, 0);
   assert.equal(config.reporter[0][0], './e2e/support/safe-reporter.ts');
   for (const field of ['trace', 'video', 'screenshot']) assert.equal(config.use[field], 'off');
-  for (const selector of ['@candidate', 'F01', 'F02', 'F03', 'F04', 'F05', 'F06', 'F07', 'F08'])
+  assert.equal(config.globalTimeout, 600000);
+  for (const selector of ['@membership', 'G03', 'G04', '@candidate', 'F01', 'F02', 'F03', 'F04', 'F05', 'F06', 'F07', 'F08'])
     assert.deepEqual(parseInvocation(['acceptance', '--grep', selector]).forwarded, ['--grep', selector]);
   assert.deepEqual(parseInvocation(['acceptance', '--workers=2', '--repeat-each=2']).forwarded,
     ['--workers', '2', '--repeat-each', '2']);
@@ -207,4 +208,44 @@ it('discovers exactly eight candidate cases and the approved 18/65 signup alloca
   assert.deepEqual(budgets, { F01:2, F02:2, F03:2, F04:4, F05:2, F06:2, F07:2, F08:2 });
   assert.equal(Object.values(budgets).reduce((a,b) => a+b, 0), 18);
   assert.equal(47 + Object.values(budgets).reduce((a,b) => a+b, 0), 65);
+`));
+
+
+it('discovers only G03/G04 with seven identities and bounded cases in the 34-case cutover inventory', () => verify(prelude + `
+  import fs from 'node:fs';
+  import ts from 'typescript';
+  const source = fs.readFileSync('e2e/generalized-room-membership-qr.spec.ts', 'utf8');
+  const ast = ts.createSourceFile('membership.ts', source, ts.ScriptTarget.Latest, true);
+  const titles = [], budgets = {}, timeouts = [];
+  function walk(node) {
+    if (ts.isCallExpression(node) && node.expression.getText(ast) === 'test' && ts.isStringLiteral(node.arguments[0])) titles.push(node.arguments[0].text);
+    if (ts.isCallExpression(node) && node.expression.getText(ast) === 'test.setTimeout') timeouts.push(Number(node.arguments[0].getText(ast)));
+    if (ts.isPropertyAssignment(node) && /^G0[1-9]$/.test(node.name.getText(ast))) budgets[node.name.getText(ast)] = Number(node.initializer.getText(ast));
+    ts.forEachChild(node, walk);
+  }
+  walk(ast);
+  assert.deepEqual(titles.map(title => title.split(' ')[1]), ['G03', 'G04']);
+  assert.deepEqual(budgets, { G03: 3, G04: 4 }); assert.deepEqual(timeouts, [90000, 90000]);
+  assert.equal(47 + 18 + Object.values(budgets).reduce((a, b) => a + b, 0), 72);
+  const existing = fs.readFileSync('e2e/room-session.spec.ts', 'utf8');
+  // Existing parameterized Auth and recovery trials expand to 24; keep their inventory fixed.
+  const existingAst = ts.createSourceFile('room.ts', existing, ts.ScriptTarget.Latest, true);
+  let identities = 0, trials = 0;
+  function existingWalk(node) {
+    if (ts.isVariableDeclaration(node) && node.name.getText(existingAst) === 'anonymousBudget')
+      for (const prop of node.initializer.arguments[0].properties) identities += Number(prop.initializer.getText(existingAst));
+    if (ts.isCallExpression(node) && node.expression.getText(existingAst) === 'test') {
+      let multiplier = 1;
+      for (let parent = node.parent; parent; parent = parent.parent) {
+        if (ts.isForOfStatement(parent)) {
+          const expr = ts.isAsExpression(parent.expression) ? parent.expression.expression : parent.expression;
+          assert.equal(ts.isArrayLiteralExpression(expr), true); multiplier *= expr.elements.length;
+        }
+      }
+      trials += multiplier;
+    }
+    ts.forEachChild(node, existingWalk);
+  }
+  existingWalk(existingAst); assert.equal(identities, 47); assert.equal(trials, 24);
+  assert.equal(24 + 8 + titles.length, 34);
 `));

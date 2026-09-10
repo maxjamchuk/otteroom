@@ -11,8 +11,14 @@ type SafeInput = {
   [key: string]: unknown;
 };
 
+const membershipCases = new Map([
+  ['@membership G03 three voting members assemble through link and code', 'G03'],
+  ['@membership G04 non-voting creator observes three voters and stable candidate recovery', 'G04'],
+]);
+
 function scenarioFor(title: unknown): string {
   if (typeof title !== 'string') return 'unclassified';
+  if (membershipCases.has(title)) return 'membership';
   if (title.startsWith('@baseline ')) return 'baseline';
   if (title.startsWith('@auth ')) return 'auth';
   if (/^@candidate F0[1-8] /.test(title)) return 'candidate';
@@ -36,6 +42,7 @@ function browserCaseFor(title: unknown): string {
     ['@us3 E12 delayed ', 'E12-navigation'], ['@us3 E12 direct ', 'E12-mutation'],
   ]) if (title.startsWith(prefix)) return label;
   const scenario = scenarioFor(title);
+  if (scenario === 'membership') return membershipCases.get(title)!;
   if (scenario === 'candidate') return title.match(/^@candidate (F0[1-8]) /)![1];
   if (['us1', 'us2-join', 'us2-realtime', 'us4'].includes(scenario)) {
     return title.match(/^@[^ ]+ (E(?:0[1-9]|1[0-2])) /)?.[1] ?? 'none';

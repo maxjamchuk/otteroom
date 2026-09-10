@@ -16,9 +16,9 @@ const mockClient = { channel: mockChannel, removeChannel: mockRemove };
 jest.mock('../../src/lib/supabase', () => ({ getSupabase: () => mockClient }));
 jest.mock('../../src/auth/anonymous-session', () => ({ bootstrapAnonymousSession: () => mockBootstrap() }));
 jest.mock('../../src/rooms/service', () => ({ refetchRoom: (id: string) => mockRefetch(id) }));
-const room: AcceptedRoomState = { kind: 'accepted', id: '11111111-1111-4111-8111-111111111111', code: 'ABCDEF0123', role: 'host', state: 'waiting', title: 'Waiting', count: 1 };
+const room: AcceptedRoomState = { kind: 'accepted', id: '11111111-1111-4111-8111-111111111111', code: 'ABCDEF0123', isCreator: true, isVoter: true, state: 'waiting', title: 'Waiting', voterCount: 1, requiredVoterCount: 2 };
 const other: AcceptedRoomState = { ...room, id: '22222222-2222-4222-8222-222222222222', code: '012345ABCD' };
-const ready = (value = room) => ({ id: value.id, code: value.code, state: 'ready' });
+const ready = (value = room) => ({ id: value.id, code: value.code, state: 'ready', voter_count: value.requiredVoterCount, required_voter_count: value.requiredVoterCount });
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (error: unknown) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 async function mount(value: AcceptedRoomState | null = room) {
   const hook = renderHook(({ accepted }: { accepted: AcceptedRoomState | null }) => useRoomSubscription(accepted), { initialProps: { accepted: value } });
@@ -48,7 +48,7 @@ it('first system-ok recovers a completely missed initial UPDATE', async () => {
   expect(mockRefetch).toHaveBeenCalledWith(room.id); expect(h.result.current.room?.state).toBe('ready'); expect(h.result.current.error).toBe(false);
 });
 it('UPDATE is only invalidation, never payload state', async () => {
-  mockRefetch.mockResolvedValue({ id: room.id, code: room.code, state: 'waiting' });
+  mockRefetch.mockResolvedValue({ id: room.id, code: room.code, state: 'waiting', voter_count: 1, required_voter_count: 2 });
   const h = await mount(); await act(async () => { channels[0].status('SUBSCRIBED'); channels[0].system({ extension: 'postgres_changes', status: 'ok' }); });
   await act(async () => { channels[0].update({ new: { id: room.id, state: 'ready', code: other.code } }); });
   expect(mockRefetch).toHaveBeenCalledTimes(2); expect(h.result.current.room).toEqual(room);
@@ -64,7 +64,7 @@ it('coalesces a burst into one follow-up and ignores superseded request completi
   await act(async () => { second.resolve(ready()); }); expect(h.result.current.room?.state).toBe('ready');
 });
 it('repeated system-ok recovers changes missed while disconnected', async () => {
-  mockRefetch.mockResolvedValueOnce({ ...ready(), state: 'waiting' });
+  mockRefetch.mockResolvedValueOnce({ ...ready(), state: 'waiting', voter_count: 1, required_voter_count: 2 });
   const h = await mount(); await act(async () => { channels[0].status('SUBSCRIBED'); channels[0].system({ extension: 'postgres_changes', status: 'ok' }); });
   await act(async () => { channels[0].status('CHANNEL_ERROR', new Error('private')); });
   expect(h.result.current.room).toEqual(room); expect(h.result.current.error).toBe(true);
@@ -139,7 +139,7 @@ it('never polls and duplicate older responses cannot regress Ready', async () =>
   jest.useFakeTimers();
   try {
     const h = await mount(); await act(async () => { channels[0].status('SUBSCRIBED'); channels[0].system({ extension: 'postgres_changes', status: 'ok' }); });
-    mockRefetch.mockResolvedValue({ ...ready(), state: 'waiting' });
+    mockRefetch.mockResolvedValue({ ...ready(), state: 'waiting', voter_count: 1, required_voter_count: 2 });
     await act(async () => { channels[0].update(); });
     await act(async () => { jest.advanceTimersByTime(60000); });
     expect(mockRefetch).toHaveBeenCalledTimes(2); expect(h.result.current.room?.state).toBe('ready'); h.unmount();
@@ -149,9 +149,9 @@ it('retains monotonically observed Ready across explicit same-room retry', async
   const h = await mount(); await act(async () => { channels[0].status('SUBSCRIBED'); channels[0].system({ extension: 'postgres_changes', status: 'ok' }); });
   await act(async () => { channels[0].status('CLOSED'); });
   await act(async () => { h.result.current.retry(); });
-  mockRefetch.mockResolvedValue({ ...ready(), state: 'waiting' });
+  mockRefetch.mockResolvedValue({ ...ready(), state: 'waiting', voter_count: 1, required_voter_count: 2 });
   await act(async () => { channels[1].status('SUBSCRIBED'); channels[1].system({ extension: 'postgres_changes', status: 'ok' }); });
-  expect(h.result.current.room?.state).toBe('ready'); expect(h.result.current.room?.count).toBe(2);
+  expect(h.result.current.room?.state).toBe('ready'); expect(h.result.current.room?.voterCount).toBe(2);
 });
 it('pinned SDK refresh propagates authorization to the same owned channel without new identity', () => {
   const child = spawnSync(process.execPath, ['--input-type=module'], { encoding: 'utf8', timeout: 15000, input: `
@@ -226,7 +226,7 @@ it('duplicate system-ok coalesces with in-flight read, without parallel requests
   expect(mockRefetch).toHaveBeenCalledTimes(2); expect(h.result.current.room?.state).toBe('ready');
 });
 it.each(['waiting', 'ready'])('system-error preserves %s and requires new system-ok after transport-only rejoin', async state => {
-  const accepted = { ...room, state, count: state === 'ready' ? 2 : 1, title: state === 'ready' ? 'Ready' : 'Waiting' } as AcceptedRoomState;
+  const accepted = { ...room, state, voterCount: state === 'ready' ? 2 : 1, title: state === 'ready' ? 'Ready' : 'Waiting' } as AcceptedRoomState;
   const h = await mount(accepted);
   await act(async () => { channels[0].system({ extension: 'postgres_changes', status: 'error', message: 'private detail' }); });
   expect(h.result.current.error).toBe(true); expect(h.result.current.room).toEqual(accepted);
@@ -255,4 +255,23 @@ it('old-generation system events cannot recover or degrade a replacement for the
   expect(h.result.current.error).toBe(false);
   await act(async () => { channels[0].system({ extension: 'postgres_changes', status: 'error' }); });
   expect(h.result.current.error).toBe(false); expect(mockRefetch).toHaveBeenCalledTimes(1);
+});
+
+it('refetches intermediate Waiting counts, preserves zero-slot creator and ignores stale count before exact Ready', async () => {
+  const accepted={...room,isVoter:false,voterCount:0,requiredVoterCount:3};
+  const h=await mount(accepted);
+  for(const count of [0,1,2,1,3]) {
+    mockRefetch.mockResolvedValue({id:room.id,code:room.code,state:count===3?'ready':'waiting',voter_count:count,required_voter_count:3});
+    await act(async()=>{channels[0].system({extension:'postgres_changes',status:'ok'});});
+    expect(h.result.current.room?.voterCount).toBe(count===1 && mockRefetch.mock.calls.length===4?2:count);
+    expect(h.result.current.room?.isCreator).toBe(true);expect(h.result.current.room?.isVoter).toBe(false);
+  }
+  const before=h.result.current.room;
+  await act(async()=>{channels[0].update({new:{movie_candidate_id:'untrusted',voter_count:0}});});
+  expect(h.result.current.room).toEqual(before);expect(mockChannel).toHaveBeenCalledTimes(1);
+});
+it('immutable target mismatch remains recoverable without changing flags or occupancy',async()=>{
+  const h=await mount();mockRefetch.mockResolvedValue({...ready(),required_voter_count:3});
+  await act(async()=>{channels[0].system({extension:'postgres_changes',status:'ok'});});
+  expect(h.result.current.error).toBe(true);expect(h.result.current.room).toEqual(room);
 });

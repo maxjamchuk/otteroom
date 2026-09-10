@@ -6,7 +6,8 @@ import { refetchRoom } from './service';
 import { applyRoomRefetch, type AcceptedRoomState } from './state';
 
 // Owned by one accepted route, never a global room cache. The RPC model stays
-// stable as input; authoritative reads update only this lifecycle's projection.
+// stable as input, including creator/voter flags and target. Authoritative reads
+// advance voter counts only through applyRoomRefetch in this lifecycle.
 export function useRoomSubscription(accepted: AcceptedRoomState | null) {
   const [attempt, setAttempt] = useState(0);
   const [view, setView] = useState({ source: accepted, room: accepted, error: false, retrying: false });

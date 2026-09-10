@@ -57,7 +57,7 @@ function RoomEntry({ code }: { code: string }) {
         setState(joinErrorState()); return;
       }
       const mapped = joinRoomState(result);
-      setState(mapped.kind === 'accepted' && mapped.state === 'waiting'
+      setState(mapped.kind === 'accepted' && (mapped.isCreator || mapped.state === 'waiting')
         ? { ...mapped, invitation: invitationLink(mapped.code) } : mapped);
     }).catch(() => { if (current) setState(joinErrorState()); });
     return () => { current = false; };
@@ -75,17 +75,18 @@ function RoomEntry({ code }: { code: string }) {
 
 function AcceptedRoom({ initial }: { initial: AcceptedRoomState & { invitation?: string } }) {
   const { room, error, retry, retrying } = useRoomSubscription(initial);
-  // An accepted RPC is immediately visible, including guest Ready before binding.
+  // An accepted RPC is immediately visible, including intermediate Waiting counts.
   const state = room ?? initial;
   const candidate = useRoomCandidate(state);
   return <>
     <Text accessibilityRole="header" style={styles.title}>{state.title}</Text>
     <Text accessibilityLabel="Room code" selectable>{state.code}</Text>
-    <Text>{state.count} of 2</Text>
-    {state.state === 'waiting' && <>
-      <Text>Waiting for the second participant.</Text>
-      <Text accessibilityLabel="Invitation link" selectable>{initial.invitation}</Text>
-    </>}
+    <Text>{state.voterCount} of {state.requiredVoterCount} voters</Text>
+    {state.isCreator && <Text>{state.isVoter
+      ? 'You created this room and are voting.'
+      : 'You created this room and are not voting.'}</Text>}
+    {state.state === 'waiting' && <Text>Waiting for the voting group.</Text>}
+    {(state.isCreator || state.state === 'waiting') && <Text accessibilityLabel="Invitation link" selectable>{initial.invitation}</Text>}
     {error && <>
       <Text accessibilityLiveRegion="polite">Unable to synchronize this room. Please try again.</Text>
       <Pressable accessibilityRole="button" accessibilityLabel="Retry synchronization" disabled={retrying} onPress={retry}>

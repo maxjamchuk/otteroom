@@ -29,27 +29,31 @@ function httpOrigin(value: string): string {
 
 // Observe from before navigation. No global blocking or provider allowlist, no
 // raw request/response data in diagnostics. Only the configured local origins.
-export async function candidateHarness(participants: [SafeDiagnostics, SafeDiagnostics], baseURL: string) {
+export async function candidateHarness(participants: SafeDiagnostics[], baseURL: string) {
+  if (participants.length < 2 || participants.length > 4 || new Set(participants).size !== participants.length) throw safeError();
+  const vector = <T>(value: T[]) => { if (value.length !== participants.length) throw safeError(); return [...value]; };
+  const indexInRange = (index: number) => { if (!Number.isInteger(index) || index < 0 || index >= participants.length) throw safeError(); };
+  const actionsInRange = (actions: Action[]) => { if (actions.some(action => ![null, 'continue', 'abort', 'commit-loss'].includes(action))) throw safeError(); return vector(actions); };
   const appOrigin = httpOrigin(baseURL);
   const env = process.env.EXPO_PUBLIC_SUPABASE_URL ? process.env : parseEnv(fs.readFileSync('.env.local', 'utf8'));
   const apiOrigin = httpOrigin(env.EXPO_PUBLIC_SUPABASE_URL ?? '');
   expect([appOrigin, apiOrigin].every(value => ['127.0.0.1', 'localhost', '[::1]'].includes(new URL(value).hostname))).toBe(true);
   const expectedHash = createHash('sha256').update(fs.readFileSync('assets/candidates/cardboard-comet.png')).digest('hex');
-  let binding: { room: RoomProjection; ids: [string, string]; api: PublicApi } | undefined;
+  let binding: { room: RoomProjection; ids: string[]; api: PublicApi } | undefined;
   let failed = false, disposed = false;
-  let limits = [1, 1];
-  const roundFor = (actions: [Action, Action]) => {
-    return { actions, arrived: [false, false], released: false, finished: [false, false],
-      rows: [null, null] as (CandidateResult | null)[], proof: false,
+  let limits = participants.map(() => 1);
+  const roundFor = (actions: Action[]) => {
+    return { actions: actionsInRange(actions), arrived: participants.map(() => false), released: false, finished: participants.map(() => false),
+      rows: participants.map(() => null) as (CandidateResult | null)[], proof: false,
       // Waiting is event-driven through waitFor/notify; no timing guess.
     };
   };
-  let round = roundFor(['continue', 'continue']);
+  let round = roundFor(participants.map(() => 'continue'));
   const rounds = [round];
-  const posterRoutes: { index: 0 | 1; match: (url: URL) => boolean; route: (route: Route) => Promise<void> }[] = [];
+  const posterRoutes: { index: number; match: (url: URL) => boolean; route: (route: Route) => Promise<void> }[] = [];
   const waiting = new Set<() => void>(), pending = new Set<Promise<void>>();
   const stats = participants.map(() => ({ automatic: 0, probes: 0, held: 0, forwarded: 0, fetched: 0, aborted: 0, auth: 0, http: 0, sockets: 0, external: 0 }));
-  const automaticResults: CandidateResult[][] = [[], []], probeResults: CandidateResult[][] = [[], []];
+  const automaticResults: CandidateResult[][] = participants.map(() => []), probeResults: CandidateResult[][] = participants.map(() => []);
   const images = participants.map(() => new Map<string, { ok: boolean; hash: string }>());
   const notify = () => { for (const callback of waiting) callback(); };
   const waitFor = (condition: () => boolean) => new Promise<void>((resolve, reject) => {
@@ -203,19 +207,19 @@ export async function candidateHarness(participants: [SafeDiagnostics, SafeDiagn
 
   return {
     stats,
-    bind(room: RoomProjection, ids: [string, string], api: PublicApi) {
-      expect(!binding && new Set(ids).size === 2 && api.origin === apiOrigin).toBe(true);
-      binding = { room, ids, api };
+    bind(room: RoomProjection, ids: string[], api: PublicApi) {
+      expect(!binding && ids.length === participants.length && new Set(ids).size === participants.length && api.origin === apiOrigin).toBe(true);
+      binding = { room, ids: vector(ids), api };
     },
     // Configuration is bounded and must precede the first automatic request.
-    limitAutomatic(value: [number, number]) {
+    limitAutomatic(value: number[]) {
       expect(stats.every(v => v.automatic === 0) && value.every(n => Number.isInteger(n) && n >= 1 && n <= 4)).toBe(true);
-      limits = value;
+      limits = vector(value);
     },
-    configureInitial(actions: [Action, Action]) {
-      expect(stats.every(v => v.automatic === 0)).toBe(true); round.actions = actions;
+    configureInitial(actions: Action[]) {
+      expect(stats.every(v => v.automatic === 0)).toBe(true); round.actions = actionsInRange(actions);
     },
-    arm(actions: [Action, Action]) {
+    arm(actions: Action[]) {
       expect(!failed && !disposed && round.actions.every((action, i) => action === null || round.finished[i])).toBe(true);
       round = roundFor(actions); rounds.push(round);
       expect(rounds.length <= 4).toBe(true);
@@ -232,7 +236,8 @@ export async function candidateHarness(participants: [SafeDiagnostics, SafeDiagn
       expect(!round.released && !failed && round.actions.every((action, i) => action === null || round.arrived[i])).toBe(true);
       round.released = true; notify();
     },
-    async available(counts: [number, number] = [1, 1]) {
+    async available(counts: number[] = participants.map(() => 1)) {
+      vector(counts);
       await waitFor(() => automaticResults.every((rows, i) => rows.length === counts[i]));
       expect(automaticResults.every(rows => rows.every(row => sameResult(row, firstCandidate)))).toBe(true);
     },
@@ -249,12 +254,15 @@ export async function candidateHarness(participants: [SafeDiagnostics, SafeDiagn
       expect(snapshot.row.state === 'ready' && before.row.movie_candidate_id === null &&
         snapshot.xmin !== before.xmin && round.rows.every(row => row?.candidate_id === snapshot.row.movie_candidate_id)).toBe(true);
       const unchanged = ({ movie_candidate_id: _candidate, updated_at: _updated, ...rest }: Snapshot['row']) => rest;
-      expect(JSON.stringify(unchanged(snapshot.row)) === JSON.stringify(unchanged(before.row))).toBe(true);
+      expect(JSON.stringify(unchanged(snapshot.row)) === JSON.stringify(unchanged(before.row)) &&
+        JSON.stringify(snapshot.members) === JSON.stringify(before.members)).toBe(true);
       round.proof = true; notify();
       await waitFor(() => round.finished.every(Boolean));
       return snapshot;
     },
-    async failPosterOnce(index: 0 | 1, source: string) {
+    async failPosterOnce(index: number, source: string, reload = false) {
+      indexInRange(index);
+      if (reload) images[index].delete(source);
       const url = new URL(source);
       expect(url.origin === appOrigin && url.protocol === 'http:' && assetPath(url).endsWith('.png') && url.searchParams.getAll('unstable_path').length <= 1 && !images[index].has(source)).toBe(true);
       const evidence = { failed: 0, retried: 0, source };
@@ -275,7 +283,8 @@ export async function candidateHarness(participants: [SafeDiagnostics, SafeDiagn
     },
     // Intentional contract probes are explicitly marked and separately counted.
     // Own credentials stay inside their originating context; no new Auth call.
-    async probe(index: 0 | 1, outcome: 'not_ready' | 'available' | 'not_found', overlap = false, targetId?: string) {
+    async probe(index: number, outcome: 'not_ready' | 'available' | 'not_found', overlap = false, targetId?: string) {
+      indexInRange(index);
       if (!binding) throw safeError();
       const before = stats[index].probes, count = overlap ? 2 : 1;
       const valid = await participants[index].page.evaluate(async ({ api, room, expected, label, overlap }) => {
@@ -298,7 +307,8 @@ export async function candidateHarness(participants: [SafeDiagnostics, SafeDiagn
       expect(valid && stats[index].probes === before + count).toBe(true);
       await waitFor(() => probeResults[index].length === stats[index].probes);
     },
-    async assertDisplay(index: 0 | 1) {
+    async assertDisplay(index: number) {
+      indexInRange(index);
       const page = participants[index].page;
       await expect(page.getByTestId('candidate-title')).toHaveText(firstCandidate.title);
       await expect(page.getByTestId('candidate-year')).toHaveText(String(firstCandidate.release_year));
@@ -331,7 +341,8 @@ export async function candidateHarness(participants: [SafeDiagnostics, SafeDiagn
       await participants[index].assertNoCredentialTextUi();
       return rendered.source;
     },
-    async assertHealthy(expected: [number, number] = [1, 1]) {
+    async assertHealthy(expected: number[] = participants.map(() => 1)) {
+      vector(expected);
       await waitFor(() => pending.size === 0);
       expect(!failed && !disposed && stats.every(value => value.external === 0 && value.http > 0 && value.sockets > 0)).toBe(true);
       expect(stats.every((value, index) => value.automatic === expected[index] && automaticResults[index].length + value.aborted === value.automatic &&

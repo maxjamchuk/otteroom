@@ -11,13 +11,13 @@ const mockCreate = jest.fn();
 const mockJoin = jest.fn();
 const mockUuid = jest.fn();
 jest.mock('expo-crypto', () => ({ randomUUID: () => mockUuid() }));
-jest.mock('../../src/rooms/service', () => ({ createRoom: (id: string) => mockCreate(id), joinRoom: (code: string) => mockJoin(code) }));
+jest.mock('../../src/rooms/service', () => ({ createRoom: (id: string, target: number, voting: boolean) => mockCreate(id, target, voting), joinRoom: (code: string) => mockJoin(code) }));
 jest.mock('../../src/auth/anonymous-session', () => ({ bootstrapAnonymousSession: () => mockBootstrap() }));
 jest.mock('../../src/lib/supabase', () => ({ getSupabase: () => ({ auth: {
   onAuthStateChange: () => ({ data: { subscription: { unsubscribe: mockUnsubscribe } } }),
   startAutoRefresh: jest.fn(), stopAutoRefresh: mockStopRefresh,
 } }) }));
-const row = { outcome: 'created', room_id: '11111111-1111-4111-8111-111111111111', room_code: 'ABCDEF0123', room_state: 'waiting', participant_role: 'host', participant_count: 1 };
+const row = { outcome: 'created', room_id: '11111111-1111-4111-8111-111111111111', room_code: 'ABCDEF0123', room_state: 'waiting', is_creator: true, is_voter: true, voter_count: 1, required_voter_count: 2 };
 const firstId = '22222222-2222-4222-8222-222222222222';
 const secondId = '33333333-3333-4333-8333-333333333333';
 beforeEach(() => {
@@ -28,9 +28,10 @@ beforeEach(() => {
 });
 afterEach(() => jest.restoreAllMocks());
 const routes = { _layout: RootLayout, index: HomeScreen, 'room/[code]': RoomRouteScreen };
-async function mount(initialUrl = '/') {
+async function mount(initialUrl = '/', chooseVoting = true) {
   const view = renderRouter(routes, { initialUrl });
   await act(async () => {});
+  if (chooseVoting && screen.queryByRole('button', { name: 'Yes, I will vote' })) fireEvent.press(screen.getByRole('button', { name: 'Yes, I will vote' }));
   return view;
 }
 
@@ -41,7 +42,7 @@ describe('host creation', () => {
     const view = await mount();
     expect(mockUuid).not.toHaveBeenCalled();
     await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'Create Room' })); });
-    expect(mockCreate).toHaveBeenCalledWith(firstId);
+    expect(mockCreate).toHaveBeenCalledWith(firstId, 2, true);
     expect(replace).toHaveBeenCalledWith('/room/ABCDEF0123');
     expect(view.getPathname()).toBe('/room/ABCDEF0123');
     expect(mockJoin).toHaveBeenCalledWith('ABCDEF0123');
@@ -75,7 +76,7 @@ describe('host creation', () => {
     expect(screen.queryByText(row.room_code)).toBeNull();
     await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'Retry create' })); });
     expect(mockUuid).toHaveBeenCalledTimes(1);
-    expect(mockCreate.mock.calls).toEqual([[firstId], [firstId]]);
+    expect(mockCreate.mock.calls).toEqual([[firstId,2,true], [firstId,2,true]]);
     await screen.findByText('Waiting');
   });
   it('preserves UUID when successful RPC navigation throws', async () => {
@@ -84,7 +85,7 @@ describe('host creation', () => {
     await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'Create Room' })); });
     expect(screen.queryByLabelText('Invitation link')).toBeNull();
     await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'Retry create' })); });
-    expect(mockCreate.mock.calls).toEqual([[firstId], [firstId]]);
+    expect(mockCreate.mock.calls).toEqual([[firstId,2,true], [firstId,2,true]]);
     expect(replace).toHaveBeenCalledTimes(2);
   });
   it('new deliberate create after completion uses a new UUID', async () => {
@@ -92,8 +93,9 @@ describe('host creation', () => {
     await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'Create Room' })); });
     await screen.findByText('Waiting');
     await act(async () => { fireEvent.press(screen.getByRole('link', { name: 'Back to home' })); });
+    fireEvent.press(screen.getByRole('button', { name: 'Yes, I will vote' }));
     await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'Create Room' })); });
-    expect(mockCreate.mock.calls).toEqual([[firstId], [secondId]]);
+    expect(mockCreate.mock.calls).toEqual([[firstId,2,true], [secondId,2,true]]);
   });
 });
 
@@ -129,7 +131,7 @@ describe('mounted Auth boundary', () => {
 
 describe('manual invitation entry', () => {
   it('normalizes once and leaves the sole join call to the shared room route', async () => {
-    mockJoin.mockResolvedValue({ ...row, outcome: 'joined', participant_role: 'guest', room_state: 'ready', participant_count: 2 });
+    mockJoin.mockResolvedValue({ ...row, outcome: 'joined', is_creator: false, is_voter: true, room_state: 'ready', voter_count: 2, required_voter_count: 2 });
     const replace = jest.spyOn(router, 'replace');
     const view = await mount();
     fireEvent.changeText(screen.getByLabelText('Room code input'), ' \tabcdef0123\n');
@@ -188,5 +190,52 @@ describe('manual invitation entry', () => {
     act(() => { fireEvent.press(screen.getByRole('button', { name: 'Create Room' })); join(); });
     expect(replace).not.toHaveBeenCalled(); expect(mockJoin).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Join Room' })).toBeDisabled();
+  });
+});
+
+
+describe('explicit immutable creation configuration', () => {
+  it('starts at text2 with neither participation choice selected', async () => {
+    await mount('/',false);
+    expect(screen.getByLabelText('Required voter count').props.value).toBe('2');
+    for (const name of ['Yes, I will vote','No, I will not vote'])
+      expect(screen.getByRole('button',{name}).props.accessibilityState.selected).toBe(false);
+    fireEvent.press(screen.getByRole('button',{name:'Create Room'}));
+    expect(screen.getByText('Choose whether you will vote.')).toBeVisible();
+    expect(mockCreate).not.toHaveBeenCalled(); expect(mockUuid).not.toHaveBeenCalled();
+  });
+  it.each([[2,true],[3,true],[2,false],[3,false]] as const)('submits target%s voting=%s', async (target,voting) => {
+    await mount('/',false);
+    fireEvent.changeText(screen.getByLabelText('Required voter count'),String(target));
+    fireEvent.press(screen.getByRole('button',{name:voting?'Yes, I will vote':'No, I will not vote'}));
+    await act(async () => { fireEvent.press(screen.getByRole('button',{name:'Create Room'})); });
+    expect(mockCreate.mock.calls).toEqual([[firstId,target,voting]]);
+    expect(mockUuid).toHaveBeenCalledTimes(1);
+  });
+  it.each(['','1','0','-1','2.5','text','2147483648','1e3','Infinity'])('rejects invalid target %s before allocating a request', async value => {
+    await mount(); fireEvent.changeText(screen.getByLabelText('Required voter count'),value);
+    fireEvent.press(screen.getByRole('button',{name:'Create Room'}));
+    expect(screen.getByText('Enter a whole voter count from 2 to 2147483647.')).toBeVisible();
+    expect(mockCreate).not.toHaveBeenCalled(); expect(mockUuid).not.toHaveBeenCalled();
+  });
+  it('freezes target3/non-voting choice through duplicate action, failure and explicit retry', async () => {
+    let reject!: (value: unknown) => void;
+    mockCreate.mockReturnValueOnce(new Promise((_,no) => {reject=no;}));
+    await mount('/',false);
+    fireEvent.changeText(screen.getByLabelText('Required voter count'),'3');
+    fireEvent.press(screen.getByRole('button',{name:'No, I will not vote'}));
+    let button=screen.getByRole('button',{name:'Create Room'});
+    while(typeof button.props.onPress!=='function' && button.parent) button=button.parent;
+    act(()=>{button.props.onPress();button.props.onPress();});
+    expect(mockCreate.mock.calls).toEqual([[firstId,3,false]]);
+    expect(screen.getByLabelText('Required voter count').props.editable).toBe(false);
+    await act(async()=>{reject(new Error('private'));});
+    expect(screen.getByLabelText('Required voter count').props.editable).toBe(false);
+    for(const name of ['Yes, I will vote','No, I will not vote']) expect(screen.getByRole('button',{name})).toBeDisabled();
+    fireEvent.changeText(screen.getByLabelText('Required voter count'),'2');
+    fireEvent.press(screen.getByRole('button',{name:'Yes, I will vote'}));
+    await act(async()=>{fireEvent.press(screen.getByRole('button',{name:'Retry create'}));});
+    expect(mockCreate.mock.calls).toEqual([[firstId,3,false],[firstId,3,false]]);
+    expect(mockUuid).toHaveBeenCalledTimes(1);
   });
 });

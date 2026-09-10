@@ -43,9 +43,14 @@ Future paths:
 - `supabase/tests/migration/room_membership.before.sql`
 - `supabase/tests/migration/room_membership.after.sql`
 
-Invoke with the local stack running and no application/test traffic:
+Invoke with the owned local validation stack running and no application/test
+traffic. The runner refuses a database containing rooms or Auth users before
+starting its destructive legacy reset. A previous acceptance run can leave such
+data in the stopped stack's retained volume. Prepare an empty local database
+explicitly; this does not restore Auth quota or remove earlier R02 charges:
 
 ```sh
+npm run db:reset
 node scripts/check-room-membership-migration.mjs
 ```
 
@@ -379,6 +384,7 @@ trap 'OTTEROOM_CHECK_EXIT=$?; trap - EXIT; if ! npm run supabase:stop; then exit
 npm ci
 npm run supabase:start
 npm run env:local
+npm run db:reset
 node scripts/check-room-membership-migration.mjs
 npm run db:reset
 npm run db:types:check
@@ -394,8 +400,9 @@ npm run test:e2e
 git diff --check
 ```
 
-Phase 1 omits only the not-yet-created migration runner; its existing schema
-and canonical types are checked normally. Phase 2 must first have completed the
+Phase 1 omits the not-yet-created migration runner and its preparatory reset;
+the following normal reset still checks its existing schema and canonical types.
+Phase 2 must first have completed the
 separate intentional R01 update. Capture canonical hash/metadata before and
 after check-only execution. Inspect web export for all four original PNGs;
 at G3 require the imported QR component in the application bundle and actual
@@ -687,3 +694,403 @@ Only package.json, package-lock.json, this log and tasks.md were modified;
 only the standalone QR component and its tests were added. The room route does
 not import the component. No generalized membership, new DB surface, G01-G09 or
 T007+ work was performed. T001-T006 are complete; T007-T067 remain unchecked.
+
+### 2026-09-10 — Phase 2 baseline and DB tests-first work (T007–T018)
+
+Starting main HEAD: `10b0e5a930ea1aa8300fbab1672b71b5545b6435`; initial
+working tree clean. SHA-256 captured for all148 tracked files before editing.
+Node24.20.0/npm11.19.0 reused; no dependency installation/change in the DB block.
+No Otteroom runtime was running at entry. The owned shell has an EXIT cleanup
+trap and keeps the same local stack available through the internal DB/R01 gate.
+No application/browser traffic or GoTrue signup is part of this block.
+
+Read all normative inputs and inspected historical migrations and both complete
+SQL suites. Specification checklist16/16, no unchecked item; extension hooks
+absent. Scope is only T007–T050, one coherent cutover with no intermediate commit.
+Phase1 QR and all T051+ work remain outside the current change.
+
+`npm run supabase:start`, `npm run env:local`, and an existing-schema
+`npm run db:reset` passed. Before any new migration existed, the focused room DB
+suite produced the expected schema regression:54 assertions,9 failed, identifying
+the missing member relation, count/creator fields, defaults, generated expression,
+constraints and indexes. New creation/admission/integrity/security tests were
+then authored before production SQL. A second pre-cutover run retained those
+nine failures and stopped at the missing room_members relation used by its
+statistics helper; this is expected incompatibility, not passing RPC evidence.
+
+The pending complete migration was authored in task order and first applied
+only after candidate tests/body and final dependency removal/ANALYZE were present.
+No generated types or application cutover has run yet. No task is marked
+complete until its required executable proof succeeds; later DB race/fault and
+nonempty upgrade gates remain mandatory.
+
+### 2026-09-10 — Phase 2 internal DB gate (T007–T026)
+
+The complete additive migration was applied only after T012–T018 were authored.
+Both real DB suites now pass: **922 assertions** (room/session560,
+candidate362). Earlier test-authoring failures (JSON subtraction parentheses
+and a fixture mutation selecting multiple members) were corrected in tests;
+the production contract did not change. Full reset reproduced the result.
+
+Real independent authenticated READ COMMITTED dblink callers prove create
+unique-index waits and code-collision winner recovery in both creator modes,
+with one room/member and no initialization UPDATE. Admission trials prove
+owner-row-lock overlap and direct loser-on-winner pg_blocking_pids/pg_locks
+waits: duplicate identity and final-slot trials have member INSERT/room UPDATE
+winner1/1, loser0/0 and unchanged first-commit xmin; distinct free-slot callers
+each1/1; non-voting creator0/3 plus three callers reaches3/3 with creator false;
+existing-member recovery performs0/0. Count equals voter member rows after every
+commit. A separately locked room does not block another room's real join/commit.
+Candidate races cover voting/non-voting creators in three-voter rooms with
+first assignment UPDATE1/0, repeat0/0, stable FK/xmin and member snapshots.
+
+Creator absence and invalid non-creator/non-voter fault cases throw exceptionally
+without repair. Post-member-INSERT and post-count-UPDATE faults roll back both
+relations; explicit recovery is idempotent. All exact signatures, owners,
+empty search_path, function ACLs, five-column RLS, denied roster/catalog/writes,
+three valid member combinations, integer/configuration constraints and candidate
+failure/non-disclosure/ordering assertions pass. No production test hooks exist.
+
+`node scripts/check-room-membership-migration.mjs` passed the actual nonempty
+legacy upgrade: Waiting, Ready/NULL and Ready/non-lowest candidate all preserved
+exact logical identity/configuration/timestamps/assignment; target2/count1-or2,
+five voter member rows, authenticated recovery without writes, and owner-visible
+rooms.state statistics after ANALYZE. Bounded before snapshots stay in memory.
+A real SIGTERM after legacy fixtures returned143 and still completed latest
+reset with fixtures0. An independent latest `npm run db:reset` followed it.
+
+One infrastructure correction was necessary: CLI2.116.0 recursively discovers
+SQL throughout `supabase/tests`, including the new migration before/after
+scripts. The original unrestricted command therefore failed on those scripts
+while both pgTAP suites passed. `package.json` now scopes `db:test` to
+`supabase/tests/database`; the user-facing `npm run db:test` command is unchanged.
+A regression assertion in `__tests__/config/local-supabase-config.test.ts` guards
+this separation. No dependency/lockfile/framework version changed. This implements
+the planned isolation of destructive upgrade fixtures from ordinary pgTAP.
+
+Post-gate owner count receipt: rooms0, members0, Auth users0, catalog4,
+test schemas0, application triggers0, dblink callers0. All SQL work consumed
+**0 GoTrue signup attempts / 0 browser identities**. No application/browser
+traffic, G03/G04 or QR route integration has started. This internal gate is
+**not** a releasable Phase 2 checkpoint.
+
+### 2026-09-10 — Phase 2 R01 intentional generation (T027)
+
+After T026, exactly one `npm run db:types` completed and the immediately
+following `npm run db:types:check` reported consistent. No manual patch was made.
+Reviewed final rooms10/member5 shapes, member→rooms and rooms→catalog FK
+metadata, required three create arguments and both eight-field RPC returns;
+candidate Args/Returns stayed unchanged. Public-only generation omits Auth FKs
+and private helper, as expected. Logical result nullability is validated by the
+client contract, not manually patched into generator output.
+
+Canonical receipt for later independent check-only validation:
+
+```text
+sha256=fcd0b773b75e71bc74dfaddde2fd96ecf05e62f132eac0132ba2777891890cea
+inode=571258
+size=8442
+mtime_ns=1789063032339221814
+ctime_ns=1789063034039306100
+```
+
+T007’s owned Supabase block stopped successfully; project-container inventory
+returned zero. Protected baseline33 files (historical migrations, Feature001/002
+specs, product docs, posters, Phase1 QR component/test and lockfile) remained
+byte-identical. The new pgTAP-discovery regression passed16/16 config tests.
+No browser traffic or GoTrue signups occurred. T028 onward and G2 are pending.
+
+### 2026-09-10 — Phase 2 client cutover (T028–T040)
+
+Tests-first contract/service run:31 expected failures/111 tests against the
+old six-field client. After exact eight-field parser/three-argument service and
+five-field refetch,111/111 pass. Consumer tests ran before state/UI changes:
+57 expected failures/164 tests across home, room, state and subscription, with
+both unchanged candidate consumers already passing their generalized fixtures.
+After implementation all six consumer suites pass164/164.
+
+Home has text2 and initially unselected explicit participation, whole-number
+validation, and a frozen request UUID/target/choice across duplicate handlers,
+transport/navigation failures and retry. Room renders actual0/3→1/3→2/3→3/3,
+creator mode and creator invitations in Waiting and Ready. Immutable flags/target
+and monotonically observed counts survive refetch, stale results and recovery.
+The existing single rooms channel/lifecycle is retained; candidate UPDATE is
+only invalidation. Candidate hook implementation needed no change: accepted ID
+and Ready remain its only runtime inputs. All valid member modes preserve
+local poster failure/retry with zero acquisition/Auth delta. QR stays unimported.
+
+The new local Supabase config/discovery regression also passed16/16. No browser
+identities have been created; G03/G04, C1 and full G2 are still pending.
+
+
+### 2026-09-10 — Phase 2 browser preparation and static gate (T041–T049)
+
+Room/candidate harnesses now use exact eight/five-field contracts, bounded private
+member snapshots and 2–4 independent candidate callers. Existing24 E/Auth and8 F
+trials retain their47+18 identity allocation. Only G03/G04 are added, with3+4
+identities; QR integration and all other G cases remain absent.
+
+The updated diagnostic/runtime tests first failed4/46 on the missing Phase2
+metadata/discovery. After the two cases and narrow labels/locations were added,
+46/46 pass, including retained C1 negative tests and 2/3/4-caller barrier cleanup.
+Discovery is34 cases/72 identities; C1 adds1. Suite timeout600s, each G case90s,
+workers1/retries0 and all capture restrictions unchanged. Only historical Auth
+budget comment/diagnostic labels changed; anonymous_users stays150.
+
+T049: lint and typecheck PASS; full client24 suites/511 tests PASS; web, iOS and
+Android exports PASS. All four240x360 original PNGs have byte-identical exported
+copies on web/native and remain <=65536 bytes. Lint initially rejected render-time
+ref access in home configuration presentation; state now drives the disabled
+presentation while the event-owned request remains frozen. Regression tests pass.
+Active room authority has no host/guest union or fixed-two count, and exactly one
+rooms UPDATE channel remains. The standalone QR has no route import.
+
+No GoTrue/browser identities consumed yet. Real E/F/G execution and the complete
+T050/G2 checkpoint are pending; this entry does not claim an end-to-end pass.
+
+### 2026-09-10 — G2 first complete execution and G03 harness correction
+
+The normal command path passed npm ci, owned start/env, nonempty actual upgrade,
+independent reset, check-only R01 with identical bytes/inode/size/mtime/ctime,
+lint/typecheck, client24/511, DB922, all exports/posters and managed browser setup.
+Post-pgTAP receipt: rooms0/members0/Auth0/catalog4/triggers0/dblink0/retired columns0.
+Actual catalog inspection confirmed all four function owners/security/search_path,
+exact eight/eight/five-field public RPCs, only five readable room columns and
+rooms-only publication. C1 PASS, findings0, one signup/identity.
+
+Acceptance started after 18:29:06 UTC:33/34 passed (E24/24, F8/8, G04 PASS).
+G03 failed its response-completion counter comparison after Waiting reload and
+actual socket loss. That counter can advance for a request dispatched before the
+outage. The harness now separately observes request dispatch, and G03 requires
+zero new reads while disconnected or while real system-ok remains held, followed
+by a new read after release and real Ready/candidate recovery. A synthetic event
+regression proves a delayed prior response increments completions without new
+request dispatch; no timing sleep or fabricated server success replaces the case.
+The corrected lint/typecheck and diagnostic/runtime47/47 tests pass.
+
+This first invocation consumed72 acceptance +1 C1 =73 attempts/identities,
+including the failed G03. Scanner findings0; required driver failure cleanup
+stopped Supabase and removed its browser runtime. These73 remain charged despite
+that shutdown. Corrective validation reserves another C1=1, focused G03=3 and
+complete acceptance72: cumulative149 <=150. The next start is for validation
+after mandatory failure cleanup, never quota avoidance; no reset/limit increase,
+429 retry or lost-attempt accounting is allowed. Full G2 is still pending.
+
+Corrective static/C1 execution: full client24/512 PASS and C1 PASS/findings0.
+An overly anchored focused selector (`^@membership G03 `) matched no full
+Playwright title (the runner prefixes project/file titles), so its safe controller
+failed before any test/Auth execution:0 attempts/identities, findings0, cleanup0.
+This is not a G03 result. Use the reviewed bounded `--grep G03` selector instead.
+Cumulative accounting is74; focused3 plus complete72 still totals149. No third
+C1 run is needed: its implementation/source and successful evidence are unchanged.
+
+Focused G03 then consumed3 identities and reached its final business assertions,
+but the Realtime health guard still failed. The remaining test assumption was
+absolute read totals after reload:2 could already be satisfied by pre-reload
+system/UPDATE responses. Each observed G03 reload now holds the actual new
+system-ok, starts an exact five-field request observer, releases that binding,
+and waits for that request's own successful body/completion before disconnect.
+This keeps the zero-premature-read guard intact and establishes causal evidence
+without sleeps. Lint/typecheck and diagnostic/runtime47/47 PASS. No application,
+RPC, schema or C1 capture implementation changed for either harness correction.
+
+Cumulative attempts/identities77; the next complete acceptance allocation of72 identities
+ends at149. No extra focused run/C1 is scheduled. Prior successful static/DB/export
+and C1 evidence remains applicable; the final changed E2E source will run all34
+trials. Each stopped stack was the required failure cleanup; its charged budget
+is retained across the validation restarts, with no quota/configuration change.
+
+The following complete run again passed E24/F8/G04 (33/34), with G03 stopped by
+the observer's failure flag; its business result is not accepted as a green case.
+Total charged attempts/identities is149. All completed controllers reported
+findings0 and owned-runtime cleanup succeeded. Browser validation is paused
+outside the harness; no 429 occurred and quota has not been raised or reset in
+accounting.
+
+Two additional synthetic event regressions reproduced separate lifecycle defects
+in the existing observer (2 expected failures/5 tests): a retired socket could
+still change binding counters, and retrieving an old navigation's response body
+could fail after reload and poison the current test. Connection membership guards
+now discard retired socket callbacks. A weak request/navigation association ignores
+only unavailable bodies of known retired requests; current/unknown body failures
+and available malformed/private projections still fail. Valid old bodies are still
+checked/counted, preserving delayed-response assertions. The five regressions pass,
+as do lint/typecheck, diagnostic/runtime52/52 and full client24/517. No production
+Realtime or C1 capture behavior changed; real G03 remains pending rerun.
+
+Conservative R02 scheduling uses finalized safe-summary timestamps, each later
+than every signup in that invocation. After19:34:40 UTC the first73 identities
+are at least one hour old; at most76 remain charged. One new C1 plus complete
+acceptance reserves73 more, giving hourly upper bound149 (lifetime total222 if
+successful). Wait outside Playwright/Supabase until that admission time; preserve
+all failed and zero-test invocation counts. Runtime restarts are only the mandated
+failure-cleanup/validation lifecycle, never a substitute for this quota wait.
+
+During the outside-harness wait, one additional observer regression first failed:
+the first failure's location was replaced by a later wait/health-check location.
+The observer now retains its own fixed `E2E_SAFE_FAILURE` at the observation
+site, never the network exception or payload. The existing safe boundary still
+projects only an approved source path and numeric location; no reporter/capture
+permission changed. Focused lifecycle7/7 and full client24/518 pass, with lint,
+typecheck and whitespace checks passing. These checks consumed zero identities.
+Protected baseline40 files, including the R01 script, remain byte-identical;
+canonical generated bytes and all recorded metadata are still unchanged.
+
+### 2026-09-10 — Phase 2 final G2 checkpoint: GREEN (T007–T050)
+
+The outside-harness quota gate admitted the next owned stack at19:34:40 UTC.
+C1 plus unfiltered acceptance ran from19:35:25 to19:42:27 UTC. Final receipts:
+`test-results/run-canxXG` (C1 PASS, expected controlled negative probe with all
+required artifacts) and `test-results/run-VTgIkm` (**34/34 PASS**). Both finalized
+controller scans have **0 findings**, all contexts report cleanup, and no Auth
+budget failure occurred. Browser runtime removal and driver shutdown passed;
+the complete corrective driver returned0 with cleanup0.
+
+G03 PASS: voting creator3/yes at1/3, link voter2/3, real Waiting reload/socket
+outage, manual final voter3/3, existing clients converge and returning voter
+refetches only after real system-ok. Three first candidate calls were held with
+forwarded0; membership UPDATE2 then assignment UPDATE1, one FK and three matching
+visible local posters. Creator/voter reload, reconnect and repeated re-entry
+preserve members/FK/xmin with automatic acquisition totals2/2/1 and3 identities.
+
+G04 PASS: non-voting creator3/no observes0/3→1/3→2/3→3/3, remains authorized and
+contributes0 while three voters assemble. Waiting automatic candidate calls0;
+direct ensure returns not_ready. Four first calls were held before forwarding;
+all four receive the same candidate/poster with admission UPDATE3 and assignment
+UPDATE1. Post-success acquisition failure/retry and exact bundled poster failure
+before voter reload/retry preserve members/FK/xmin; poster retry adds0 candidate
+RPCs and0 Auth calls. Four identities, all recovery using existing sessions.
+
+Final E/Auth regression **24/24**, F01–F08 **8/8**, G03/G04 **2/2**. Actual final
+acceptance allocation is E47 +F18 +G03:3 +G04:4 =**72 signups/72 identities**;
+C1 adds1, final successful browser block **73/73**. All preceding failed/targeted
+invocations remain counted:149 +73 =**222 signups/222 identities across quota
+windows**. At admission at most76 previous identities remained within the hour,
+so the conservative hourly bound was149 including the reserved73. The wait was
+outside the harness; no429, limit increase, automatic retry or restart/reset to
+evade quota. Earlier shutdowns were mandatory failed-driver cleanup.
+
+The initial complete normal path supplied successful npm ci, start/env, actual
+nonempty legacy migration/statistics proof, independent clean reset, check-only
+types, lint/typecheck/client/DB, web/iOS/Android/poster exports and managed browser
+setup. Subsequent changes affected only the E2E observer/cases and their tests;
+their affected gates were rerun: lint/typecheck PASS, latest full client
+**24 suites/518 tests PASS**, C1 PASS and all34 real trials PASS. DB remains
+**922/922** (room/session560 +candidate362); production DB/client/export inputs
+did not change after their successful gates. All four original240×360 PNGs were
+reverified byte-identical in web/native exports before removing owned exports.
+
+R01: exactly one intentional generation atT027; every later validation used
+check-only. Final SHA-256 is
+`fcd0b773b75e71bc74dfaddde2fd96ecf05e62f132eac0132ba2777891890cea`;
+inode571258, size8442, mtime_ns1789063032339221814 and
+ctime_ns1789063034039306100 remain identical to the original canonical receipt.
+Protected baseline40 files remain byte-identical, including historical
+migrations/specs/product docs, candidate implementation/posters, Phase1 QR and
+lockfile/R01 script. The sole package script correction is the recorded pgTAP
+directory isolation; dependency/framework pins did not change.
+
+Final cleanup: owned Supabase/browser containers0, app/API/DB ports closed,
+migration lock absent and owned web/native exports removed. Safe finalized test
+receipts remain ignored for review; temporary authoring/migration material is
+removed after the final baseline audit. Tracked and new-file whitespace checks
+pass. One rooms channel, no retired host/guest authority, no QR route integration,
+no future G cases or product scope. T001–T050 are complete; T051–T067 remain
+unchecked. No branch, commit or push was created. This supersedes the earlier
+pending/failed G2 attempts without discarding their evidence or Auth accounting.
+
+### 2026-09-10 — Independent Phase 2 review: corrections and validation
+
+The review found two localized contract/evidence issues. The room route exposed
+the invitation only to the creator, although the approved room projection
+contract retains sharing for ordinary Waiting members. It now shows the same
+link after joined/already_member while Waiting and hides it after Ready for
+ordinary voters; creators retain their invitation after assembly. Two new
+behavioral assertions failed before the correction; the focused route suite
+then passed39/39. G03/G04 also assert the same link during intermediate admission
+and recovery, without adding identities or QR integration.
+
+The migration runner correctly refused retained acceptance data before its
+destructive legacy reset, but the normal command path omitted its empty-database
+precondition. The initial review driver stopped at preconditions and performed
+owned shutdown, consuming0 signups. The command path now explicitly prepares
+the owned local validation database with db:reset before invoking the runner;
+the independent reset after migration remains. Existing R02 charges survive
+this data cleanup. No runner/migration/RPC implementation changed during review.
+
+The corrected command path passed npm ci, local start/env, preparatory reset,
+the real nonempty legacy upgrade (three rooms, statistics and authenticated
+recovery), independent reset and db:types:check only. Canonical bytes/inode/size/
+mtime/ctime remained identical to T027. Lint/typecheck PASS, client24 suites/519
+tests PASS, DB922/922 PASS, web/iOS/Android exports PASS, all four original PNGs
+byte-identical in both exports, managed browser setup PASS. Post-pgTAP inspection
+confirmed ten room columns, five member columns, exact public signatures, the
+private helper, postgres owners/SECURITY DEFINER/empty search_path, authenticated
+EXECUTE only apart from owner, five readable room fields and rooms-only
+publication. Test rooms/members/Auth users/application test triggers all0.
+
+Review C1 receipt `test-results/run-ETnFeE` passed with one identity and scanner0.
+The complete acceptance receipt `test-results/run-gXx6OQ` passed33/34: all24 E/Auth
+and both G03/G04 passed, while F04 exceeded its overall30000ms test deadline.
+It did not report an isolation assertion failure. This invocation consumed72
+signups/identities, including the failed case; cleanup passed and scanner0.
+
+F04 covers two room lifecycles, four contexts and repeated isolation checks
+around acquisition/reload/reconnect/retry. Its case-level budget is now60000ms;
+all assertions, per-operation/barrier deadlines, retries0 and diagnostic capture
+restrictions remain intact. Lint/typecheck passed again; the focused F04 rerun
+passed all existing assertions with4 signups/identities, scanner0 and successful
+owned shutdown. No application/SQL/C1 implementation was changed for this fix.
+
+Review accounting so far: initial preparation failure0 +C1:1 +complete72
++focused4 =77. Prior Phase2 attempts222 remain charged in lifetime accounting,
+giving299 signups/299 identities across quota windows. At review admission the
+older149 were already outside the hour; prior successful73 +review77 gives a
+conservative rolling bound150. Reserve the next complete C1+acceptance73 only
+after20:42:30 UTC, later than the prior successful acceptance's finalized summary
+at19:42:25.386701 UTC plus one hour. Then review77 +reserved73 is at most150.
+Wait outside the harness; no429, quota increase, automatic retry, or restart/reset
+as a quota workaround. A new final complete receipt is pending; this entry does
+not reinterpret the failed unfiltered review invocation as green.
+
+### 2026-09-10 — Independent review final checkpoint: READY FOR COMMIT
+
+The outside-harness gate admitted the final block at20:42:30.002082 UTC.
+Local start/env, a fresh reset and db:types:check only passed. Canonical SHA-256
+`fcd0b773b75e71bc74dfaddde2fd96ecf05e62f132eac0132ba2777891890cea`,
+inode571258, size8442, mtime_ns1789063032339221814 and
+ctime_ns1789063034039306100 remained unchanged; no additional generation occurred.
+
+Final C1 receipt `test-results/run-6TPwZa` passed with the expected controlled
+negative probe, all required artifacts and scanner0. Final unfiltered acceptance
+receipt `test-results/run-HpTpIa` passed **34/34** on the final source:
+E/Auth24/24, F01–F08 8/8, G03/G04 2/2. Scanner findings0, all participant cleanup
+receipts true and no Auth budget failure. F04 retains every isolation and
+recovery assertion; its preceding focused PASS receipt is
+`test-results/run-lbRKcN`. G03/G04 retain the added ordinary-Waiting invitation
+checks. No future G case or QR integration was added.
+
+The final block consumed C1:1 +E47 +F18 +G03:3 +G04:4 =**73 signups/73 identities**.
+Total review consumption is0 preparation +73 first block +4 focused +73 final
+=**150 signups/150 identities**. With the prior development222, Phase2 and review
+total **372/372 across quota windows**. Earlier failed/targeted attempts remain
+included. Both review admission bounds were at most150; the final full block
+waited until the previous implementation's73 expired, retaining review77 in the
+window. No429, limit increase, automatic retry or quota-evading reset/restart.
+
+The review's successful nonempty migration, full DB922 (room560/candidate362),
+client24/519, web/iOS/Android/four-poster exports and npm ci evidence above remain
+applicable: their inputs did not change afterward. Only F04's case-level time
+budget changed before the focused/final browser runs; lint/typecheck passed after
+that correction. The final driver returned0, shutdown passed, owned Supabase/
+browser containers0, application/API/DB ports closed, migration lock absent and
+owned export directories removed. Safe finalized browser receipts remain ignored.
+
+Review findings: BLOCKING0, MAJOR0, MINOR3, all corrected; unresolved0. Review
+changes are limited to app/room/[code].tsx, its route tests, the G03/G04 suite,
+F04's suite and this quickstart. No SQL/RPC/generated-type/C1 implementation or
+dependency change was made during review. Protected baseline40 files remain
+byte-identical; product decisions and approved architecture are unchanged.
+T001–T050 remain checked and T051–T067 unchecked. No commit, push, branch or
+Phase3 implementation was performed. This final receipt supersedes the pending
+review checkpoint while preserving its failure and quota evidence.

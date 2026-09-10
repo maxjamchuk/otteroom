@@ -8,7 +8,7 @@ import type { AcceptedRoomState } from '../../src/rooms/state';
 const mockRpc = jest.fn(), mockBootstrap = jest.fn(), mockFrom = jest.fn(), mockChannel = jest.fn();
 jest.mock('../../src/lib/supabase', () => ({ getSupabase: () => ({ rpc: mockRpc, from: mockFrom, channel: mockChannel }) }));
 jest.mock('../../src/auth/anonymous-session', () => ({ bootstrapAnonymousSession: () => mockBootstrap() }));
-const ready: AcceptedRoomState = { kind: 'accepted', id: '11111111-1111-4111-8111-111111111111', code: 'ABCDEF0123', role: 'host', state: 'ready', title: 'Ready', count: 2 };
+const ready: AcceptedRoomState = { kind: 'accepted', id: '11111111-1111-4111-8111-111111111111', code: 'ABCDEF0123', isCreator: true, isVoter: true, state: 'ready', title: 'Ready', voterCount: 2, requiredVoterCount: 2 };
 const row = { outcome: 'available', candidate_id: 'fixture-cardboard-comet', title: 'The Cardboard Comet', release_year: 2020, poster_key: 'cardboard-comet' };
 const success = { data: [row], error: null };
 const failureMessage = 'Unable to load this movie. Please try again.';
@@ -44,7 +44,7 @@ afterEach(() => {
   jest.restoreAllMocks();
 });
 
-it.each([null, { ...ready, state: 'waiting', title: 'Waiting', count: 1 } as AcceptedRoomState])('renders nothing for an inactive room %#', async room => {
+it.each([null, { ...ready, state: 'waiting', title: 'Waiting', voterCount: 1, requiredVoterCount: 2 } as AcceptedRoomState])('renders nothing for an inactive room %#', async room => {
   await mount(room);
   expect(screen.toJSON()).toBeNull();
   expect(mockRpc).not.toHaveBeenCalled(); expect(mockBootstrap).not.toHaveBeenCalled();
@@ -187,4 +187,17 @@ it('retains a successfully displayed candidate if its current poster subsequentl
   expectMetadata(); expect(screen.getByText(failureMessage)).toBeVisible();
   expect(screen.getByRole('button', { name: 'Retry candidate' })).toBeVisible();
   expect(mockRpc).toHaveBeenCalledTimes(1);
+});
+
+it.each([[true,true],[true,false],[false,true]] as const)('same local poster/retry for generalized creator=%s voter=%s',async(isCreator,isVoter)=>{
+  const room=Object.freeze({...ready,isCreator,isVoter,voterCount:3,requiredVoterCount:3});
+  await mount(room);expectMetadata();
+  const source=screen.getByTestId('candidate-poster').props.source;
+  fireEvent(screen.getByTestId('candidate-poster'),'error');
+  fireEvent.press(screen.getByRole('button',{name:'Retry candidate'}));
+  expect(screen.getByTestId('candidate-poster').props.source).toBe(source);
+  fireEvent(screen.getByTestId('candidate-poster'),'load');
+  expectMetadata();expect(current.status).toBe('available');
+  expect(mockRpc.mock.calls).toEqual([['ensure_room_candidate',{p_room_id:room.id}]]);
+  expect(room.voterCount).toBe(3);expect(room.isVoter).toBe(isVoter);
 });

@@ -9,8 +9,8 @@ const mockEnsure = jest.fn(), mockChannel = jest.fn(), mockFrom = jest.fn(), moc
 jest.mock('../../src/candidates/service', () => ({ ensureRoomCandidate: (id: string) => mockEnsure(id) }));
 jest.mock('../../src/lib/supabase', () => ({ getSupabase: () => ({ channel: mockChannel, from: mockFrom }) }));
 jest.mock('../../src/auth/anonymous-session', () => ({ bootstrapAnonymousSession: () => mockBootstrap() }));
-const waiting: AcceptedRoomState = { kind: 'accepted', id: '11111111-1111-4111-8111-111111111111', code: 'ABCDEF0123', role: 'host', state: 'waiting', title: 'Waiting', count: 1 };
-const ready: AcceptedRoomState = { ...waiting, state: 'ready', title: 'Ready', count: 2 };
+const waiting: AcceptedRoomState = { kind: 'accepted', id: '11111111-1111-4111-8111-111111111111', code: 'ABCDEF0123', isCreator: true, isVoter: true, state: 'waiting', title: 'Waiting', voterCount: 1, requiredVoterCount: 2 };
+const ready: AcceptedRoomState = { ...waiting, state: 'ready', title: 'Ready', voterCount: 2, requiredVoterCount: 2 };
 const available = { outcome: 'available', candidate_id: 'fixture-cardboard-comet', title: 'The Cardboard Comet', release_year: 2020, poster_key: 'cardboard-comet' } as const;
 const candidate = { candidate_id: available.candidate_id, title: available.title, release_year: available.release_year, poster_key: available.poster_key };
 function deferred<T>() {
@@ -35,9 +35,9 @@ it.each([null, waiting])('keeps absent/Waiting room inactive with zero candidate
   await act(async () => { h.result.current.retry(); });
   expect(mockEnsure).not.toHaveBeenCalled();
 });
-it.each(['host', 'guest'] as const)('automatically acquires for a Ready %s and waits for image onLoad', async role => {
+it.each([[true,true],[true,false],[false,true]] as const)('automatically acquires for Ready creator=%s voter=%s and waits for image onLoad', async (isCreator,isVoter) => {
   const pending = deferred<CandidateResult>(); mockEnsure.mockReturnValue(pending.promise);
-  const h = await mount({ ...ready, role });
+  const h = await mount({ ...ready, isCreator, isVoter });
   expect(mockEnsure.mock.calls).toEqual([[ready.id]]); expect(h.result.current.status).toBe('loading');
   expect(h.result.current.candidate).toBeNull();
   await act(async () => { pending.resolve(available); });
@@ -213,4 +213,17 @@ it('ignores callbacks from the prior room after the new room has loaded', async 
   await act(async () => { old.onLoad(); old.onError(); old.retry(); });
   expect(h.result.current).toBe(current); expect(current.status).toBe('available');
   expect(mockEnsure).toHaveBeenCalledTimes(2);
+});
+
+it('three-voter room stays inactive at every Waiting count and preserves candidate on Ready refetch',async()=>{
+  const zero={...waiting,isVoter:false,voterCount:0,requiredVoterCount:3};
+  const h=await mount(zero);
+  for(const voterCount of [1,2]) await act(async()=>{h.rerender({room:{...zero,voterCount}});});
+  expect(mockEnsure).not.toHaveBeenCalled();
+  const full={...zero,state:'ready' as const,title:'Ready',voterCount:3};
+  await act(async()=>{h.rerender({room:full});});
+  await act(async()=>{h.result.current.onLoad();});const anchor=h.result.current;
+  await act(async()=>{h.rerender({room:{...full}});});
+  expect(h.result.current.candidate).toBe(anchor.candidate);expect(h.result.current.imageKey).toBe(anchor.imageKey);
+  expect(mockEnsure.mock.calls).toEqual([[full.id]]);
 });

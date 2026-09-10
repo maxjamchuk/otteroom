@@ -124,13 +124,15 @@ end;
 $helper$;
 
 
-create function pg_temp.candidate_race(cancel_probe boolean default false)
+create function pg_temp.candidate_race(cancel_probe boolean default false, creator_votes boolean default true)
 returns setof text language plpgsql as $trial$
 declare
   ns text := 'candidate_' || encode(extensions.gen_random_bytes(8),'hex');
   own text := ns || '_owner'; a text := ns || '_a'; b text := ns || '_b';
   conninfo text := 'dbname=postgres user=postgres connect_timeout=3';
   h uuid := extensions.gen_random_uuid(); g uuid := extensions.gen_random_uuid();
+  extra_a uuid := extensions.gen_random_uuid(); extra_b uuid := extensions.gen_random_uuid();
+  members_before jsonb;
   rid uuid := extensions.gen_random_uuid(); request uuid := extensions.gen_random_uuid();
   code text := upper(encode(extensions.gen_random_bytes(5),'hex'));
   apid integer; bpid integer; opid integer; winner_pid integer; loser_pid integer;
@@ -147,12 +149,17 @@ begin
     perform extensions.dblink_connect(own,conninfo);
     perform extensions.dblink_exec(own,'set statement_timeout=''10s''; set lock_timeout=''5s''');
     opid := pg_temp.remote_json(own,'select to_jsonb(pg_backend_pid())')::integer;
-    -- One committed setup transaction; exactly two UUID-only identities.
+    -- Three voter slots; both creator modes use coherent committed member rows.
     perform extensions.dblink_exec(own,format(
-      'begin; insert into auth.users(id) values (%L),(%L);
-       insert into public.rooms(id,code,creation_request_id,host_user_id,guest_user_id,created_at,updated_at)
-       values (%L,%L,%L,%L,%L,''2020-01-01 UTC'',''2020-01-02 UTC''); commit',
-      h,g,rid,code,request,h,g));
+      'begin; insert into auth.users(id) values (%1$L),(%2$L),(%3$L),(%4$L);
+       insert into public.rooms(id,code,creation_request_id,creator_user_id,required_voter_count,voter_count,created_at,updated_at)
+       values (%5$L,%6$L,%7$L,%1$L,3,3,''2020-01-01 UTC'',''2020-01-02 UTC'');
+       insert into public.room_members(room_id,user_id,is_voter) values
+         (%5$L,%1$L,%8$L),(%5$L,%2$L,true),(%5$L,%3$L,true);
+       insert into public.room_members(room_id,user_id,is_voter)
+         select %5$L,%4$L,true where not %8$L::boolean; commit',
+      h,g,extra_a,extra_b,rid,code,request,creator_votes));
+    members_before:=pg_temp.remote_json(own,format('select jsonb_agg(to_jsonb(m) order by id) from public.room_members m where room_id=%L',rid));
     stamp_query := format(
       'select jsonb_build_object(''row'',to_jsonb(r),''xmin'',r.xmin::text) from public.rooms r where id=%L',rid);
     count_query := 'select to_jsonb(coalesce((select n_tup_upd from pg_stat_xact_user_tables where relid=''public.rooms''::regclass),0))';
@@ -174,7 +181,7 @@ begin
     apid := pg_temp.remote_json(a,'select to_jsonb(pg_backend_pid())')::integer;
     bpid := pg_temp.remote_json(b,'select to_jsonb(pg_backend_pid())')::integer;
     perform pg_temp.require(apid<>bpid and apid<>opid and bpid<>opid,'independent participant and owner backend PIDs');
-    evidence := array_append(evidence,'independent host/guest/owner backend PIDs and committed Ready/NULL fixture');
+    evidence := array_append(evidence,'independent creator/voter/owner backend PIDs and committed Ready/NULL fixture');
 
     -- First acquisition, then overlapping repeat access to the same assignment.
     for round in 1..2 loop
@@ -185,7 +192,7 @@ begin
       -- Compare before/after within this same open transaction, before COMMIT.
       baseline_a:=pg_temp.remote_json(a,count_query)::integer;
       baseline_b:=pg_temp.remote_json(b,count_query)::integer;
-      evidence := array_append(evidence,label || ': both authenticated roles, actual host/guest auth.uid(), READ COMMITTED');
+      evidence := array_append(evidence,label || ': both authenticated roles, actual creator/voter auth.uid(), READ COMMITTED');
 
       perform extensions.dblink_exec(own,'begin');
       perform pg_temp.remote_json(own,format('select to_jsonb(id) from public.rooms where id=%L for update',rid));
@@ -260,14 +267,18 @@ begin
       end if;
       evidence := array_append(evidence,label || ': identical five-field available results and persisted minimum-sort FK');
       evidence := array_append(evidence,label || ': winner snapshot taken before second commit; final whole row/xmin identical');
-      evidence := array_append(evidence,label || ': host/guest, Ready state, room identity and created_at preserved');
+      evidence := array_append(evidence,label || ': creator/voter, Ready state, room identity and created_at preserved');
       perform pg_temp.require(pg_temp.remote_json(own,
         'select jsonb_agg(to_jsonb(c) order by sort_order) from public.movie_candidates c')=catalog_before,
         'all four catalog rows remain identical');
       perform pg_temp.require(pg_temp.remote_json(own,format(
-        'select to_jsonb(count(*)) from public.rooms where host_user_id in (%L,%L)',h,g))::integer=1,
+        'select to_jsonb(count(*)) from public.rooms where creator_user_id in (%L,%L)',h,g))::integer=1,
         'exactly one trial room/assignment');
       evidence := array_append(evidence,label || ': exactly one persisted trial room; all four catalog rows unchanged');
+      perform pg_temp.require(pg_temp.remote_json(own,format('select jsonb_agg(to_jsonb(m) order by id) from public.room_members m where room_id=%L',rid))=members_before,
+        'all generalized members and immutable voting flags unchanged');
+      perform pg_temp.require(pg_temp.remote_json(own,format('select to_jsonb(r.voter_count=(select count(*) from public.room_members m where m.room_id=r.id and m.is_voter)) from public.rooms r where id=%L',rid))::boolean,
+        'room summary equals three voter rows after each candidate commit');
       initial:=final_row;
     end loop;
   exception when query_canceled or others then
@@ -301,9 +312,9 @@ begin
     if own=any(coalesce(extensions.dblink_get_connections(),array[]::text[])) then
       perform extensions.dblink_exec(own,'rollback');
       perform extensions.dblink_exec(own,format(
-        'begin; delete from public.rooms where id=%L; delete from auth.users where id in (%L,%L); commit',rid,h,g));
+        'begin; delete from public.rooms where id=%L; delete from auth.users where id in (%L,%L,%L,%L); commit',rid,h,g,extra_a,extra_b));
       perform pg_temp.require(pg_temp.remote_json(own,format('select to_jsonb(count(*)) from public.rooms where id=%L',rid))::integer=0,'trial room removed');
-      perform pg_temp.require(pg_temp.remote_json(own,format('select to_jsonb(count(*)) from auth.users where id in (%L,%L)',h,g))::integer=0,'both Auth fixtures removed');
+      perform pg_temp.require(pg_temp.remote_json(own,format('select to_jsonb(count(*)) from auth.users where id in (%L,%L,%L,%L)',h,g,extra_a,extra_b))::integer=0,'both Auth fixtures removed');
       perform extensions.dblink_disconnect(own);
       cleanup_ok:=true;
     end if;
@@ -334,6 +345,7 @@ $trial$;
 
 set local statement_timeout='120s';
 select * from pg_temp.candidate_race();
+select * from pg_temp.candidate_race(false,false);
 select * from pg_temp.candidate_race(true);
 set local statement_timeout='15s';
 
@@ -343,13 +355,17 @@ insert into auth.users(id) values
   ('03000000-0000-4000-a000-000000000002'),
   ('03000000-0000-4000-a000-000000000003'),
   ('03000000-0000-4000-a000-000000000004');
-insert into public.rooms(id,code,creation_request_id,host_user_id,guest_user_id,created_at,updated_at)
+insert into public.rooms(id,code,creation_request_id,creator_user_id,voter_count,created_at,updated_at)
 select ('03100000-0000-4000-a000-' || lpad(n::text,12,'0'))::uuid,
   'C30000000' || n,('03200000-0000-4000-a000-' || lpad(n::text,12,'0'))::uuid,
   (case when n<=3 then '03000000-0000-4000-a000-000000000001' else '03000000-0000-4000-a000-000000000003' end)::uuid,
-  (case when n in (1,4) then null when n<=3 then '03000000-0000-4000-a000-000000000002' else '03000000-0000-4000-a000-000000000004' end)::uuid,
-  '2020-01-01 UTC','2020-01-02 UTC'
+  case when n in (1,4) then 1 else 2 end,'2020-01-01 UTC','2020-01-02 UTC'
 from generate_series(1,6) n;
+insert into public.room_members(room_id,user_id,is_voter) select id,creator_user_id,true from public.rooms;
+insert into public.room_members(room_id,user_id,is_voter)
+  select id,(case when code<='C300000003' then '03000000-0000-4000-a000-000000000002'
+    else '03000000-0000-4000-a000-000000000004' end)::uuid,true from public.rooms where voter_count=2;
+create temporary table candidate_members_before on commit drop as select * from public.room_members;
 
 create temporary table candidate_rpc_before on commit drop as
   select to_jsonb(r) as rowdata,r.xmin::text as version,r.ctid::text as location from public.rooms r;
@@ -451,7 +467,7 @@ insert into pg_temp.candidate_rpc_before
 set local role authenticated;
 set local request.jwt.claims='{"sub":"03000000-0000-4000-a000-000000000001","role":"authenticated"}';
 select is(current_user::text,'authenticated','business outcomes use real authenticated role');
-select is(auth.uid(),'03000000-0000-4000-a000-000000000001'::uuid,'business outcomes use own host subject only');
+select is(auth.uid(),'03000000-0000-4000-a000-000000000001'::uuid,'business outcomes use own creator subject only');
 select results_eq($$select * from public.ensure_room_candidate('03100000-0000-4000-a000-000000000001')$$,
   $$values ('not_ready'::text,null::text,null::text,null::smallint,null::text)$$,
   'own Waiting returns exactly one row with four NULL candidate fields');
@@ -503,7 +519,7 @@ set local role authenticated;
 select results_eq($$select * from public.ensure_room_candidate('03100000-0000-4000-a000-000000000002')$$,
   $$select * from pg_temp.candidate_first_result$$,'host sequential repeat returns the identical full candidate');
 set local request.jwt.claims='{"sub":"03000000-0000-4000-a000-000000000002","role":"authenticated"}';
-select is(auth.uid(),'03000000-0000-4000-a000-000000000002'::uuid,'repeat uses actual guest subject');
+select is(auth.uid(),'03000000-0000-4000-a000-000000000002'::uuid,'repeat uses actual voter subject');
 select results_eq($$select * from public.ensure_room_candidate('03100000-0000-4000-a000-000000000002')$$,
   $$select * from pg_temp.candidate_first_result$$,'guest receives the same established candidate');
 select results_eq($$select * from public.ensure_room_candidate('03100000-0000-4000-a000-000000000003')$$,
@@ -513,7 +529,7 @@ reset role;
 select results_eq(
   $$select to_jsonb(r),r.xmin::text,r.ctid::text from public.rooms r order by r.id$$,
   $$select rowdata,version,location from pg_temp.candidate_rpc_before order by rowdata->>'id'$$,
-  'host/guest repeats and existing non-lowest read preserve all rows, timestamps, xmin and ctid: no second UPDATE');
+  'creator/voter repeats and existing non-lowest read preserve all rows, timestamps, xmin and ctid: no second UPDATE');
 
 -- The FK normally makes this branch unreachable. Only this rollback-scoped
 -- owner fault removes it, proving broken integrity cannot rotate an assignment.
@@ -550,6 +566,13 @@ begin
 end;
 $trial$;
 select * from pg_temp.missing_candidate_trial();
+
+select ok((select jsonb_agg(to_jsonb(m) order by id) from public.room_members m)=
+  (select jsonb_agg(to_jsonb(m) order by id) from pg_temp.candidate_members_before m),
+  'all candidate successes/faults/retries preserve exact member rows and flags');
+select ok(not exists(select 1 from public.rooms r where r.voter_count<>
+  (select count(*) from public.room_members m where m.room_id=r.id and m.is_voter)),
+  'all candidate operations preserve summary/member equality');
 
 -- End the new fixture block before the unchanged Phase 2 schema/ACL trials.
 delete from public.rooms where id in (
@@ -618,12 +641,12 @@ select results_eq(
   $$select conname::text collate "default", pg_get_constraintdef(oid) collate "default",
       convalidated, condeferrable, condeferred
     from pg_constraint where conrelid=to_regclass('public.rooms')
-      and conname in ('rooms_movie_candidate_id_fkey', 'rooms_candidate_requires_guest_check')
+      and conname in ('rooms_movie_candidate_id_fkey', 'rooms_candidate_requires_ready_check')
     order by conname$$,
   $$values
-    ('rooms_candidate_requires_guest_check'::text, 'CHECK (((movie_candidate_id IS NULL) OR (guest_user_id IS NOT NULL)))'::text, true, false, false),
+    ('rooms_candidate_requires_ready_check'::text, 'CHECK (((movie_candidate_id IS NULL) OR (voter_count = required_voter_count)))'::text, true, false, false),
     ('rooms_movie_candidate_id_fkey', 'FOREIGN KEY (movie_candidate_id) REFERENCES movie_candidates(id) ON DELETE RESTRICT', true, false, false)$$,
-  'exact named room FK and guest-occupancy check are immediately validated'
+  'exact named room FK and voter-readiness check are immediately validated'
 );
 select results_eq(
   $$select confrelid::regclass::text collate "default", confupdtype::text collate "default",
@@ -706,18 +729,23 @@ insert into auth.users(id) values
   ('02000000-0000-4000-a000-000000000003'),
   ('02000000-0000-4000-a000-000000000004');
 select lives_ok(
-  $$insert into public.rooms(code,creation_request_id,host_user_id) values
-    ('C200000001','02100000-0000-4000-a000-000000000001','02000000-0000-4000-a000-000000000001'),
-    ('C200000004','02100000-0000-4000-a000-000000000004','02000000-0000-4000-a000-000000000003')$$,
+  $$insert into public.rooms(code,creation_request_id,creator_user_id,voter_count) values
+    ('C200000001','02100000-0000-4000-a000-000000000001','02000000-0000-4000-a000-000000000001',1),
+    ('C200000004','02100000-0000-4000-a000-000000000004','02000000-0000-4000-a000-000000000003',1)$$,
   'Waiting + omitted NULL assignment is valid for existing-style room inserts'
 );
 select lives_ok(
-  $$insert into public.rooms(code,creation_request_id,host_user_id,guest_user_id) values
-    ('C200000002','02100000-0000-4000-a000-000000000002','02000000-0000-4000-a000-000000000001','02000000-0000-4000-a000-000000000002'),
-    ('C200000003','02100000-0000-4000-a000-000000000003','02000000-0000-4000-a000-000000000001','02000000-0000-4000-a000-000000000002'),
-    ('C200000005','02100000-0000-4000-a000-000000000005','02000000-0000-4000-a000-000000000003','02000000-0000-4000-a000-000000000004')$$,
+  $$insert into public.rooms(code,creation_request_id,creator_user_id,voter_count) values
+    ('C200000002','02100000-0000-4000-a000-000000000002','02000000-0000-4000-a000-000000000001',2),
+    ('C200000003','02100000-0000-4000-a000-000000000003','02000000-0000-4000-a000-000000000001',2),
+    ('C200000005','02100000-0000-4000-a000-000000000005','02000000-0000-4000-a000-000000000003',2)$$,
   'Ready + omitted NULL assignment is valid for existing-style room inserts'
 );
+insert into public.room_members(room_id,user_id,is_voter)
+  select id,creator_user_id,true from public.rooms where code like 'C20000000%';
+insert into public.room_members(room_id,user_id,is_voter)
+  select id,(case when code='C200000005' then '02000000-0000-4000-a000-000000000004'
+    else '02000000-0000-4000-a000-000000000002' end)::uuid,true from public.rooms where voter_count=2;
 select results_eq(
   $$select code,state,movie_candidate_id from public.rooms where code like 'C20000000%' order by code$$,
   $$values ('C200000001'::text,'waiting'::text,null::text),('C200000002','ready',null),
@@ -726,13 +754,13 @@ select results_eq(
 );
 select throws_ok(
   $$update public.rooms set movie_candidate_id='fixture-cardboard-comet' where code='C200000001'$$,
-  '23514','new row for relation "rooms" violates check constraint "rooms_candidate_requires_guest_check"',
+  '23514','new row for relation "rooms" violates check constraint "rooms_candidate_requires_ready_check"',
   'Waiting + assigned is rejected by the named invariant'
 );
 select throws_ok(
-  $$insert into public.rooms(code,creation_request_id,host_user_id,movie_candidate_id) values
+  $$insert into public.rooms(code,creation_request_id,creator_user_id,movie_candidate_id) values
     ('C200000006','02100000-0000-4000-a000-000000000006','02000000-0000-4000-a000-000000000001','fixture-cardboard-comet')$$,
-  '23514','new row for relation "rooms" violates check constraint "rooms_candidate_requires_guest_check"',
+  '23514','new row for relation "rooms" violates check constraint "rooms_candidate_requires_ready_check"',
   'an INSERT cannot bypass the Waiting assignment invariant'
 );
 select throws_ok(
@@ -761,9 +789,9 @@ select throws_ok(
   '23503',null,'ON UPDATE NO ACTION rejects changing a referenced catalog id'
 );
 select throws_ok(
-  $$update public.rooms set guest_user_id=null where code='C200000003'$$,
-  '23514','new row for relation "rooms" violates check constraint "rooms_candidate_requires_guest_check"',
-  'an assigned room cannot be made Waiting by removing its guest'
+  $$update public.rooms set voter_count=1 where code='C200000003'$$,
+  '23514','new row for relation "rooms" violates check constraint "rooms_candidate_requires_ready_check"',
+  'an assigned room cannot be made Waiting by decreasing its voter count'
 );
 select results_eq(
   $$select * from public.rooms where code like 'C20000000%' order by code$$,
@@ -822,8 +850,9 @@ select results_eq(
       and p.grantee in (0,'anon'::regrole::oid,'authenticated'::regrole::oid)
     order by a.attname,p.grantee,p.privilege_type$$,
   $$values ('code'::text,'authenticated'::text,'SELECT'::text,false),
-    ('id','authenticated','SELECT',false),('state','authenticated','SELECT',false)$$,
-  'only the existing authenticated id/code/state column projection is granted'
+    ('id','authenticated','SELECT',false),('required_voter_count','authenticated','SELECT',false),
+    ('state','authenticated','SELECT',false),('voter_count','authenticated','SELECT',false)$$,
+  'only the approved generalized five-field projection is granted'
 );
 select ok(not has_column_privilege(role_name,'public.rooms','movie_candidate_id',privilege_name),
   role_name || ' has no assignment-column ' || privilege_name)
@@ -841,8 +870,8 @@ select results_eq(
       btrim(regexp_replace(pg_get_expr(polqual,polrelid),'\s+',' ','g')) collate "default", polwithcheck is null
     from pg_policy where polrelid='public.rooms'::regclass order by polname$$,
   $$values ('rooms_select_member'::text,'r'::text,true,true,
-    '((( SELECT auth.uid() AS uid) = host_user_id) OR (( SELECT auth.uid() AS uid) = guest_user_id))'::text,true)$$,
-  'the existing member-only SELECT policy is unchanged'
+    'private.is_room_member(id)'::text,true)$$,
+  'member-only SELECT policy uses generalized authorization'
 );
 select results_eq(
   $$select schemaname::text collate "default",tablename::text collate "default"
@@ -868,7 +897,7 @@ from (values
   (7,$$update public.rooms set movie_candidate_id='fixture-cardboard-comet' where code='C200000002'$$,'direct first assignment denied'),
   (8,$$update public.rooms set movie_candidate_id='fixture-pebble-bay-lanterns' where code='C200000003'$$,'direct replacement denied'),
   (9,$$update public.rooms set movie_candidate_id=null where code='C200000003'$$,'direct assignment clearing denied'),
-  (10,$$insert into public.rooms(code,creation_request_id,host_user_id,guest_user_id,movie_candidate_id) values ('C200000007','02100000-0000-4000-a000-000000000007','02000000-0000-4000-a000-000000000001','02000000-0000-4000-a000-000000000002','fixture-cardboard-comet')$$,'direct room INSERT with assignment denied')
+  (10,$$insert into public.rooms(code,creation_request_id,creator_user_id,voter_count,movie_candidate_id) values ('C200000007','02100000-0000-4000-a000-000000000007','02000000-0000-4000-a000-000000000001',2,'fixture-cardboard-comet')$$,'direct room INSERT with assignment denied')
 ) attacks(n,query,description) order by n;
 reset role;
 select results_eq(
@@ -885,14 +914,14 @@ select results_eq(
 -- Actual host access: privileged fixture setup has ended.
 set local role authenticated;
 set local request.jwt.claims = '{"sub":"02000000-0000-4000-a000-000000000001","role":"authenticated"}';
-select is(current_user::text,'authenticated','host: actual client role');
-select is(auth.uid(),'02000000-0000-4000-a000-000000000001'::uuid,'host: explicit subject claim');
+select is(current_user::text,'authenticated','creator: actual client role');
+select is(auth.uid(),'02000000-0000-4000-a000-000000000001'::uuid,'creator: explicit subject claim');
 select results_eq(
   $$select code,state from public.rooms where code like 'C20000000%' order by code$$,
   $$values ('C200000001'::text,'waiting'::text),('C200000002','ready'),('C200000003','ready')$$,
-  'host: existing room projection exposes only own memberships, including assigned rooms'
+  'creator: existing room projection exposes only own memberships, including assigned rooms'
 );
-select throws_ok(query,'42501',null,'host: ' || description)
+select throws_ok(query,'42501',null,'creator: ' || description)
 from (values
   (1,$$select * from public.movie_candidates$$,'catalog SELECT denied'),
   (2,$$insert into public.movie_candidates(id,title,release_year,poster_key,sort_order) values ('client-insert','Client title',2024,'client-poster',50)$$,'catalog INSERT denied'),
@@ -903,31 +932,31 @@ from (values
   (7,$$update public.rooms set movie_candidate_id='fixture-cardboard-comet' where code='C200000002'$$,'direct first assignment denied'),
   (8,$$update public.rooms set movie_candidate_id='fixture-pebble-bay-lanterns' where code='C200000003'$$,'direct replacement denied'),
   (9,$$update public.rooms set movie_candidate_id=null where code='C200000003'$$,'direct assignment clearing denied'),
-  (10,$$insert into public.rooms(code,creation_request_id,host_user_id,guest_user_id,movie_candidate_id) values ('C200000007','02100000-0000-4000-a000-000000000007','02000000-0000-4000-a000-000000000001','02000000-0000-4000-a000-000000000002','fixture-cardboard-comet')$$,'direct room INSERT with assignment denied')
+  (10,$$insert into public.rooms(code,creation_request_id,creator_user_id,voter_count,movie_candidate_id) values ('C200000007','02100000-0000-4000-a000-000000000007','02000000-0000-4000-a000-000000000001',2,'fixture-cardboard-comet')$$,'direct room INSERT with assignment denied')
 ) attacks(n,query,description) order by n;
 reset role;
 select results_eq(
   $$select * from public.movie_candidates order by sort_order$$,
   $$select * from pg_temp.candidate_catalog_before order by sort_order$$,
-  'host: denied access preserves every catalog field and row'
+  'creator: denied access preserves every catalog field and row'
 );
 select results_eq(
   $$select * from public.rooms where code like 'C20000000%' order by code$$,
   $$select * from pg_temp.candidate_rooms_before order by code$$,
-  'host: denied access preserves complete room rows and assignments'
+  'creator: denied access preserves complete room rows and assignments'
 );
 
 -- Actual guest access: privileged fixture setup has ended.
 set local role authenticated;
 set local request.jwt.claims = '{"sub":"02000000-0000-4000-a000-000000000002","role":"authenticated"}';
-select is(current_user::text,'authenticated','guest: actual client role');
-select is(auth.uid(),'02000000-0000-4000-a000-000000000002'::uuid,'guest: explicit subject claim');
+select is(current_user::text,'authenticated','voter: actual client role');
+select is(auth.uid(),'02000000-0000-4000-a000-000000000002'::uuid,'voter: explicit subject claim');
 select results_eq(
   $$select code,state from public.rooms where code like 'C20000000%' order by code$$,
   $$values ('C200000002'::text,'ready'::text),('C200000003','ready')$$,
-  'guest: existing room projection exposes only own memberships, including assigned rooms'
+  'voter: existing room projection exposes only own memberships, including assigned rooms'
 );
-select throws_ok(query,'42501',null,'guest: ' || description)
+select throws_ok(query,'42501',null,'voter: ' || description)
 from (values
   (1,$$select * from public.movie_candidates$$,'catalog SELECT denied'),
   (2,$$insert into public.movie_candidates(id,title,release_year,poster_key,sort_order) values ('client-insert','Client title',2024,'client-poster',50)$$,'catalog INSERT denied'),
@@ -938,18 +967,18 @@ from (values
   (7,$$update public.rooms set movie_candidate_id='fixture-cardboard-comet' where code='C200000002'$$,'direct first assignment denied'),
   (8,$$update public.rooms set movie_candidate_id='fixture-pebble-bay-lanterns' where code='C200000003'$$,'direct replacement denied'),
   (9,$$update public.rooms set movie_candidate_id=null where code='C200000003'$$,'direct assignment clearing denied'),
-  (10,$$insert into public.rooms(code,creation_request_id,host_user_id,guest_user_id,movie_candidate_id) values ('C200000007','02100000-0000-4000-a000-000000000007','02000000-0000-4000-a000-000000000001','02000000-0000-4000-a000-000000000002','fixture-cardboard-comet')$$,'direct room INSERT with assignment denied')
+  (10,$$insert into public.rooms(code,creation_request_id,creator_user_id,voter_count,movie_candidate_id) values ('C200000007','02100000-0000-4000-a000-000000000007','02000000-0000-4000-a000-000000000001',2,'fixture-cardboard-comet')$$,'direct room INSERT with assignment denied')
 ) attacks(n,query,description) order by n;
 reset role;
 select results_eq(
   $$select * from public.movie_candidates order by sort_order$$,
   $$select * from pg_temp.candidate_catalog_before order by sort_order$$,
-  'guest: denied access preserves every catalog field and row'
+  'voter: denied access preserves every catalog field and row'
 );
 select results_eq(
   $$select * from public.rooms where code like 'C20000000%' order by code$$,
   $$select * from pg_temp.candidate_rooms_before order by code$$,
-  'guest: denied access preserves complete room rows and assignments'
+  'voter: denied access preserves complete room rows and assignments'
 );
 
 -- Actual unrelated participant access: privileged fixture setup has ended.
@@ -973,7 +1002,7 @@ from (values
   (7,$$update public.rooms set movie_candidate_id='fixture-cardboard-comet' where code='C200000002'$$,'direct first assignment denied'),
   (8,$$update public.rooms set movie_candidate_id='fixture-pebble-bay-lanterns' where code='C200000003'$$,'direct replacement denied'),
   (9,$$update public.rooms set movie_candidate_id=null where code='C200000003'$$,'direct assignment clearing denied'),
-  (10,$$insert into public.rooms(code,creation_request_id,host_user_id,guest_user_id,movie_candidate_id) values ('C200000007','02100000-0000-4000-a000-000000000007','02000000-0000-4000-a000-000000000001','02000000-0000-4000-a000-000000000002','fixture-cardboard-comet')$$,'direct room INSERT with assignment denied')
+  (10,$$insert into public.rooms(code,creation_request_id,creator_user_id,voter_count,movie_candidate_id) values ('C200000007','02100000-0000-4000-a000-000000000007','02000000-0000-4000-a000-000000000001',2,'fixture-cardboard-comet')$$,'direct room INSERT with assignment denied')
 ) attacks(n,query,description) order by n;
 reset role;
 select results_eq(
@@ -986,6 +1015,67 @@ select results_eq(
   $$select * from pg_temp.candidate_rooms_before order by code$$,
   'unrelated participant: denied access preserves complete room rows and assignments'
 );
+
+-- Feature 003: every authorized combination in both three-voter creator modes.
+create function pg_temp.member_rpc(subject uuid, command text) returns jsonb language plpgsql as $f$
+declare result jsonb;
+begin
+  set local role authenticated;
+  perform set_config('request.jwt.claim.sub','',true);
+  perform set_config('request.jwt.claims',jsonb_build_object('sub',subject,'role','authenticated')::text,true);
+  if current_user<>'authenticated' or auth.uid() is distinct from subject then raise exception 'incorrect test caller'; end if;
+  execute 'select jsonb_agg(to_jsonb(r)) from ('||command||') r' into result;
+  reset role;
+  return result;
+exception when others then reset role; raise;
+end;
+$f$;
+create function pg_temp.generalized_candidates() returns setof text language plpgsql as $trial$
+declare
+  voting boolean; creator uuid; voters uuid[]; users uuid[]; rid uuid; code text; who uuid;
+  initial integer; n integer; result jsonb; expected jsonb; members_before jsonb; room_before jsonb; room_after jsonb;
+begin
+  foreach voting in array array[true,false] loop
+    creator:=extensions.gen_random_uuid(); voters:=array[extensions.gen_random_uuid(),extensions.gen_random_uuid(),extensions.gen_random_uuid()];
+    insert into auth.users(id) values(creator);
+    insert into auth.users(id) select unnest(voters);
+    result:=pg_temp.member_rpc(creator,format('select * from public.create_room(%L,3,%L)',extensions.gen_random_uuid(),voting));
+    rid:=(result->0->>'room_id')::uuid; code:=result->0->>'room_code'; initial:=case when voting then 1 else 0 end;
+    users:=array[creator];
+    for n in initial..3 loop
+      select jsonb_agg(to_jsonb(m) order by id) into members_before from public.room_members m where room_id=rid;
+      select jsonb_build_object('row',to_jsonb(r),'xmin',xmin::text,'ctid',ctid::text) into room_before from public.rooms r where id=rid;
+      foreach who in array users loop
+        result:=pg_temp.member_rpc(who,format('select * from public.ensure_room_candidate(%L)',rid));
+        expected:=case when n<3 then '[{"outcome":"not_ready","candidate_id":null,"title":null,"release_year":null,"poster_key":null}]'::jsonb
+          else '[{"outcome":"available","candidate_id":"fixture-cardboard-comet","title":"The Cardboard Comet","release_year":2020,"poster_key":"cardboard-comet"}]'::jsonb end;
+        return next ok(result=expected,format('generalized candidate: creator-voter=%s count=%s, every authorized caller exact result',voting,n));
+        select jsonb_build_object('row',to_jsonb(r),'xmin',xmin::text,'ctid',ctid::text) into room_after from public.rooms r where id=rid;
+        return next ok((n=3 or room_after=room_before)
+          and ((room_after->'row')-array['movie_candidate_id','updated_at'])=((room_before->'row')-array['movie_candidate_id','updated_at'])
+          and members_before=(select jsonb_agg(to_jsonb(m) order by id) from public.room_members m where room_id=rid)
+          and (select voter_count=(select count(*) from public.room_members m where m.room_id=r.id and m.is_voter) from public.rooms r where id=rid),
+          'generalized candidate: Waiting no UPDATE; all calls preserve membership/config/count invariant');
+        if n=3 then
+          result:=pg_temp.member_rpc(who,format('select * from public.ensure_room_candidate(%L)',rid));
+          return next ok(result=expected and room_after=(select jsonb_build_object('row',to_jsonb(r),'xmin',xmin::text,'ctid',ctid::text) from public.rooms r where id=rid),
+            'generalized Ready repeat preserves candidate and physical row version');
+        end if;
+      end loop;
+      if n<3 then
+        who:=voters[n-initial+1];
+        perform pg_temp.member_rpc(who,format('select * from public.join_room(%L)',code));
+        users:=array_append(users,who);
+      end if;
+    end loop;
+    return next ok((select is_voter=voting from public.room_members where room_id=rid and user_id=creator)
+      and (select voter_count=3 and state='ready' from public.rooms where id=rid),'creator choice survives assembly and all candidate calls');
+    delete from public.rooms where id=rid;
+    delete from auth.users where id=creator or id=any(voters);
+  end loop;
+end;
+$trial$;
+select * from pg_temp.generalized_candidates();
 
 select * from finish();
 rollback;

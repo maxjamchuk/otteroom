@@ -13,7 +13,7 @@ export default defineConfig({
   workers: 1,
   fullyParallel: false,
   timeout: 30000,
-  globalTimeout: 180000,
+  globalTimeout: 600000,
   expect: { timeout: 10000 },
   use: {
     browserName: 'chromium',
@@ -25,7 +25,7 @@ export default defineConfig({
     serviceWorkers: 'block',
   },
   projects: [
-    { name: 'acceptance', testMatch: ['room-session.spec.ts', 'first-movie-candidate.spec.ts'], fullyParallel: true },
+    { name: 'acceptance', testMatch: ['room-session.spec.ts', 'first-movie-candidate.spec.ts', 'generalized-room-membership-qr.spec.ts'], fullyParallel: true },
     {
       name: 'credential-safety',
       testMatch: 'diagnostics/credential-safety.spec.ts',

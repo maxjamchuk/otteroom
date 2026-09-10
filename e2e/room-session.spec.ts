@@ -17,8 +17,8 @@ const createEndpoint = '**/rest/v1/rpc/create_room';
 async function assertHostRecovery(response: import('@playwright/test').Response, room: RoomProjection) {
   const rows = await response.json();
   expect(response.ok() && Array.isArray(rows) && rows.length === 1 &&
-    rows[0].outcome === 'already_member' && rows[0].participant_role === 'host' &&
-    rows[0].room_state === 'waiting' && rows[0].participant_count === 1 &&
+    rows[0].outcome === 'already_member' && rows[0].is_creator === true && rows[0].is_voter === true &&
+    rows[0].room_state === 'waiting' && rows[0].voter_count === 1 && rows[0].required_voter_count === 2 &&
     rows[0].room_id === room.id && rows[0].room_code === room.code).toBe(true);
 }
 
@@ -180,20 +180,20 @@ test('@auth persisted participant and isolated identity without room actions', a
 const joinEndpoint = '**/rest/v1/rpc/join_room';
 const malformedMessage = 'Malformed invitation. Enter a valid room code.';
 const missingMessage = 'Room not found. Check your invitation.';
-const fullMessage = 'Room Full. This room already has two participants.';
+const fullMessage = 'Room Full. The voting group is already assembled.';
 
 async function assertRejected(response: Response, outcome: 'not_found' | 'full') {
   const rows: unknown = await response.json();
   expect(response.ok() && Array.isArray(rows) && rows.length === 1 && rows[0] &&
-    Object.keys(rows[0]).sort().join(',') === 'outcome,participant_count,participant_role,room_code,room_id,room_state' &&
-    rows[0].outcome === outcome && ['room_id', 'room_code', 'room_state', 'participant_role', 'participant_count'].every(key => rows[0][key] === null)).toBe(true);
+    Object.keys(rows[0]).sort().join(',') === 'is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
+    rows[0].outcome === outcome && ['room_id', 'room_code', 'room_state', 'is_creator', 'is_voter', 'voter_count', 'required_voter_count'].every(key => rows[0][key] === null)).toBe(true);
 }
 
 async function assertNoRoomDetails(page: Page, diagnostics: SafeDiagnostics, message: string) {
   await expect(page.getByText(message, { exact: true })).toBeVisible();
   await expect(page.getByLabel('Room code', { exact: true })).toHaveCount(0);
   await expect(page.getByLabel('Invitation link', { exact: true })).toHaveCount(0);
-  await expect(page.getByText(/^[12] of 2$/)).toHaveCount(0);
+  await expect(page.getByText(/^[12] of 2 voters$/)).toHaveCount(0);
   await diagnostics.assertAuthAccounting(1, 1);
   await diagnostics.assertNoCredentialTextUi();
 }
@@ -202,7 +202,7 @@ async function repeatReady(page: Page, diagnostics: SafeDiagnostics, api: Public
   const participant = await ownParticipant(page);
   const joined = page.waitForResponse(response => response.url().endsWith('/rpc/join_room'));
   expect((await page.reload())?.status() === 200).toBe(true);
-  await assertAccepted(await joined, room, 'already_member', role, 'ready');
+  await assertAccepted(await joined, room, 'already_member', { isCreator: role === 'host', isVoter: true }, 'ready');
   await assertReady(page, diagnostics, room);
   const rooms = await ownRooms(page, api);
   expect(rooms.length === 1 && rooms[0].id === room.id && rooms[0].code === room.code && rooms[0].state === 'ready' &&
@@ -245,7 +245,7 @@ test('@us2-join E04 manual whitespace lowercase converges on shared join', async
       await guest.page.getByLabel('Room code input', { exact: true }).fill(`  ${room.code.toLowerCase()}  `);
       await guest.page.getByRole('button', { name: 'Join Room', exact: true }).click();
       expect((await request).postDataJSON()?.p_room_code === room.code).toBe(true);
-      await assertAccepted(await joined, room, 'joined', 'guest', 'ready');
+      await assertAccepted(await joined, room, 'joined', { isCreator: false, isVoter: true }, 'ready');
       await assertReady(guest.page, guest, room);
       expect((await ownParticipant(guest.page)) !== participant).toBe(true);
       expect((await ownRooms(page, api))[0].state === 'ready').toBe(true);
@@ -325,7 +325,7 @@ test('@us2-join E04 pre-acceptance failure preserves Waiting then same-code retr
         const request = guest.page.waitForRequest(request => request.url().endsWith('/rpc/join_room'));
         await guest.page.getByRole('button', { name: 'Retry room', exact: true }).click();
         expect((await request).postDataJSON()?.p_room_code === room.code).toBe(true);
-        await assertAccepted(await retry, room, 'joined', 'guest', 'ready');
+        await assertAccepted(await retry, room, 'joined', { isCreator: false, isVoter: true }, 'ready');
         await assertReady(guest.page, guest, room);
         await assertReady(page, diagnostics, room);
         expect((await ownParticipant(guest.page)) === participant && (await ownRooms(page, api))[0].state === 'ready').toBe(true);
@@ -343,7 +343,7 @@ test('@us3 E05 full-room repeated rejection preserves admitted seats @capacity-s
       await assertReady(page, diagnostics, room);
       const guestId = await ownParticipant(guest.page);
       const before = roomSnapshot(room);
-      expect(before.host_user_id === participant && before.guest_user_id === guestId && before.state === 'ready').toBe(true);
+      expect(before.creator_user_id === participant && before.members.some(m => m.user_id === guestId && m.is_voter) && before.state === 'ready').toBe(true);
       const rejected = third.page.waitForResponse(response => response.url().endsWith('/rpc/join_room'));
       await third.page.goto(invitation);
       await assertRejected(await rejected, 'full');
@@ -376,7 +376,7 @@ test('@us3 E06 overlapping final-seat requests accept exactly one guest', async 
       const { api, room, participant } = await createWaiting(page, diagnostics);
       await transport.wait('readiness', 1); await transport.wait('reads', 1);
       const before = roomSnapshot(room);
-      expect(before.host_user_id === participant && before.guest_user_id === null && before.state === 'waiting').toBe(true);
+      expect(before.creator_user_id === participant && before.voter_count === 1 && before.members.length === 1 && before.state === 'waiting').toBe(true);
       await withParticipants(browser, { baseURL, viewport }, info, 2, async guests => {
         for (const guest of guests) await startHost(guest.page, guest);
         const identities = await Promise.all(guests.map(guest => ownParticipant(guest.page)));
@@ -427,11 +427,11 @@ test('@us3 E06 overlapping final-seat requests accept exactly one guest', async 
           expect(!interceptionFailed && forwarded.size === 2 && outcomes.filter(outcome => outcome === 'joined').length === 1 && outcomes.filter(outcome => outcome === 'full').length === 1).toBe(true);
           const winnerIndex = outcomes.indexOf('joined'), loserIndex = outcomes.indexOf('full');
           const winner = guests[winnerIndex], loser = guests[loserIndex];
-          await assertAccepted(responses[winnerIndex], room, 'joined', 'guest', 'ready');
+          await assertAccepted(responses[winnerIndex], room, 'joined', { isCreator: false, isVoter: true }, 'ready');
           await assertRejected(responses[loserIndex], 'full');
           await transport.wait('updates', 1); await transport.wait('reads', 2);
           const joinedRow = roomSnapshot(room);
-          expect(transport.stats.updates === 1 && joinedRow.guest_user_id === identities[winnerIndex] &&
+          expect(transport.stats.updates === 1 && joinedRow.members.some(m => m.user_id === identities[winnerIndex] && m.is_voter) &&
             joinedRow.state === 'ready' && joinedRow.movie_candidate_id === null).toBe(true);
           clearTimeout(candidateDeadline); releaseCandidates();
           await assertReady(winner.page, winner, room);
@@ -440,7 +440,7 @@ test('@us3 E06 overlapping final-seat requests accept exactly one guest', async 
           await transport.wait('updates', 1); await transport.wait('reads', 2);
           await assertReady(page, diagnostics, room);
           const committed = roomSnapshot(room);
-          expect(committed.host_user_id === before.host_user_id && committed.guest_user_id === identities[winnerIndex] &&
+          expect(committed.creator_user_id === before.creator_user_id && committed.members.some(m => m.user_id === identities[winnerIndex] && m.is_voter) &&
             committed.state === 'ready' && committed.creation_request_id === before.creation_request_id && committed.created_at === before.created_at).toBe(true);
           await monitors[loserIndex].close();
           const rejected = loser.page.waitForResponse(response => response.url().endsWith('/rpc/join_room'));
@@ -480,7 +480,7 @@ async function monitorRendered(page: Page, forbiddenCode?: string) {
     let violation = false;
     const inspect = () => {
       if (code) violation ||= document.querySelector('[aria-label="Room code"]')?.textContent === code;
-      else violation ||= [...document.querySelectorAll('[role="heading"]')].some(node => node.textContent === 'Ready') || /2 of 2/.test(document.body.innerText);
+      else violation ||= [...document.querySelectorAll('[role="heading"]')].some(node => node.textContent === 'Ready') || /2 of 2 voters/.test(document.body.innerText);
     };
     const observer = new MutationObserver(inspect);
     observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true }); inspect();
@@ -510,8 +510,9 @@ test('@us3 E12 known-ID and code RLS reads preserve two own rooms @capacity-smok
       // This request uses the unrelated browser's own ordinary Auth and RLS.
       expect((await ownRooms(unrelated.page, other.api, owner.room.id)).length === 0).toBe(true);
       expect((await ownRooms(unrelated.page, other.api, undefined, owner.room.code)).length === 0).toBe(true);
-      await assertDenied(unrelated.page, other.api, { method: 'GET', query: `select=host_user_id,guest_user_id&id=eq.${owner.room.id}` });
-      await assertDenied(page, owner.api, { method: 'GET', query: `select=host_user_id,guest_user_id&id=eq.${owner.room.id}` });
+      await assertDenied(unrelated.page, other.api, { method: 'GET', query: `select=creator_user_id,creation_request_id&id=eq.${owner.room.id}` });
+      await assertDenied(page, owner.api, { method: 'GET', query: `select=creator_user_id,creation_request_id&id=eq.${owner.room.id}` });
+      for (const caller of [diagnostics, unrelated]) await assertDenied(caller.page, owner.api, { table:'room_members',method:'GET',query:`select=*&room_id=eq.${owner.room.id}` });
       expect(JSON.stringify(await ownRooms(page, owner.api)) === JSON.stringify(beforeOwner)).toBe(true);
       expect(JSON.stringify(await ownRooms(unrelated.page, other.api)) === JSON.stringify(beforeOther)).toBe(true);
       await assertWaiting(page, diagnostics, owner.room);
@@ -526,12 +527,12 @@ test('@us3 E12 known-ID and code RLS reads preserve two own rooms @capacity-smok
 
 // Every attack uses the originating browser's ordinary session. Raw responses
 // stay in that context; only HTTP status and the exact permission category return.
-async function assertDenied(page: Page, api: PublicApi, operation: { method: 'GET' | 'POST' | 'PATCH' | 'DELETE'; query?: string; body?: Record<string, unknown> }, expected: 'permission' | 'generated-state' = 'permission') {
+async function assertDenied(page: Page, api: PublicApi, operation: { method: 'GET' | 'POST' | 'PATCH' | 'DELETE'; query?: string; body?: Record<string, unknown>; table?: 'room_members' }, expected: 'permission' | 'generated-state' = 'permission') {
   const result = await page.evaluate(async ({ api, operation }) => {
     const key = Object.keys(localStorage).find(name => /^sb-.+-auth-token$/.test(name));
     const session = key ? JSON.parse(localStorage.getItem(key) ?? 'null') : null;
     if (!session?.access_token) throw new Error('E2E_SAFE_FAILURE');
-    const response = await fetch(`${api.origin}/rest/v1/rooms${operation.query ? '?' + operation.query : ''}`, {
+    const response = await fetch(`${api.origin}/rest/v1/${operation.table ?? 'rooms'}${operation.query ? '?' + operation.query : ''}`, {
       method: operation.method,
       headers: { apikey: api.publicKey, Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
       ...(operation.body ? { body: JSON.stringify(operation.body) } : {}),
@@ -607,8 +608,8 @@ test('@us3 E12 live unrelated subscription receives no authorized target UPDATE'
           expect(!failed && live && payloads === 0).toBe(true);
           expect((await ownRooms(unrelated.page, other.api, target.room.id)).length === 0).toBe(true);
           expect(JSON.stringify(roomSnapshot(other.room)) === JSON.stringify(before)).toBe(true);
-          const admitted = roomSnapshot(target.room);
-          expect(admitted.host_user_id === target.participant && admitted.guest_user_id === await ownParticipant(guest.page) && admitted.state === 'ready').toBe(true);
+          const admitted = roomSnapshot(target.room), admittedId = await ownParticipant(guest.page);
+          expect(admitted.creator_user_id === target.participant && admitted.members.some(m => m.user_id === admittedId && m.is_voter) && admitted.state === 'ready').toBe(true);
           await assertWaiting(unrelated.page, unrelated, other.room);
           expect(await unrelated.page.evaluate(values => values.every(value => !document.body.innerText.includes(value)), [target.room.id, target.room.code, target.participant])).toBe(true);
           transport.assertHealthy();
@@ -661,7 +662,7 @@ test('@us3 E12 delayed old-room response cannot contaminate legitimate new navig
         const joined = guest.page.waitForResponse(response => response.url().endsWith('/rpc/join_room'));
         await guest.page.getByLabel('Room code input', { exact: true }).fill(next.room.code);
         await guest.page.getByRole('button', { name: 'Join Room', exact: true }).click();
-        await assertAccepted(await joined, next.room, 'joined', 'guest', 'ready');
+        await assertAccepted(await joined, next.room, 'joined', { isCreator: false, isVoter: true }, 'ready');
         await assertReady(guest.page, guest, next.room);
         await transport.wait('leaveAcks', 1); transport.assertRetired(old.room.id);
         await transport.wait('readiness', 2); await transport.wait('reads', 1);
@@ -674,7 +675,7 @@ test('@us3 E12 delayed old-room response cannot contaminate legitimate new navig
         await guest.page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
         expect(!failed && !await monitor.violated()).toBe(true);
         await assertReady(guest.page, guest, next.room);
-        expect((await ownParticipant(guest.page)) === participant && beforeOld.guest_user_id === participant && beforeNew.guest_user_id === participant).toBe(true);
+        expect((await ownParticipant(guest.page)) === participant && beforeOld.members.some(m => m.user_id === participant && m.is_voter) && beforeNew.members.some(m => m.user_id === participant && m.is_voter)).toBe(true);
         expect(JSON.stringify(roomSnapshot(old.room)) === JSON.stringify(beforeOld) && JSON.stringify(roomSnapshot(next.room)) === JSON.stringify(beforeNew)).toBe(true);
         await assertReady(page, diagnostics, old.room); await assertReady(otherHost.page, otherHost, next.room);
         transport.assertHealthy();
@@ -700,25 +701,29 @@ test('@us3 E12 direct writes and participant spoofing cannot change Ready member
       for (const caller of [diagnostics, guest, outsider]) {
         const code = randomUUID().replaceAll('-', '').slice(0, 10).toUpperCase();
         await assertDenied(caller.page, api, { method: 'POST', body: {
-          code, creation_request_id: randomUUID(), host_user_id: participant, guest_user_id: outsiderId,
+          code, creation_request_id: randomUUID(), creator_user_id: participant, required_voter_count: 2, voter_count: 2,
         } });
         for (const body of [
-          { host_user_id: outsiderId }, { guest_user_id: outsiderId },
-          { guest_user_id: null },
+          { creator_user_id: outsiderId }, { required_voter_count: 3 },
+          { voter_count: 3 }, { voter_count: 0 },
         ]) await assertDenied(caller.page, api, { method: 'PATCH', query: `id=eq.${room.id}`, body });
         for (const state of ['waiting', 'ready']) await assertDenied(caller.page, api, { method: 'PATCH', query: `id=eq.${room.id}`, body: { state } }, 'generated-state');
         await assertDenied(caller.page, api, { method: 'DELETE', query: `id=eq.${room.id}` });
+        await assertDenied(caller.page, api, {table:'room_members',method:'POST',body:{room_id:room.id,user_id:outsiderId,is_voter:true}});
+        for(const body of [{user_id:outsiderId},{is_voter:false}])
+          await assertDenied(caller.page, api, {table:'room_members',method:'PATCH',query:`room_id=eq.${room.id}`,body});
+        await assertDenied(caller.page, api, {table:'room_members',method:'DELETE',query:`room_id=eq.${room.id}`});
         expect(JSON.stringify(roomSnapshot(room)) === JSON.stringify(before)).toBe(true);
         await caller.assertAuthAccounting(1, 1);
       }
-      expect((await ownRooms(outsider.page, api)).length === 0 && before.host_user_id === participant && before.guest_user_id === guestId && before.state === 'ready').toBe(true);
+      expect((await ownRooms(outsider.page, api)).length === 0 && before.creator_user_id === participant && before.members.some(m => m.user_id === guestId && m.is_voter) && before.state === 'ready').toBe(true);
       await repeatJoin(page, api, room, 'host'); await repeatJoin(guest.page, api, room, 'guest');
       for (const caller of [diagnostics, guest]) {
         await assertReady(caller.page, caller, room);
         expect((await ownRooms(caller.page, api)).length === 1).toBe(true);
       }
       expect(JSON.stringify(roomSnapshot(room)) === JSON.stringify(before)).toBe(true);
-      await diagnostics.record({ scenario: 'E12', outcome: 'host guest outsider ordinary credentials; 15 HTTP403 permission denials; 6 HTTP400 generated-state denials; UPDATE ACL separately proven in pgTAP; complete row unchanged' });
+      await diagnostics.record({ scenario: 'E12', outcome: 'host guest outsider ordinary credentials; 30 HTTP403 permission denials; 6 HTTP400 generated-state denials; UPDATE ACL separately proven in pgTAP; complete row unchanged' });
     });
   });
 });
@@ -756,7 +761,7 @@ test('@us4 E07 host Waiting reload retains identity and seat', async ({ page, di
     const { api, room, participant } = await createWaiting(page, diagnostics);
     const recovered = page.waitForResponse(response => response.url().endsWith('/rpc/join_room'));
     expect((await page.reload())?.status() === 200).toBe(true);
-    await assertAccepted(await recovered, room, 'already_member', 'host', 'waiting');
+    await assertAccepted(await recovered, room, 'already_member', { isCreator: true, isVoter: true }, 'waiting');
     await assertWaiting(page, diagnostics, room);
     const rows = await ownRooms(page, api);
     expect(rows.length === 1 && rows[0].id === room.id && rows[0].code === room.code && rows[0].state === 'waiting' && (await ownParticipant(page)) === participant).toBe(true);
@@ -796,8 +801,8 @@ async function repeatJoin(page: Page, api: PublicApi, room: RoomProjection, role
     return (await Promise.all(responses.map(async response => {
       const rows = await response.json();
       return response.ok && Array.isArray(rows) && rows.length === 1 &&
-        Object.keys(rows[0]).sort().join(',') === 'outcome,participant_count,participant_role,room_code,room_id,room_state' &&
-        rows[0].outcome === 'already_member' && rows[0].participant_role === role && rows[0].participant_count === 2 &&
+        Object.keys(rows[0]).sort().join(',') === 'is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
+        rows[0].outcome === 'already_member' && rows[0].is_creator === (role === 'host') && rows[0].is_voter === true && rows[0].voter_count === 2 && rows[0].required_voter_count === 2 &&
         rows[0].room_id === room.id && rows[0].room_code === room.code && rows[0].room_state === 'ready';
     }))).every(Boolean);
   }, { api, room, role, overlap });

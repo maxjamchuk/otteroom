@@ -342,7 +342,7 @@ it('explicitly discovers F01–F08 with fixed safe labels while rejecting future
   const { safeResult } = await import('./e2e/support/safe-reporter.ts');
   const { safeDiagnosticLocation } = await import('./e2e/support/sanitize-diagnostics.ts');
   assert.deepEqual(config.projects.find(p => p.name === 'acceptance').testMatch,
-    ['room-session.spec.ts', 'first-movie-candidate.spec.ts']);
+    ['room-session.spec.ts', 'first-movie-candidate.spec.ts', 'generalized-room-membership-qr.spec.ts']);
   const f01 = safeResult({ title: '@candidate F01 shared first candidate', repeatEachIndex: 0 },
     { status: 'passed', error: { message: 'E2E_SAFE_FAILURE at e2e/first-movie-candidate.spec.ts:12:3' } });
   assert.equal(f01.scenario, 'candidate'); assert.equal(f01.browserCase, 'F01');
@@ -360,7 +360,7 @@ it('explicitly discovers F01–F08 with fixed safe labels while rejecting future
   assert.equal(safeDiagnosticLocation('e2e/arbitrary.ts:12:3'), undefined);
   for (const file of ['scripts/run-e2e.mjs', 'e2e/support/safe-diagnostics.ts']) {
     const source = fs.readFileSync(file, 'utf8');
-    assert.equal(/acceptance[ -]N=65/.test(source), true);
+    assert.equal(/acceptance[ -]N=72/.test(source), true);
     assert.equal(source.includes('N=47'), false);
   }
   const runner = fs.readFileSync('scripts/run-e2e.mjs', 'utf8');
@@ -373,8 +373,8 @@ const candidatePrelude = prelude + `
   import { candidateHarness } from './e2e/support/candidate-harness.ts';
   process.env.EXPO_PUBLIC_SUPABASE_URL = 'http://127.0.0.1:55321';
   const api = { origin: process.env.EXPO_PUBLIC_SUPABASE_URL, publicKey: 'synthetic-public' };
-  const room = { id: '11111111-1111-4111-8111-111111111111', code: 'ABCDEF0123', state: 'ready' };
-  const ids = ['synthetic-host', 'synthetic-guest'];
+  const room = { id: '11111111-1111-4111-8111-111111111111', code: 'ABCDEF0123', state: 'ready', voter_count: 2, required_voter_count: 2 };
+  const ids = [randomUUID(), randomUUID()];
   const pages = ids.map(() => Object.assign(new EventEmitter(), {
     routes: [], addInitScript: async () => {},
     async route(match, handler) { this.routes.push({ match, handler }); },
@@ -476,12 +476,13 @@ it('pre-forward faults never fetch or continue; a fresh barrier gates both expli
 it.each(['valid', 'missing-commit', 'upstream-failure'])('commit-loss ordering fails closed for %s', trial => verify(candidatePrelude + `
   import cp from 'node:child_process';
   import { syncBuiltinESMExports } from 'node:module';
-  const trial = '${trial}', events = [], row = { ...room, host_user_id: ids[0], guest_user_id: ids[1],
+  const trial = '${trial}', events = [], row = { ...room, creator_user_id: ids[0],
     movie_candidate_id: null, creation_request_id: randomUUID(), created_at: 'fixed', updated_at: 'fixed' };
-  const before = { row, xmin: '10' };
+  const members = ids.map(user_id => ({ id: randomUUID(), room_id: room.id, user_id, is_voter: true, joined_at: 'fixed' }));
+  const before = { row, members, xmin: '10' };
   cp.spawnSync = () => {
     events.push('snapshot');
-    return { status: 0, stdout: JSON.stringify([{ row: { ...row, movie_candidate_id: trial === 'missing-commit' ? null : 'fixture-cardboard-comet' }, xmin: '11' }]) };
+    return { status: 0, stdout: JSON.stringify([{ row: { ...row, movie_candidate_id: trial === 'missing-commit' ? null : 'fixture-cardboard-comet' }, members, xmin: '11' }]) };
   }; syncBuiltinESMExports();
   h.configureInitial(['commit-loss', 'commit-loss']);
   const send = index => {
@@ -550,4 +551,154 @@ it('candidate traffic guards ignore unrelated runtime resources while rejecting 
     pages[0].emit('request', { ...request(0), url: () => 'https://provider.invalid/posters/cardboard-comet.png', resourceType: () => 'image' });
     assert.equal(h.stats[0].external, 2); await assert.rejects(h.assertHealthy());
   } finally { await h.close(); }
+`));
+
+
+it('registers only the two reviewed membership titles and their exact safe source location', () => verify(prelude + `
+  const { safeResult } = await import('./e2e/support/safe-reporter.ts');
+  const { safeDiagnosticLocation } = await import('./e2e/support/sanitize-diagnostics.ts');
+  for (const title of ['@membership G03 three voting members assemble through link and code',
+    '@membership G04 non-voting creator observes three voters and stable candidate recovery']) {
+    const result = safeResult({ title }, { status: 'passed' });
+    assert.equal(result.scenario, 'membership'); assert.equal(result.browserCase, title.split(' ')[1]);
+  }
+  for (const title of ['@membership G01 future', '@membership G02 future', '@membership G05 future',
+    '@membership G06 future', '@membership G07 future', '@membership G08 future', '@membership G09 future',
+    '@membership G03 arbitrary', '@membership G04 ' + sentinel()]) {
+    const result = safeResult({ title }, { status: 'passed' });
+    assert.equal(result.scenario, 'unclassified'); assert.equal(result.browserCase, 'none');
+  }
+  assert.equal(safeDiagnosticLocation('e2e/generalized-room-membership-qr.spec.ts:15:9'), 'e2e/generalized-room-membership-qr.spec.ts:15:9');
+  assert.equal(safeDiagnosticLocation('e2e/support/qr-harness.ts:15:9'), undefined);
+  const runner = fs.readFileSync('scripts/run-e2e.mjs', 'utf8');
+  for (const label of ["'membership'", "'G03'", "'G04'"]) assert.equal(runner.includes(label), true);
+`));
+
+it.each([2, 3, 4])('candidate barriers require all %i independent callers and cleanup every held route', count => verify(prelude + `
+  import { EventEmitter } from 'node:events';
+  import { candidateHarness } from './e2e/support/candidate-harness.ts';
+  process.env.EXPO_PUBLIC_SUPABASE_URL = 'http://127.0.0.1:55321';
+  const pages = Array.from({ length: ${count} }, () => Object.assign(new EventEmitter(), {
+    routes: [], addInitScript: async () => {},
+    async route(match, handler) { this.routes.push({ match, handler }); },
+    async unroute(match, handler) { this.routes = this.routes.filter(r => r.match !== match || r.handler !== handler); },
+  }));
+  const participants = pages.map(page => ({ page }));
+  for (const invalid of [participants.slice(0, 1), [...participants, ...participants, ...participants], [participants[0], participants[0]]])
+    await assert.rejects(candidateHarness(invalid, 'http://127.0.0.1:8081'));
+  const h = await candidateHarness(participants, 'http://127.0.0.1:8081');
+  let forwarded = 0, aborted = 0;
+  const ids = pages.map(() => randomUUID()), room = { id: randomUUID(), code: 'ABCDEF0123', state: 'ready', voter_count: 3, required_voter_count: 3 };
+  const api = { origin: process.env.EXPO_PUBLIC_SUPABASE_URL, publicKey: 'synthetic-public' };
+  try {
+    assert.throws(() => h.bind(room, ids.slice(1), api)); h.bind(room, ids, api);
+    assert.throws(() => h.limitAutomatic([1])); assert.throws(() => h.configureInitial([null]));
+    const calls = pages.map((page, index) => {
+      const req = { url: () => api.origin + '/rest/v1/rpc/ensure_room_candidate', method: () => 'POST',
+        postDataJSON: () => ({ p_room_id: room.id }), resourceType: () => 'fetch',
+        allHeaders: async () => ({ authorization: 'Bearer synthetic.' + Buffer.from(JSON.stringify({ sub: ids[index] })).toString('base64url') + '.synthetic' }) };
+      return page.routes[0].handler({ request: () => req, continue: async () => { forwarded++; }, abort: async () => { aborted++; } });
+    });
+    await h.held(); assert.equal(forwarded, 0); h.release(); await Promise.all(calls);
+    assert.equal(forwarded, ${count}); assert.equal(aborted, 0);
+    h.arm(pages.map(() => 'continue')); assert.throws(() => h.release());
+  } finally { await h.close(); }
+  assert.equal(pages.every(page => page.routes.length === 0 && page.eventNames().length === 0), true);
+`));
+
+
+it('Realtime dispatch accounting distinguishes a late prior response from a new refetch', () => verify(prelude + `
+  import { EventEmitter } from 'node:events';
+  import { realtimeBarrier } from './e2e/support/room-harness.ts';
+  let connect, serverMessage, finish;
+  const page = Object.assign(new EventEmitter(), { context: () => ({ routeWebSocket: async (_, callback) => { connect = callback; } }) });
+  const server = { onClose: () => {}, onMessage: callback => { serverMessage = callback; }, send: () => {}, close: async () => {} };
+  const browser = { connectToServer: () => server, onClose: () => {}, onMessage: () => {}, send: () => {}, close: async () => {} };
+  const transport = await realtimeBarrier(page), id = randomUUID();
+  try {
+    await connect(browser);
+    serverMessage(JSON.stringify([null, null, 'realtime:room:' + id, 'system',
+      { extension: 'postgres_changes', status: 'ok', message: 'Subscribed to PostgreSQL' }]));
+    const url = 'http://127.0.0.1:55321/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count&id=eq.' + id;
+    const request = { url: () => url }; page.emit('request', request);
+    const delayed = new Promise(resolve => { finish = resolve; });
+    page.emit('response', { request: () => request, url: () => url, ok: () => true, body: async () => Buffer.from(JSON.stringify(await delayed)) });
+    assert.equal(transport.stats.readRequests, 1); assert.equal(transport.stats.reads, 0);
+    const before = { ...transport.stats };
+    finish([{ id, code: 'ABCDEF0123', state: 'waiting', voter_count: 2, required_voter_count: 3 }]);
+    await transport.wait('reads', 1);
+    assert.equal(transport.stats.readRequests, before.readRequests);
+    assert.notEqual(transport.stats.reads, before.reads);
+    page.emit('request', { url: () => url }); await transport.wait('readRequests', 2);
+    assert.equal(transport.stats.reads, 1); transport.assertHealthy();
+  } finally { await transport.close(); }
+  assert.equal(page.eventNames().length, 0);
+`));
+
+const realtimePrelude = prelude + `
+  import { EventEmitter } from 'node:events';
+  import { realtimeBarrier } from './e2e/support/room-harness.ts';
+  let connect, serverMessage, browserMessage, browserClosed, sent = 0;
+  const page = Object.assign(new EventEmitter(), { context: () => ({ routeWebSocket: async (_, callback) => { connect = callback; } }) });
+  const server = { onClose: () => {}, onMessage: callback => { serverMessage = callback; }, send: () => {}, close: async () => {} };
+  const browser = { connectToServer: () => server, onClose: callback => { browserClosed = callback; },
+    onMessage: callback => { browserMessage = callback; }, send: () => { sent++; }, close: async () => {} };
+  const transport = await realtimeBarrier(page), id = randomUUID();
+  await connect(browser);
+  const system = JSON.stringify([null, null, 'realtime:room:' + id, 'system',
+    { extension: 'postgres_changes', status: 'ok', message: 'Subscribed to PostgreSQL' }]);
+  serverMessage(system);
+  const url = 'http://127.0.0.1:55321/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count&id=eq.' + id;
+  const request = { url: () => url };
+  const turn = () => new Promise(resolve => setImmediate(resolve));
+`;
+
+it('Realtime observation retains the first safe failure through waits and health checks', () => verify(realtimePrelude + `
+  const secret = sentinel();
+  try {
+    page.emit('request', request);
+    page.emit('response', { request: () => request, url: () => url, body: async () => { throw Error(secret); } });
+    await turn();
+    const first = await transport.wait('reads', 1).catch(error => error);
+    assert.equal(first.message, 'E2E_SAFE_FAILURE');
+    assert.equal(first.stack.includes(secret), false);
+    assert.equal(first.stack.includes('at done '), false);
+    serverMessage('malformed later frame');
+    const later = await transport.wait('readiness', 2).catch(error => error);
+    assert.equal(later, first);
+    assert.throws(() => transport.assertHealthy(), error => error === first);
+  } finally { await transport.close(); }
+`));
+
+it('ignores messages belonging to a retired socket but still rejects malformed active frames', () => verify(realtimePrelude + `
+  try {
+    await browserClosed(); const before = sent;
+    serverMessage(system);
+    assert.equal(transport.stats.readiness, 1); assert.equal(sent, before);
+    browserMessage('malformed retired message');
+    transport.assertHealthy();
+    assert.equal(transport.stats.readiness, 1);
+    await connect(browser); serverMessage('malformed live message');
+    assert.throws(() => transport.assertHealthy());
+  } finally { await transport.close(); }
+`));
+
+it.each(['retired-body', 'active-body', 'retired-malformed', 'retired-valid'])('room response observer contains only unavailable retired-document bodies: %s', trial => verify(realtimePrelude + `
+  let finish, reject;
+  const bytes = new Promise((resolve, fail) => { finish = resolve; reject = fail; });
+  try {
+    page.emit('request', request);
+    page.emit('response', { request: () => request, url: () => url, ok: () => true,
+      body: () => bytes, json: async () => JSON.parse((await bytes).toString()) });
+    if ('${trial}'.startsWith('retired')) page.emit('framenavigated', { parentFrame: () => null });
+    if ('${trial}'.endsWith('body')) reject(Error('synthetic unavailable body'));
+    else finish(Buffer.from('${trial}' === 'retired-malformed' ? '{}' : JSON.stringify([
+      { id, code: 'ABCDEF0123', state: 'waiting', voter_count: 2, required_voter_count: 3 }])));
+    await turn();
+    if (['active-body', 'retired-malformed'].includes('${trial}')) assert.throws(() => transport.assertHealthy());
+    else {
+      transport.assertHealthy();
+      assert.equal(transport.stats.reads, '${trial}' === 'retired-valid' ? 1 : 0);
+    }
+  } finally { await transport.close(); }
 `));
