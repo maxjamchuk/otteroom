@@ -6,6 +6,7 @@ import RoomRouteScreen from '../../app/room/[code]';
 
 const mockJoin = jest.fn(), mockRefetch = jest.fn(), mockBootstrap = jest.fn(), mockRemove = jest.fn();
 const mockRecover = jest.fn(), mockSubmit = jest.fn(), mockEnsureCandidate = jest.fn();
+const mockResolve = jest.fn();
 jest.mock('../../src/rooms/service', () => ({
   joinRoom: (code: string) => mockJoin(code), refetchRoom: (id: string) => mockRefetch(id),
 }));
@@ -15,6 +16,7 @@ jest.mock('../../src/filters/service', () => ({
     mockSubmit(id, genres, from, to),
 }));
 jest.mock('../../src/candidates/service', () => ({ ensureRoomCandidate: (id: string) => mockEnsureCandidate(id) }));
+jest.mock('../../src/resolution/service', () => ({ resolveCommonFilters: (id: string) => mockResolve(id) }));
 jest.mock('../../src/auth/anonymous-session', () => ({ bootstrapAnonymousSession: () => mockBootstrap() }));
 
 type TestChannel = { on: jest.Mock; subscribe: jest.Mock; status: (value: string) => void;
@@ -34,7 +36,8 @@ jest.mock('../../src/lib/supabase', () => ({ getSupabase: () => ({ channel: mock
 
 const host = { outcome: 'already_member', room_id: '11111111-1111-4111-8111-111111111111',
   room_code: 'ABCDEF0123', room_state: 'waiting', is_creator: true, is_voter: true,
-  voter_count: 1, required_voter_count: 2, filter_completed_count: 0 } as const;
+  voter_count: 1, required_voter_count: 2, filter_completed_count: 0,
+  filter_resolution_status: 'pending' } as const;
 const absent = { outcome: 'not_submitted', genres: null, release_year_from: null, release_year_to: null,
   filter_completed_count: 0, required_voter_count: 2, allowed_release_year_max: 2026 } as const;
 const saved = { outcome: 'saved', genres: ['action'], release_year_from: 1990, release_year_to: 2020,
@@ -45,10 +48,12 @@ beforeEach(() => {
   mockJoin.mockReset().mockResolvedValue(host);
   mockBootstrap.mockReset().mockResolvedValue({ user: { id: 'retained' } });
   mockRefetch.mockReset().mockResolvedValue({ id: host.room_id, code: host.room_code, state: 'ready',
-    voter_count: 2, required_voter_count: 2, filter_completed_count: 0 });
+    voter_count: 2, required_voter_count: 2, filter_completed_count: 0,
+    filter_resolution_status: 'pending' });
   mockRecover.mockReset().mockResolvedValue(absent);
   mockSubmit.mockReset().mockResolvedValue(saved);
   mockEnsureCandidate.mockReset().mockResolvedValue({ outcome: 'available' });
+  mockResolve.mockReset().mockResolvedValue({ outcome: 'compatible', filter_resolution_status: 'compatible' });
   mockRemove.mockReset().mockImplementation(async (channel: TestChannel) => { channel.status('CLOSED'); return 'ok'; });
 });
 afterEach(() => jest.restoreAllMocks());
@@ -66,7 +71,7 @@ function ready(patch: Record<string, unknown> = {}) {
 
 function expectNoFutureSurface() {
   expect(screen.queryByTestId('candidate-card')).toBeNull();
-  expect(screen.queryByText(/loading movie|candidate|swipe|match|resolution|progression/i)).toBeNull();
+  expect(screen.queryByText(/loading movie|swipe|match|progression/i)).toBeNull();
   expect(mockEnsureCandidate).not.toHaveBeenCalled();
 }
 
@@ -80,6 +85,7 @@ it('preserves canonical join recovery, Waiting assembly, invitation link and QR 
   expect(screen.getByLabelText('Invitation link').props.children).toContain('/room/ABCDEF0123');
   expect(screen.UNSAFE_getByType(QRCode).props.value).toBe(screen.getByLabelText('Invitation link').props.children);
   expect(mockRecover).not.toHaveBeenCalled(); expect(mockSubmit).not.toHaveBeenCalled();
+  expect(mockResolve).not.toHaveBeenCalled();
   expectNoFutureSurface();
 });
 
@@ -107,6 +113,7 @@ it('Ready non-voting creator observes aggregate progress only and never requests
   expect(screen.getByText('Waiting for voters to finish their filters.')).toBeVisible();
   expect(screen.queryByRole('checkbox')).toBeNull();
   expect(mockRecover).not.toHaveBeenCalled(); expect(mockSubmit).not.toHaveBeenCalled();
+  expect(mockResolve).not.toHaveBeenCalled();
   expectNoFutureSurface();
 });
 
@@ -136,28 +143,135 @@ it('shows local validation without a submit and preserves invitation and members
   expect(screen.getByLabelText('Invitation link')).toBeVisible();
 });
 
-it('renders N/N immediately, with frozen own values and no automatic next-feature action', async () => {
+it('renders N/N resolving immediately, freezes own values and invokes one status-only action', async () => {
+  let resolve!: (value: { outcome: 'compatible'; filter_resolution_status: 'compatible' }) => void;
+  mockResolve.mockReturnValue(new Promise(done => { resolve = done; }));
   mockJoin.mockResolvedValue(ready({ filter_completed_count: 2 }));
   mockRecover.mockResolvedValue({ ...saved, outcome: 'locked', filter_completed_count: 2 });
   await mount();
   expect(screen.getByText('2 of 2 filters collected')).toBeVisible();
-  expect(screen.getByText('All filters collected. Feature 005 is next.')).toBeVisible();
+  expect(screen.getByText('Resolving common filters…')).toBeVisible();
   expect(screen.getByText('Your filters: Action; 1990–2020')).toBeVisible();
   expect(screen.queryByRole('button', { name: 'Save filters' })).toBeNull();
+  expect(mockResolve.mock.calls).toEqual([[host.room_id]]);
+  await act(async () => { resolve({ outcome: 'compatible', filter_resolution_status: 'compatible' }); });
+  expect(screen.getByText('Filters are compatible.')).toBeVisible();
+  expect(screen.getByText('Movie candidate sourcing is the next step in a future feature.')).toBeVisible();
   expectNoFutureSurface();
 });
 
-it('keeps N/N handoff visible while own recovery fails and retries detail separately', async () => {
+it('keeps compatible status visible while own recovery fails and retries detail separately', async () => {
   mockJoin.mockResolvedValue(ready({ filter_completed_count: 2 }));
   mockRecover.mockRejectedValueOnce(new Error('private SQL')).mockResolvedValueOnce({ ...saved,
     outcome: 'locked', filter_completed_count: 2 });
   await mount();
-  expect(screen.getByText('All filters collected. Feature 005 is next.')).toBeVisible();
+  expect(screen.getByText('Filters are compatible.')).toBeVisible();
   expect(screen.queryByText('private SQL')).toBeNull();
   fireEvent.press(screen.getByRole('button', { name: 'Retry filter recovery' }));
   await act(async () => {});
   expect(mockRecover).toHaveBeenCalledTimes(2);
   expect(screen.getByText('Your filters: Action; 1990–2020')).toBeVisible();
+});
+
+it('starts no resolution at partial X/N and a non-voting creator gets status only at N/N', async () => {
+  mockJoin.mockResolvedValue(ready({ is_voter: false, filter_completed_count: 1 }));
+  const view = await mount();
+  expect(mockResolve).not.toHaveBeenCalled();
+  expect(mockRecover).not.toHaveBeenCalled();
+  expect(screen.getByText('Waiting for voters to finish their filters.')).toBeVisible();
+  view.unmount();
+
+  mockJoin.mockResolvedValue(ready({ is_voter: false, filter_completed_count: 2 }));
+  await mount();
+  expect(mockResolve.mock.calls).toEqual([[host.room_id]]);
+  expect(mockRecover).not.toHaveBeenCalled();
+  expect(screen.getByText('Filters are compatible.')).toBeVisible();
+});
+
+it('recovers a stored compatible room without another resolver call or private detail', async () => {
+  mockJoin.mockResolvedValue(ready({ is_voter: false, filter_completed_count: 2,
+    filter_resolution_status: 'compatible' }));
+  await mount();
+  expect(screen.getByText('Filters are compatible.')).toBeVisible();
+  expect(mockResolve).not.toHaveBeenCalled();
+  expect(mockRecover).not.toHaveBeenCalled();
+  expect(JSON.stringify(screen.toJSON())).not.toMatch(/release year|genre|clause|roster|member id/i);
+});
+
+it.each(['host voter','non-voting creator'])('renders stored incompatible for %s with only new-room action',async role=>{
+  mockJoin.mockResolvedValue(ready({is_voter:role==='host voter',filter_completed_count:2,
+    filter_resolution_status:'incompatible'}));
+  mockRecover.mockResolvedValue({...saved,outcome:'locked',filter_completed_count:2});
+  await mount();
+  expect(screen.getByText('Filters are incompatible.')).toBeVisible();
+  expect(screen.getByRole('link',{name:'Create a new room'})).toHaveProp('href','/');
+  expect(screen.queryByRole('button',{name:'Save filters'})).toBeNull();
+  expect(mockResolve).not.toHaveBeenCalled();
+  expect(mockRecover).toHaveBeenCalledTimes(role==='host voter'?1:0);
+  expectNoFutureSurface();
+});
+
+it('keeps resolution failure pending with a separate Retry and no incompatible meaning',async()=>{
+  mockJoin.mockResolvedValue(ready({filter_completed_count:2}));
+  mockRecover.mockResolvedValue({...saved,outcome:'locked',filter_completed_count:2});
+  mockResolve.mockRejectedValue(new Error('private SQL status'));
+  await mount();
+  expect(screen.getByText('Unable to resolve common filters. Please try again.')).toBeVisible();
+  expect(screen.getByRole('button',{name:'Retry common-filter resolution'})).toBeVisible();
+  expect(screen.queryByText('Filters are incompatible.')).toBeNull();
+  expect(screen.queryByText('private SQL status')).toBeNull();
+});
+
+it('fails closed when the room channel observes conflicting terminal authorities',async()=>{
+  mockJoin.mockResolvedValue(ready({filter_completed_count:2,
+    filter_resolution_status:'compatible'}));
+  mockRecover.mockResolvedValue({...saved,outcome:'locked',filter_completed_count:2});
+  mockRefetch.mockResolvedValue({id:host.room_id,code:host.room_code,state:'ready',voter_count:2,
+    required_voter_count:2,filter_completed_count:2,filter_resolution_status:'incompatible'});
+  await mount();
+  expect(screen.getByText('Filters are compatible.')).toBeVisible();
+  await act(async()=>{channels[0].system({extension:'postgres_changes',status:'ok'});});
+  expect(screen.getByText('Common-filter status could not be verified.')).toBeVisible();
+  expect(screen.queryByText('Filters are compatible.')).toBeNull();
+  expect(screen.queryByText('Filters are incompatible.')).toBeNull();
+  expect(screen.queryByRole('link',{name:'Create a new room'})).toBeNull();
+});
+
+it('keeps room synchronization Retry separate from resolution Retry',async()=>{
+  mockJoin.mockResolvedValue(ready({filter_completed_count:2}));
+  mockRecover.mockResolvedValue({...saved,outcome:'locked',filter_completed_count:2});
+  mockResolve.mockRejectedValueOnce(new Error('private')).mockResolvedValueOnce({
+    outcome:'compatible',filter_resolution_status:'compatible'});
+  await mount();
+  expect(screen.getByRole('button',{name:'Retry common-filter resolution'})).toBeVisible();
+  await act(async()=>{channels[0].status('CHANNEL_ERROR');});
+  expect(screen.getByRole('button',{name:'Retry synchronization'})).toBeVisible();
+  fireEvent.press(screen.getByRole('button',{name:'Retry common-filter resolution'}));
+  await act(async()=>{});
+  expect(mockResolve).toHaveBeenCalledTimes(2);
+  expect(mockRemove).not.toHaveBeenCalled();
+  fireEvent.press(screen.getByRole('button',{name:'Retry synchronization'}));
+  await act(async()=>{});
+  expect(mockRemove).toHaveBeenCalledWith(channels[0]);
+  expect(mockResolve).toHaveBeenCalledTimes(2);
+});
+
+it('only a fresh canonical room entry clears a terminal integrity overlay',async()=>{
+  const terminalA=ready({filter_completed_count:2,filter_resolution_status:'compatible'});
+  const roomB=ready({room_id:'22222222-2222-4222-8222-222222222222',room_code:'012345ABCD',
+    filter_completed_count:1});
+  mockJoin.mockResolvedValueOnce(terminalA).mockResolvedValueOnce(roomB).mockResolvedValueOnce(terminalA);
+  mockRecover.mockResolvedValue({...saved,outcome:'locked',filter_completed_count:2});
+  mockRefetch.mockResolvedValue({id:host.room_id,code:host.room_code,state:'ready',voter_count:2,
+    required_voter_count:2,filter_completed_count:2,filter_resolution_status:'incompatible'});
+  await mount('/room/ABCDEF0123',true);
+  await act(async()=>{channels[0].system({extension:'postgres_changes',status:'ok'});});
+  expect(screen.getByText('Common-filter status could not be verified.')).toBeVisible();
+  await act(async()=>{router.setParams({code:'012345ABCD'});});
+  await act(async()=>{router.setParams({code:'ABCDEF0123'});});
+  expect(screen.getByText('Filters are compatible.')).toBeVisible();
+  expect(screen.queryByText('Common-filter status could not be verified.')).toBeNull();
+  expect(mockResolve).not.toHaveBeenCalled();
 });
 
 it('sync degradation preserves filter state, disables new saves, and uses only room retry', async () => {
@@ -206,7 +320,7 @@ it.each([
 ])('keeps rejected %s projection private and opens no channel or filter request', async (outcome, message) => {
   mockJoin.mockResolvedValue({ outcome, room_id: null, room_code: null, room_state: null,
     is_creator: null, is_voter: null, voter_count: null, required_voter_count: null,
-    filter_completed_count: null });
+    filter_completed_count: null, filter_resolution_status: null });
   await mount();
   expect(screen.getByText(message)).toBeVisible();
   expect(mockChannel).not.toHaveBeenCalled(); expect(mockRecover).not.toHaveBeenCalled();

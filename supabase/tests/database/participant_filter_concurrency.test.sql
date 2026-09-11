@@ -319,5 +319,46 @@ $trial$;
 select * from pg_temp.recovery_submit_snapshot_trial();
 select is((select count(*) from pg_stat_activity where application_name like 'filter_concurrency_%'),0::bigint,
   'no filter concurrency backend remains');
+
+-- Feature 005 must consume the frozen N/N set without reopening or rewriting it.
+create function pg_temp.resolution_client(subject uuid,command text)
+returns jsonb language plpgsql as $f$
+declare result jsonb;
+begin
+  set local role authenticated;
+  perform set_config('request.jwt.claims',jsonb_build_object('sub',subject,'role','authenticated')::text,true);
+  execute 'select to_jsonb(x) from ('||command||')x' into result;
+  reset role;return result;
+exception when others then reset role;raise;
+end;
+$f$;
+insert into auth.users(id) values
+  ('05200000-0000-4000-a000-000000000001'),('05200000-0000-4000-a000-000000000002');
+insert into public.rooms(id,code,creation_request_id,creator_user_id,required_voter_count,
+  voter_count,filter_completed_count) values
+  ('05210000-0000-4000-a000-000000000001','F500000101','05220000-0000-4000-a000-000000000001',
+   '05200000-0000-4000-a000-000000000001',2,2,2);
+insert into public.room_members(id,room_id,user_id,is_voter) values
+  ('05230000-0000-4000-a000-000000000001','05210000-0000-4000-a000-000000000001','05200000-0000-4000-a000-000000000001',true),
+  ('05230000-0000-4000-a000-000000000002','05210000-0000-4000-a000-000000000001','05200000-0000-4000-a000-000000000002',true);
+insert into public.participant_filters(room_member_id,genres,release_year_from,release_year_to) values
+  ('05230000-0000-4000-a000-000000000001','{action}',2000,2020),
+  ('05230000-0000-4000-a000-000000000002','{drama}',2005,2015);
+create temporary table feature005_frozen_before as
+  select f.*,f.xmin::text row_xmin from public.participant_filters f order by room_member_id;
+select is(pg_temp.resolution_client('05200000-0000-4000-a000-000000000001',
+  $$select * from public.resolve_common_filters('05210000-0000-4000-a000-000000000001')$$)->>'outcome',
+  'compatible','resolution consumes the frozen set without a filter mutation');
+select results_eq(
+  $$select f.*,f.xmin::text row_xmin from public.participant_filters f order by room_member_id$$,
+  $$select * from feature005_frozen_before$$,
+  'resolution preserves every Feature 004 filter value and xmin');
+select is(pg_temp.resolution_client('05200000-0000-4000-a000-000000000001',
+  $$select * from public.submit_my_participant_filter('05210000-0000-4000-a000-000000000001','{western}'::public.participant_genre[],2000::smallint,2020::smallint)$$)->>'outcome',
+  'locked','terminal resolution does not reopen Feature 004 editing');
+select results_eq(
+  $$select f.*,f.xmin::text row_xmin from public.participant_filters f order by room_member_id$$,
+  $$select * from feature005_frozen_before$$,
+  'post-resolution edit remains a zero-write frozen no-op');
 select * from finish();
 rollback;

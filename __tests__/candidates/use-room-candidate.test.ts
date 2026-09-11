@@ -9,7 +9,7 @@ const mockEnsure = jest.fn(), mockChannel = jest.fn(), mockFrom = jest.fn(), moc
 jest.mock('../../src/candidates/service', () => ({ ensureRoomCandidate: (id: string) => mockEnsure(id) }));
 jest.mock('../../src/lib/supabase', () => ({ getSupabase: () => ({ channel: mockChannel, from: mockFrom }) }));
 jest.mock('../../src/auth/anonymous-session', () => ({ bootstrapAnonymousSession: () => mockBootstrap() }));
-const waiting: AcceptedRoomState = { kind: 'accepted', id: '11111111-1111-4111-8111-111111111111', code: 'ABCDEF0123', isCreator: true, isVoter: true, state: 'waiting', title: 'Waiting', voterCount: 1, requiredVoterCount: 2, filterCompletedCount: 0, filtersComplete: false };
+const waiting: AcceptedRoomState = { kind: 'accepted', id: '11111111-1111-4111-8111-111111111111', code: 'ABCDEF0123', isCreator: true, isVoter: true, state: 'waiting', title: 'Waiting', voterCount: 1, requiredVoterCount: 2, filterCompletedCount: 0, filtersComplete: false, filterResolutionStatus: 'pending', resolutionIntegrityError: false };
 const ready: AcceptedRoomState = { ...waiting, state: 'ready', title: 'Ready', voterCount: 2, requiredVoterCount: 2 };
 const available = { outcome: 'available', candidate_id: 'fixture-cardboard-comet', title: 'The Cardboard Comet', release_year: 2020, poster_key: 'cardboard-comet' } as const;
 const candidate = { candidate_id: available.candidate_id, title: available.title, release_year: available.release_year, poster_key: available.poster_key };

@@ -16,9 +16,9 @@ const mockClient = { channel: mockChannel, removeChannel: mockRemove };
 jest.mock('../../src/lib/supabase', () => ({ getSupabase: () => mockClient }));
 jest.mock('../../src/auth/anonymous-session', () => ({ bootstrapAnonymousSession: () => mockBootstrap() }));
 jest.mock('../../src/rooms/service', () => ({ refetchRoom: (id: string) => mockRefetch(id) }));
-const room: AcceptedRoomState = { kind: 'accepted', id: '11111111-1111-4111-8111-111111111111', code: 'ABCDEF0123', isCreator: true, isVoter: true, state: 'waiting', title: 'Waiting', voterCount: 1, requiredVoterCount: 2, filterCompletedCount: 0, filtersComplete: false };
+const room: AcceptedRoomState = { kind: 'accepted', id: '11111111-1111-4111-8111-111111111111', code: 'ABCDEF0123', isCreator: true, isVoter: true, state: 'waiting', title: 'Waiting', voterCount: 1, requiredVoterCount: 2, filterCompletedCount: 0, filtersComplete: false, filterResolutionStatus: 'pending', resolutionIntegrityError: false };
 const other: AcceptedRoomState = { ...room, id: '22222222-2222-4222-8222-222222222222', code: '012345ABCD' };
-const ready = (value = room) => ({ id: value.id, code: value.code, state: 'ready', voter_count: value.requiredVoterCount, required_voter_count: value.requiredVoterCount, filter_completed_count: value.filterCompletedCount });
+const ready = (value = room) => ({ id: value.id, code: value.code, state: 'ready', voter_count: value.requiredVoterCount, required_voter_count: value.requiredVoterCount, filter_completed_count: value.filterCompletedCount, filter_resolution_status: value.filterResolutionStatus });
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (error: unknown) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 async function mount(value: AcceptedRoomState | null = room) {
   const hook = renderHook(({ accepted }: { accepted: AcceptedRoomState | null }) => useRoomSubscription(accepted), { initialProps: { accepted: value } });
@@ -48,7 +48,7 @@ it('first system-ok recovers a completely missed initial UPDATE', async () => {
   expect(mockRefetch).toHaveBeenCalledWith(room.id); expect(h.result.current.room?.state).toBe('ready'); expect(h.result.current.error).toBe(false);
 });
 it('UPDATE is only invalidation, never payload state', async () => {
-  mockRefetch.mockResolvedValue({ id: room.id, code: room.code, state: 'waiting', voter_count: 1, required_voter_count: 2, filter_completed_count: 0 });
+  mockRefetch.mockResolvedValue({ id: room.id, code: room.code, state: 'waiting', voter_count: 1, required_voter_count: 2, filter_completed_count: 0, filter_resolution_status: 'pending' });
   const h = await mount(); await act(async () => { channels[0].status('SUBSCRIBED'); channels[0].system({ extension: 'postgres_changes', status: 'ok' }); });
   await act(async () => { channels[0].update({ new: { id: room.id, state: 'ready', code: other.code } }); });
   expect(mockRefetch).toHaveBeenCalledTimes(2); expect(h.result.current.room).toEqual(room);
@@ -276,7 +276,7 @@ it('refetches intermediate Waiting counts, preserves zero-slot creator and ignor
   const accepted={...room,isVoter:false,voterCount:0,requiredVoterCount:3};
   const h=await mount(accepted);
   for(const count of [0,1,2,1,3]) {
-    mockRefetch.mockResolvedValue({id:room.id,code:room.code,state:count===3?'ready':'waiting',voter_count:count,required_voter_count:3,filter_completed_count:0});
+    mockRefetch.mockResolvedValue({id:room.id,code:room.code,state:count===3?'ready':'waiting',voter_count:count,required_voter_count:3,filter_completed_count:0,filter_resolution_status:'pending'});
     await act(async()=>{channels[0].system({extension:'postgres_changes',status:'ok'});});
     expect(h.result.current.room?.voterCount).toBe(count===1 && mockRefetch.mock.calls.length===4?2:count);
     expect(h.result.current.room?.isCreator).toBe(true);expect(h.result.current.room?.isVoter).toBe(false);
@@ -289,4 +289,62 @@ it('immutable target mismatch remains recoverable without changing flags or occu
   const h=await mount();mockRefetch.mockResolvedValue({...ready(),required_voter_count:3});
   await act(async()=>{channels[0].system({extension:'postgres_changes',status:'ok'});});
   expect(h.result.current.error).toBe(true);expect(h.result.current.room).toEqual(room);
+});
+
+describe('terminal resolution convergence on the existing room channel',()=>{
+  const frozen:AcceptedRoomState={...room,state:'ready',title:'Ready',voterCount:2,
+    filterCompletedCount:2,filtersComplete:true};
+  const terminal=(status:'compatible'|'incompatible')=>({...ready(frozen),
+    filter_completed_count:2,filter_resolution_status:status});
+
+  it.each(['compatible','incompatible'] as const)('recovers a missed direct pending→%s transition on initial system-ok',async status=>{
+    mockRefetch.mockResolvedValue(terminal(status));
+    const h=await mount(frozen);
+    await act(async()=>{channels[0].system({extension:'postgres_changes',status:'ok'});});
+    expect(h.result.current.room?.filterResolutionStatus).toBe(status);
+    expect(h.result.current.room?.resolutionIntegrityError).toBe(false);
+    expect(mockRefetch).toHaveBeenCalledTimes(1);
+    expect(mockChannel).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps terminal authority across a delayed pending refetch and coalesced burst',async()=>{
+    const first=deferred<ReturnType<typeof ready>>();
+    mockRefetch.mockReturnValueOnce(first.promise).mockResolvedValueOnce(terminal('compatible'));
+    const h=await mount(frozen);
+    await act(async()=>{channels[0].system({extension:'postgres_changes',status:'ok'});
+      for(let index=0;index<8;index++)channels[0].update();});
+    expect(mockRefetch).toHaveBeenCalledTimes(1);
+    await act(async()=>{first.resolve({...ready(frozen),filter_completed_count:1,
+      filter_resolution_status:'pending'});});
+    expect(mockRefetch).toHaveBeenCalledTimes(2);
+    expect(h.result.current.room?.filterResolutionStatus).toBe('compatible');
+    expect(h.result.current.room?.filterCompletedCount).toBe(2);
+    mockRefetch.mockResolvedValue({...ready(frozen),filter_completed_count:1,
+      filter_resolution_status:'pending'});
+    await act(async()=>{channels[0].update();});
+    expect(h.result.current.room?.filterResolutionStatus).toBe('compatible');
+  });
+
+  it('merges resolver observation into the same watermark and fails closed on a conflicting refetch',async()=>{
+    const h=await mount(frozen);
+    await act(async()=>{h.result.current.observeResolutionStatus('compatible');});
+    expect(h.result.current.room?.filterResolutionStatus).toBe('compatible');
+    mockRefetch.mockResolvedValue(terminal('incompatible'));
+    await act(async()=>{channels[0].system({extension:'postgres_changes',status:'ok'});});
+    expect(h.result.current.room?.filterResolutionStatus).toBe('compatible');
+    expect(h.result.current.room?.resolutionIntegrityError).toBe(true);
+    expect(mockChannel).toHaveBeenCalledTimes(1);
+  });
+
+  it('discards a terminal completion from a retired room lifecycle',async()=>{
+    const old=deferred<ReturnType<typeof terminal>>();
+    mockRefetch.mockReturnValueOnce(old.promise).mockResolvedValue(ready(other));
+    const h=await mount(frozen);
+    await act(async()=>{channels[0].system({extension:'postgres_changes',status:'ok'});});
+    await act(async()=>{h.rerender({accepted:other});});
+    await act(async()=>{channels[1].system({extension:'postgres_changes',status:'ok'});});
+    await act(async()=>{old.resolve(terminal('compatible'));});
+    expect(h.result.current.room?.id).toBe(other.id);
+    expect(h.result.current.room?.filterResolutionStatus).toBe('pending');
+  });
 });

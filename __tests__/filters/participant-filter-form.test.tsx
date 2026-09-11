@@ -43,13 +43,21 @@ it('shows saved values separately from an unsaved replacement and keeps retry ex
   fireEvent.press(screen.getByRole('button',{name:'Retry saving filters'}));expect(model.retrySave).toHaveBeenCalled();
 });
 
-it('renders N/N handoff immediately and own values read-only with no future controls',()=>{
+it('renders N/N progress and own values read-only while leaving resolution copy to its panel',()=>{
   render(<ParticipantFilterForm model={{...model,recovery:'locked',accepted:{genres:[],releaseYearFrom:1900,releaseYearTo:2026},
     draft:null,filterCompletedCount:3,filtersComplete:true,canSave:false}}/>);
-  expect(screen.getByText('All filters collected. Feature 005 is next.')).toBeVisible();
   expect(screen.getByText('Your filters: Any genre; 1900–2026')).toBeVisible();
   expect(screen.queryByRole('checkbox')).toBeNull();expect(screen.queryByRole('button',{name:'Save filters'})).toBeNull();
-  expect(JSON.stringify(screen.toJSON())).not.toMatch(/movie|candidate|swipe|match/i);
+  expect(JSON.stringify(screen.toJSON())).not.toMatch(/Feature 005 is next|compatible|incompatible|resolving|movie|candidate|swipe|match/i);
+});
+
+it('keeps own-detail recovery available at N/N without owning shared resolution status',()=>{
+  render(<ParticipantFilterForm model={{...model,recovery:'error',accepted:null,draft:null,
+    message:'Unable to load your filters. Please try again.',filterCompletedCount:3,
+    filtersComplete:true,canSave:false}}/>);
+  expect(screen.getByText('3 of 3 filters collected')).toBeVisible();
+  expect(screen.getByRole('button',{name:'Retry filter recovery'})).toBeVisible();
+  expect(screen.queryByText(/compatible|incompatible|resolving/i)).toBeNull();
 });
 
 it('disables a new save while room synchronization is degraded',()=>{

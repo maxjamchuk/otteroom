@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text } from 'react-native';
 import { ParticipantFilterForm } from '../../src/filters/participant-filter-form';
 import { useParticipantFilter } from '../../src/filters/use-participant-filter';
+import { CommonFilterResolutionPanel } from '../../src/resolution/common-filter-resolution-panel';
+import { useCommonFilterResolution } from '../../src/resolution/use-common-filter-resolution';
 import { invitationLink, parseRoomSegment } from '../../src/rooms/code';
 import { InvitationQr } from '../../src/rooms/invitation-qr';
 import { joinRoom } from '../../src/rooms/service';
@@ -75,10 +77,12 @@ function RoomEntry({ code }: { code: string }) {
 }
 
 function AcceptedRoom({ initial }: { initial: AcceptedRoomState & { invitation?: string } }) {
-  const { room, error, retry, retrying, observeFilterProgress } = useRoomSubscription(initial);
+  const { room, error, retry, retrying, observeFilterProgress,
+    observeResolutionStatus } = useRoomSubscription(initial);
   // An accepted RPC is immediately visible, including intermediate Waiting counts.
   const state = room ?? initial;
   const filters = useParticipantFilter(state, error, observeFilterProgress);
+  const resolution = useCommonFilterResolution(state, observeResolutionStatus);
   const invitation = state.isCreator || state.state === 'waiting' ? initial.invitation : undefined;
   return <>
     <Text accessibilityRole="header" style={styles.title}>{state.title}</Text>
@@ -98,14 +102,15 @@ function AcceptedRoom({ initial }: { initial: AcceptedRoomState & { invitation?:
         <Text>{retrying ? 'Reconnecting…' : 'Retry synchronization'}</Text>
       </Pressable>
     </>}
-    {state.state === 'ready' && (state.isVoter
+    {state.state === 'ready' && <>
+      {state.isVoter
       ? <ParticipantFilterForm model={filters} />
       : <>
         <Text>{state.filterCompletedCount} of {state.requiredVoterCount} filters collected</Text>
-        {state.filtersComplete
-          ? <Text accessibilityRole="header">All filters collected. Feature 005 is next.</Text>
-          : <Text>Waiting for voters to finish their filters.</Text>}
-      </>)}
+        {!state.filtersComplete && <Text>Waiting for voters to finish their filters.</Text>}
+      </>}
+      {state.filtersComplete && <CommonFilterResolutionPanel model={resolution} />}
+    </>}
   </>;
 }
 

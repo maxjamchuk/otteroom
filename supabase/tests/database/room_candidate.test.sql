@@ -150,9 +150,9 @@ from (values
   ('04200000-0000-4000-a000-000000000003','select * from public.movie_candidates','foreign catalog SELECT denied')
 ) x(subject,command,description);
 select is(pg_temp.client_json('04200000-0000-4000-a000-000000000001',
-  $$select id,code,state,voter_count,required_voter_count,filter_completed_count from public.rooms where id='04210000-0000-4000-a000-000000000005'$$),
-  '[{"id":"04210000-0000-4000-a000-000000000005","code":"F400000005","state":"ready","voter_count":2,"required_voter_count":2,"filter_completed_count":0}]'::jsonb,
-  'authorized preassigned room projection reveals progress but no movie metadata');
+  $$select id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status from public.rooms where id='04210000-0000-4000-a000-000000000005'$$),
+  '[{"id":"04210000-0000-4000-a000-000000000005","code":"F400000005","state":"ready","voter_count":2,"required_voter_count":2,"filter_completed_count":0,"filter_resolution_status":"pending"}]'::jsonb,
+  'authorized preassigned room projection reveals progress/status but no movie metadata');
 
 select is(pg_temp.client_json('04200000-0000-4000-a000-000000000001',
   $$select * from public.get_my_participant_filter('04210000-0000-4000-a000-000000000002')$$)->0->>'outcome',
@@ -162,10 +162,17 @@ select is(pg_temp.client_json('04200000-0000-4000-a000-000000000001',
   'saved','filter submission succeeds without candidate authority');
 select is((select movie_candidate_id from public.rooms where id='04210000-0000-4000-a000-000000000002'),
   null::text,'filter recovery/submission leave candidate NULL');
+select is(pg_temp.client_json('04200000-0000-4000-a000-000000000001',
+  $$select * from public.resolve_common_filters('04210000-0000-4000-a000-000000000004')$$)->0->>'outcome',
+  'compatible','common resolution can complete without restoring candidate authority');
+select is((select movie_candidate_id from public.rooms where id='04210000-0000-4000-a000-000000000004'),
+  null::text,'compatible resolution assigns no fixture candidate');
+select is((select movie_candidate_id from public.rooms where id='04210000-0000-4000-a000-000000000005'),
+  'fixture-clockwork-orchard','pending preassigned room keeps hidden historical candidate unchanged');
 select results_eq(
   $$select c.*,xmin::text as row_xmin from public.movie_candidates c order by sort_order$$,
   $$select * from candidate_catalog_before order by sort_order$$,
-  'filter flow never mutates historical fixture catalog');
+  'filter and resolution flows never mutate historical fixture catalog');
 
 select throws_ok($$delete from public.movie_candidates where id='fixture-clockwork-orchard'$$,
   '23503',null,'preassigned non-lowest fixture remains FK protected');

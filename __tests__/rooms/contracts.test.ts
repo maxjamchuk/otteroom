@@ -2,7 +2,7 @@ import { narrowCreateResult, narrowJoinResult, RoomContractError } from '../../s
 
 const accepted = { outcome: 'created', room_id: '11111111-1111-4111-8111-111111111111', room_code: 'ABCDEF0123',
   is_creator: true, is_voter: true, room_state: 'waiting', voter_count: 1, required_voter_count: 2,
-  filter_completed_count: 0 };
+  filter_completed_count: 0, filter_resolution_status: 'pending' } as const;
 
 it.each([[2, true], [3, true], [2, false], [3, false]] as const)('accepts explicit target%s creator-voter=%s creation', (target, voting) => {
   const row = { ...accepted, required_voter_count: target, is_voter: voting, voter_count: voting ? 1 : 0 };
@@ -30,11 +30,13 @@ it.each([
   { voter_count: 2 }, { voter_count: 3 }, { voter_count: NaN }, { voter_count: Infinity },
   { required_voter_count: 1 }, { required_voter_count: null }, { required_voter_count: '2' },
   { required_voter_count: 2.5 }, { required_voter_count: 2147483648 }, { required_voter_count: NaN },
+  { filter_resolution_status: null }, { filter_resolution_status: 'unknown' },
+  { filter_resolution_status: 'compatible' }, { filter_resolution_status: 'incompatible' },
   { private_field: 'unexpected' }, { participant_role: 'host' },
 ])('rejects inconsistent create field %#', patch => {
   expect(() => narrowCreateResult([{ ...accepted, ...patch }])).toThrow(RoomContractError);
 });
-it('requires all nine fields and rejects null, omissions and extra data for accepted outcomes', () => {
+it('requires all ten fields and rejects null, omissions and extra data for accepted outcomes', () => {
   for (const [parser, outcome, is_creator] of [[narrowCreateResult, 'created', true], [narrowJoinResult, 'joined', false],
     [narrowJoinResult, 'already_member', true]] as const) {
     const row = { ...accepted, outcome, is_creator, required_voter_count: 3 };
@@ -46,13 +48,30 @@ it('requires all nine fields and rejects null, omissions and extra data for acce
     expect(() => parser([{ ...row, extra: true }])).toThrow(RoomContractError);
   }
 });
-it.each([[true, true], [true, false], [false, true]] as const)('accepts legitimate member creator=%s voter=%s before/after assembly', (is_creator, is_voter) => {
+it.each([[true, true], [true, false], [false, true]] as const)('accepts legitimate pending member creator=%s voter=%s before/after assembly', (is_creator, is_voter) => {
   for (const voter_count of [is_voter ? 1 : 0, 2, 3]) {
     const row = { ...accepted, outcome: 'already_member', is_creator, is_voter, required_voter_count: 3,
       voter_count, room_state: voter_count === 3 ? 'ready' : 'waiting' };
     expect(narrowJoinResult([row])).toEqual(row);
     if (!is_creator) expect(narrowJoinResult([{ ...row, outcome: 'joined' }]).outcome).toBe('joined');
   }
+});
+it.each(['compatible', 'incompatible'] as const)('accepts stored terminal %s only at Ready N/N', filter_resolution_status => {
+  const terminal = { ...accepted, outcome: 'already_member', required_voter_count: 3,
+    voter_count: 3, room_state: 'ready', filter_completed_count: 3, filter_resolution_status } as const;
+  expect(narrowJoinResult([terminal])).toEqual(terminal);
+  expect(narrowCreateResult([{ ...terminal, outcome: 'already_created' }])).toEqual({ ...terminal,
+    outcome: 'already_created' });
+  for (const patch of [{ room_state: 'waiting' }, { voter_count: 2 }, { filter_completed_count: 2 }]) {
+    expect(() => narrowJoinResult([{ ...terminal, ...patch }])).toThrow(RoomContractError);
+  }
+});
+it('requires pending whenever the room is Waiting or filters are partial', () => {
+  for (const patch of [
+    { room_state: 'waiting', voter_count: 2, filter_completed_count: 0, filter_resolution_status: 'compatible' },
+    { room_state: 'ready', voter_count: 3, filter_completed_count: 2, filter_resolution_status: 'incompatible' },
+  ]) expect(() => narrowJoinResult([{ ...accepted, outcome: 'already_member',
+    required_voter_count: 3, ...patch }])).toThrow(RoomContractError);
 });
 it('allows technical integer bound without an arbitrary product maximum', () => {
   const row = { ...accepted, required_voter_count: 2147483647 };
@@ -75,7 +94,7 @@ it('new join is a non-creator voter only; no implicit creator promotion', () => 
 it.each(['invalid_code', 'not_found', 'full'])('requires exact seven NULLs for %s and no partial disclosure', outcome => {
   const rejected = { outcome, room_id: null, room_code: null, room_state: null,
     is_creator: null, is_voter: null, voter_count: null, required_voter_count: null,
-    filter_completed_count: null };
+    filter_completed_count: null, filter_resolution_status: null };
   expect(narrowJoinResult([rejected])).toEqual(rejected);
   for (const field of Object.keys(rejected).filter(key => key !== 'outcome')) {
     expect(() => narrowJoinResult([{ ...rejected, [field]: accepted[field as keyof typeof accepted] }])).toThrow(RoomContractError);

@@ -10,7 +10,8 @@ jest.mock('../../src/filters/service', () => ({
 }));
 const ready: AcceptedRoomState = { kind: 'accepted', id: '11111111-1111-4111-8111-111111111111',
   code: 'ABCDEF0123', isCreator: false, isVoter: true, state: 'ready', title: 'Ready',
-  voterCount: 3, requiredVoterCount: 3, filterCompletedCount: 0, filtersComplete: false };
+  voterCount: 3, requiredVoterCount: 3, filterCompletedCount: 0, filtersComplete: false,
+  filterResolutionStatus: 'pending', resolutionIntegrityError: false };
 const absent = { outcome: 'not_submitted', genres: null, release_year_from: null, release_year_to: null,
   filter_completed_count: 0, required_voter_count: 3, allowed_release_year_max: 2026 } as const;
 const saved = { outcome: 'saved', genres: ['action'], release_year_from: 1990,

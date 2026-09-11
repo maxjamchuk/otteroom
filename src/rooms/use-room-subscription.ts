@@ -3,7 +3,8 @@ import type { RealtimeChannel } from '@supabase/supabase-js';
 import { bootstrapAnonymousSession } from '../auth/anonymous-session';
 import { getSupabase } from '../lib/supabase';
 import { refetchRoom } from './service';
-import { applyRoomFilterProgress, applyRoomRefetch, type AcceptedRoomState } from './state';
+import type { RoomResolutionStatus } from './contracts';
+import { applyRoomFilterProgress, applyRoomRefetch, applyRoomResolutionStatus, type AcceptedRoomState } from './state';
 
 // Owned by one accepted route, never a global room cache. The RPC model stays
 // stable as input, including creator/voter flags and target. Authoritative reads
@@ -128,5 +129,18 @@ export function useRoomSubscription(accepted: AcceptedRoomState | null) {
       return { ...previous, room };
     });
   }, [accepted]);
-  return { room: visible.room, error: visible.error, retrying: visible.retrying, retry, observeFilterProgress };
+  const observeResolutionStatus = useCallback((status: RoomResolutionStatus) => {
+    if (!accepted) return;
+    setView(previous => {
+      if (previous.source !== accepted || !previous.room) return previous;
+      let room: AcceptedRoomState;
+      try { room = applyRoomResolutionStatus(previous.room, status); }
+      catch { return previous; }
+      if (room === previous.room) return previous;
+      lastAccepted.current = { source: accepted, room };
+      return { ...previous, room };
+    });
+  }, [accepted]);
+  return { room: visible.room, error: visible.error, retrying: visible.retrying, retry,
+    observeFilterProgress, observeResolutionStatus };
 }

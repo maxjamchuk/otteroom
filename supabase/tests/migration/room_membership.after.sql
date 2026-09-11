@@ -14,9 +14,13 @@ select pg_temp.require(to_regprocedure('public.create_room(uuid)') is null
 select pg_temp.require(to_regclass('public.participant_filters') is not null
   and to_regprocedure('public.get_my_participant_filter(uuid)') is not null
   and to_regprocedure('public.submit_my_participant_filter(uuid,participant_genre[],smallint,smallint)') is not null
+  and to_regprocedure('public.resolve_common_filters(uuid)') is not null
   and not has_function_privilege('authenticated','public.ensure_room_candidate(uuid)'::regprocedure,'EXECUTE')
   and (select count(*)=0 from public.participant_filters)
-  and not exists(select 1 from public.rooms where filter_completed_count<>0));
+  and not exists(select 1 from private.room_filter_resolutions)
+  and not exists(select 1 from private.room_filter_resolution_genre_clauses)
+  and not exists(select 1 from public.rooms where filter_completed_count<>0
+    or filter_resolution_status<>'pending'));
 select pg_temp.require((select count(*)=1 from pg_publication_tables
   where pubname='supabase_realtime' and schemaname='public' and tablename='rooms'));
 select pg_temp.require(not exists(select 1 from pg_constraint where conrelid='public.rooms'::regclass and conname like '%guest%'));
@@ -36,7 +40,7 @@ declare
 begin
   for old in select row from legacy_expected order by row->>'id' loop
     select * into strict r from public.rooms where id=(old->>'id')::uuid;
-    perform pg_temp.require((to_jsonb(r)-array['creator_user_id','required_voter_count','voter_count','filter_completed_count'])
+    perform pg_temp.require((to_jsonb(r)-array['creator_user_id','required_voter_count','voter_count','filter_completed_count','filter_resolution_status'])
       =(old-array['host_user_id','guest_user_id'])
       and r.creator_user_id=(old->>'host_user_id')::uuid and r.required_voter_count=2
       and r.voter_count=case when old->>'guest_user_id' is null then 1 else 2 end
@@ -59,14 +63,16 @@ begin
       reset role;
       perform pg_temp.require(result=jsonb_build_object('outcome','already_member','room_id',r.id,'room_code',r.code,
         'room_state',r.state,'is_creator',subject=r.creator_user_id,'is_voter',true,
-        'voter_count',r.voter_count,'required_voter_count',2,'filter_completed_count',0));
+        'voter_count',r.voter_count,'required_voter_count',2,'filter_completed_count',0,
+        'filter_resolution_status','pending'));
       if subject=r.creator_user_id then
         set local role authenticated;
         select to_jsonb(x) into result from public.create_room(r.creation_request_id,3,false) x;
         reset role;
         perform pg_temp.require(result=jsonb_build_object('outcome','already_created','room_id',r.id,'room_code',r.code,
           'room_state',r.state,'is_creator',true,'is_voter',true,'voter_count',r.voter_count,
-          'required_voter_count',2,'filter_completed_count',0));
+          'required_voter_count',2,'filter_completed_count',0,
+          'filter_resolution_status','pending'));
       end if;
       perform pg_temp.require(not has_function_privilege('authenticated',
         'public.ensure_room_candidate(uuid)'::regprocedure,'EXECUTE'));

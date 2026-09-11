@@ -10,7 +10,6 @@ export function ParticipantFilterForm({ model }: { model: ParticipantFilterModel
   const progress = `${model.filterCompletedCount} of ${model.requiredVoterCount} filters collected`;
   if (model.filtersComplete) return <View style={styles.section}>
     <Text accessibilityLiveRegion="polite">{progress}</Text>
-    <Text accessibilityRole="header">All filters collected. Feature 005 is next.</Text>
     {model.accepted
       ? <Text>Your filters: {summary(model.accepted.genres, model.accepted.releaseYearFrom, model.accepted.releaseYearTo)}</Text>
       : model.recovery === 'error' ? <>

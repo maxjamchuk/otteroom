@@ -101,6 +101,7 @@ export type Database = {
           creation_request_id: string
           creator_user_id: string
           filter_completed_count: number
+          filter_resolution_status: Database["public"]["Enums"]["filter_resolution_status"]
           id: string
           movie_candidate_id: string | null
           required_voter_count: number
@@ -114,6 +115,7 @@ export type Database = {
           creation_request_id: string
           creator_user_id: string
           filter_completed_count?: number
+          filter_resolution_status?: Database["public"]["Enums"]["filter_resolution_status"]
           id?: string
           movie_candidate_id?: string | null
           required_voter_count?: number
@@ -127,6 +129,7 @@ export type Database = {
           creation_request_id?: string
           creator_user_id?: string
           filter_completed_count?: number
+          filter_resolution_status?: Database["public"]["Enums"]["filter_resolution_status"]
           id?: string
           movie_candidate_id?: string | null
           required_voter_count?: number
@@ -157,6 +160,7 @@ export type Database = {
         }
         Returns: {
           filter_completed_count: number
+          filter_resolution_status: Database["public"]["Enums"]["filter_resolution_status"]
           is_creator: boolean
           is_voter: boolean
           outcome: string
@@ -193,6 +197,7 @@ export type Database = {
         Args: { p_room_code: string }
         Returns: {
           filter_completed_count: number
+          filter_resolution_status: Database["public"]["Enums"]["filter_resolution_status"]
           is_creator: boolean
           is_voter: boolean
           outcome: string
@@ -201,6 +206,13 @@ export type Database = {
           room_id: string
           room_state: string
           voter_count: number
+        }[]
+      }
+      resolve_common_filters: {
+        Args: { p_room_id: string }
+        Returns: {
+          filter_resolution_status: Database["public"]["Enums"]["filter_resolution_status"]
+          outcome: string
         }[]
       }
       submit_my_participant_filter: {
@@ -222,6 +234,7 @@ export type Database = {
       }
     }
     Enums: {
+      filter_resolution_status: "pending" | "compatible" | "incompatible"
       participant_genre:
         | "action"
         | "adventure"
@@ -369,6 +382,7 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
+      filter_resolution_status: ["pending", "compatible", "incompatible"],
       participant_genre: [
         "action",
         "adventure",

@@ -2,7 +2,8 @@ import type { Database } from '../types/database.generated';
 import { normalizeRoomCode } from './code';
 
 type GeneratedRow = Database['public']['Functions']['create_room']['Returns'][number];
-type Projection = Pick<GeneratedRow, 'room_id' | 'room_code' | 'voter_count' | 'required_voter_count'|'filter_completed_count'> & {
+export type RoomResolutionStatus = Database['public']['Enums']['filter_resolution_status'];
+type Projection = Pick<GeneratedRow, 'room_id' | 'room_code' | 'voter_count' | 'required_voter_count'|'filter_completed_count'|'filter_resolution_status'> & {
   room_state: 'waiting' | 'ready';
 };
 type Member = { is_creator: true; is_voter: boolean } | { is_creator: false; is_voter: true };
@@ -32,7 +33,12 @@ export function validFilterCount(count:unknown,target:unknown,state:unknown):boo
   return typeof target==='number'&&Number.isInteger(target)&&typeof count==='number'&&Number.isInteger(count)
     &&count>=0&&count<=target&&(count===0||state==='ready');
 }
-const fields = ['outcome', 'room_id', 'room_code', 'room_state', 'is_creator', 'is_voter', 'voter_count', 'required_voter_count','filter_completed_count'] as const satisfies readonly (keyof GeneratedRow)[];
+export function validResolutionStatus(status: unknown, filterCount: unknown, target: unknown,
+  state: unknown): status is RoomResolutionStatus {
+  return status === 'pending' || (status === 'compatible' || status === 'incompatible') &&
+    state === 'ready' && filterCount === target;
+}
+const fields = ['outcome', 'room_id', 'room_code', 'room_state', 'is_creator', 'is_voter', 'voter_count', 'required_voter_count','filter_completed_count','filter_resolution_status'] as const satisfies readonly (keyof GeneratedRow)[];
 function oneRow(data: unknown): Record<keyof GeneratedRow, unknown> {
   if (!Array.isArray(data) || data.length !== 1) throw new RoomContractError();
   const row: unknown = data[0];
@@ -45,6 +51,8 @@ function accepted(row: Record<keyof GeneratedRow, unknown>): void {
     typeof row.is_creator !== 'boolean' || typeof row.is_voter !== 'boolean' || !row.is_creator && !row.is_voter ||
     !validVoterCounts(row.voter_count, row.required_voter_count, row.room_state)
     ||!validFilterCount(row.filter_completed_count,row.required_voter_count,row.room_state)
+    ||!validResolutionStatus(row.filter_resolution_status,row.filter_completed_count,
+      row.required_voter_count,row.room_state)
     || row.is_voter && row.voter_count === 0) {
     throw new RoomContractError();
   }
@@ -54,7 +62,7 @@ export function narrowCreateResult(data: unknown): CreateResult {
   accepted(row);
   if (!row.is_creator || !(row.outcome === 'already_created' || row.outcome === 'created' &&
     row.room_state === 'waiting' && row.voter_count === (row.is_voter ? 1 : 0)
-    &&row.filter_completed_count===0)) throw new RoomContractError();
+    &&row.filter_completed_count===0&&row.filter_resolution_status==='pending')) throw new RoomContractError();
   return row as CreateResult;
 }
 export function narrowJoinResult(data: unknown): JoinResult {

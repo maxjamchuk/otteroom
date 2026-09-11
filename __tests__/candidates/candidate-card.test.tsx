@@ -8,7 +8,7 @@ import type { AcceptedRoomState } from '../../src/rooms/state';
 const mockRpc = jest.fn(), mockBootstrap = jest.fn(), mockFrom = jest.fn(), mockChannel = jest.fn();
 jest.mock('../../src/lib/supabase', () => ({ getSupabase: () => ({ rpc: mockRpc, from: mockFrom, channel: mockChannel }) }));
 jest.mock('../../src/auth/anonymous-session', () => ({ bootstrapAnonymousSession: () => mockBootstrap() }));
-const ready: AcceptedRoomState = { kind: 'accepted', id: '11111111-1111-4111-8111-111111111111', code: 'ABCDEF0123', isCreator: true, isVoter: true, state: 'ready', title: 'Ready', voterCount: 2, requiredVoterCount: 2, filterCompletedCount: 0, filtersComplete: false };
+const ready: AcceptedRoomState = { kind: 'accepted', id: '11111111-1111-4111-8111-111111111111', code: 'ABCDEF0123', isCreator: true, isVoter: true, state: 'ready', title: 'Ready', voterCount: 2, requiredVoterCount: 2, filterCompletedCount: 0, filtersComplete: false, filterResolutionStatus: 'pending', resolutionIntegrityError: false };
 const row = { outcome: 'available', candidate_id: 'fixture-cardboard-comet', title: 'The Cardboard Comet', release_year: 2020, poster_key: 'cardboard-comet' };
 const success = { data: [row], error: null };
 const failureMessage = 'Unable to load this movie. Please try again.';
