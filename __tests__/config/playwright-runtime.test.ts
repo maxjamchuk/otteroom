@@ -182,11 +182,28 @@ it('Feature 004 discovery retains serial default acceptance and bounded runtime 
   assert.equal(config.globalTimeout, 600000);
   for (const selector of ['@membership', 'G01', 'G02', 'G03', 'G04', 'G05', 'G06', 'G07', 'G08', 'G09', '@filters', 'H01', 'H02', 'H03'])
     assert.deepEqual(parseInvocation(['acceptance', '--grep', selector]).forwarded, ['--grep', selector]);
+  assert.deepEqual(parseInvocation(['smoke']), { mode: 'acceptance', profile: 'smoke', staticOnly: false,
+    forwarded: ['--grep', 'G03|G04|G05|G08|H01'] });
   assert.deepEqual(parseInvocation(['acceptance', '--workers=2', '--repeat-each=2']).forwarded,
     ['--workers', '2', '--repeat-each', '2']);
   for (const args of [['acceptance', 'first-movie-candidate.spec.ts'], ['acceptance', '--workers=5'],
-    ['acceptance', '--repeat-each=4'], ['acceptance', '--retries=1'], ['security', '--grep', 'H01'], ['acceptance', '--grep', 'F01']])
+    ['acceptance', '--repeat-each=4'], ['acceptance', '--retries=1'], ['security', '--grep', 'H01'], ['acceptance', '--grep', 'F01'],
+    ['smoke', '--workers=2'], ['smoke', '--grep', 'H01']])
     assert.throws(() => parseInvocation(args));
+`));
+
+it('defines a fail-closed five-case cross-feature smoke profile with 16 identities', () => verify(prelude + `
+  import fs from 'node:fs';
+  const { parseInvocation, verifyAcceptanceProfile } = await import('./scripts/run-e2e.mjs');
+  const invocation = parseInvocation(['smoke']);
+  const budgets = { G03:3, G04:4, G05:2, G08:4, H01:3 };
+  const results = Object.entries(budgets).map(([browserCase, identities]) => ({ browserCase, signups: identities, identities }));
+  assert.equal(verifyAcceptanceProfile(invocation.profile, results), true);
+  assert.equal(results.reduce((sum, result) => sum + result.identities, 0), 16);
+  assert.equal(verifyAcceptanceProfile(invocation.profile, results.slice(1)), false);
+  assert.equal(verifyAcceptanceProfile(invocation.profile, results.map((result, index) => index ? result : { ...result, identities: 2 })), false);
+  const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+  assert.equal(pkg.scripts['test:e2e:smoke'], 'node scripts/run-e2e.mjs smoke');
 `));
 
 

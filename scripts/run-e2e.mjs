@@ -7,13 +7,19 @@ import { localExecutable, runManagedProcess } from './safe-process.mjs';
 import { withPlaywrightRuntime, runtimeEnvironment, runtimeDiagnostic, signalExit } from './playwright-runtime.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+const smokeSelection = 'G03|G04|G05|G08|H01';
+const smokeCases = new Set(['G03', 'G04', 'G05', 'G08', 'H01']);
 const acceptanceSelections = new Set(['@membership', 'G01', 'G02', 'G03', 'G04', 'G05', 'G06', 'G07', 'G08', 'G09',
   '@filters', 'H01', 'H02', 'H03', '@auth', '@us1', '@us2-join', '@us2-realtime', '@us3', '@us4', '@capacity-smoke',
-  'E01', 'E02', 'E03', 'E04', 'E05', 'E06', 'E07', 'E08', 'E09', 'E10', 'E11', 'E12']);
+  'E01', 'E02', 'E03', 'E04', 'E05', 'E06', 'E07', 'E08', 'E09', 'E10', 'E11', 'E12', smokeSelection]);
 
 export function parseInvocation(argv) {
-  const [mode, ...options] = argv;
-  if (!['acceptance', 'security'].includes(mode)) throw new Error('SAFE_INVOCATION_REQUIRED');
+  const [requestedMode, ...requestedOptions] = argv;
+  if (!['acceptance', 'smoke', 'security'].includes(requestedMode)) throw new Error('SAFE_INVOCATION_REQUIRED');
+  if (requestedMode === 'smoke' && requestedOptions.length > 0) throw new Error('UNSAFE_OVERRIDE_REJECTED');
+  const mode = requestedMode === 'smoke' ? 'acceptance' : requestedMode;
+  const profile = requestedMode === 'smoke' ? 'smoke' : mode === 'security' ? 'security' : 'acceptance';
+  const options = requestedMode === 'smoke' ? ['--grep', smokeSelection] : requestedOptions;
   const forwarded = [], seen = new Set();
   let grep;
   for (let i = 0; i < options.length; i++) {
@@ -30,7 +36,7 @@ export function parseInvocation(argv) {
       (mode === 'security' && value !== '1') || (name === '--repeat-each' && Number(value) > 3)) throw new Error('UNSAFE_OVERRIDE_REJECTED');
     forwarded.push(name, value);
   }
-  return Object.freeze({ mode, staticOnly: mode === 'security' && grep === '@diagnostics-static', forwarded });
+  return Object.freeze({ mode, profile, staticOnly: mode === 'security' && grep === '@diagnostics-static', forwarded });
 }
 
 export function assessRun(mode, staticOnly, exitCode, results, scanOk) {
@@ -56,6 +62,15 @@ export function verifyProbeArtifacts(directory) {
   }
   walk(directory);
   return ['summary.json', 'safe-failure.png', 'safe-diagnostics.txt', 'error-context.md', 'safe-process.txt'].every(name => names.has(name));
+}
+
+export function verifyAcceptanceProfile(profile, results) {
+  if (profile !== 'smoke') return true;
+  if (!Array.isArray(results) || results.length !== smokeCases.size) return false;
+  const cases = new Set(results.map(result => result?.browserCase));
+  return cases.size === smokeCases.size && [...smokeCases].every(value => cases.has(value)) &&
+    results.reduce((sum, result) => sum + (Number.isInteger(result?.signups) ? result.signups : 0), 0) === 16 &&
+    results.reduce((sum, result) => sum + (Number.isInteger(result?.identities) ? result.identities : 0), 0) === 16;
 }
 
 async function launchPlaywright({ invocation, directory, socket, signal, runtime }) {
@@ -90,8 +105,9 @@ export async function executeInvocation(invocation, { artifactRoot = path.join(r
     const summary = path.join(directory, 'summary.json');
     if (scan.ok && fs.existsSync(summary) && fs.statSync(summary).size <= 65536) results = JSON.parse(fs.readFileSync(summary, 'utf8'));
     const completeProbe = invocation.mode !== 'security' || invocation.staticOnly || scan.ok && registry.size > 0 && verifyProbeArtifacts(directory);
-    outcome = signalExit(signal) ?? (assessRun(invocation.mode, invocation.staticOnly, exitCode, results, scan.ok && completeProbe) ? 0 : exitCode || 1);
-    process.stdout.write(JSON.stringify({ component: 'e2e-controller', selection: invocation.staticOnly ? 'synthetic-only' : invocation.mode,
+    const profileComplete = verifyAcceptanceProfile(invocation.profile, results);
+    outcome = signalExit(signal) ?? (assessRun(invocation.mode, invocation.staticOnly, exitCode, results, scan.ok && completeProbe && profileComplete) ? 0 : exitCode || 1);
+    process.stdout.write(JSON.stringify({ component: 'e2e-controller', selection: invocation.staticOnly ? 'synthetic-only' : invocation.profile,
       status: outcome === 0 ? 'passed' : 'failed', artifacts: scan.fileCount, findings: scan.findings,
       innerExit: exitCode, probeArtifactsComplete: completeProbe,
       scenarios: results.map(result => ({ scenario: ['A', 'B', 'C', 'baseline', 'auth', 'filters', 'membership', 'us1', 'us2-join', 'us2-realtime', 'us3', 'us4', 'capacity-smoke'].includes(result.scenario) ? result.scenario : 'other', status: result.status === 'passed' ? 'passed' : 'failed',
@@ -100,7 +116,7 @@ export async function executeInvocation(invocation, { artifactRoot = path.join(r
         repetition: Number.isInteger(result.repetition) && result.repetition >= 1 && result.repetition <= 3 ? result.repetition : 0,
         signups: Number.isInteger(result.signups) ? result.signups : 0, identities: Number.isInteger(result.identities) ? result.identities : 0 })),
     }) + '\n');
-    if (results.some(result => result.budgetFailure === true)) process.stderr.write('AUTH_BUDGET_FAILURE HTTP 429: acceptance N=82, local anonymous_users=150. Check configured limit and remaining hourly allowance; stop/start only after config change, never retry/reset/restart to evade quota.\n');
+    if (results.some(result => result.budgetFailure === true)) process.stderr.write(`AUTH_BUDGET_FAILURE HTTP 429: ${invocation.profile === 'smoke' ? 'smoke N=16' : 'acceptance N=82'}, local anonymous_users=150. Check configured limit and remaining hourly allowance; stop/start only after config change, never retry/reset/restart to evade quota.\n`);
   } catch (error) { process.stderr.write(runtimeDiagnostic(error) + '\n'); outcome = signalExit(signal) ?? 1; }
   finally {
     try { await server?.close(); } catch { process.stderr.write('E2E_CLEANUP_FAILED\n'); outcome = 1; }

@@ -51,6 +51,7 @@
     "web:export": "expo export --platform web",
     "playwright:install": "node scripts/playwright-runtime.mjs install",
     "test:e2e": "node scripts/run-e2e.mjs acceptance",
+    "test:e2e:smoke": "node scripts/run-e2e.mjs smoke",
     "test:e2e:security": "node scripts/run-e2e.mjs security",
     "supabase:start": "node scripts/safe-process.mjs supabase:start",
     "supabase:status": "node scripts/safe-process.mjs supabase:status",
