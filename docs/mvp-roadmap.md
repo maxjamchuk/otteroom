@@ -34,7 +34,7 @@ roadmap does not authorize implementing the whole MVP at once.
 | 001 | Room Session | COMPLETE | Create/join a room with authoritative membership and reconnect |
 | 002 | First Movie Candidate | COMPLETE | One shared authoritative fixture candidate and stable display/recovery |
 | 003 | Generalized Room Membership & QR Join | COMPLETE | Configured required voter count, creator voting choice, fixed group assembly and QR joining |
-| 004 | Participant Filters | PLANNED | Each assembled voter configures recoverable genres and release-year filters |
+| 004 | Participant Filters | COMPLETE | Each assembled voter configures recoverable genres and release-year filters |
 | 005 | Common Filter Resolution | PLANNED | Resolve compatible candidate constraints across the assembled voting group |
 | 006 | TMDB Candidate Source | PLANNED | Real eligible TMDB candidates with stable room assignment |
 | 007 | Swipe Decisions | PLANNED | Independent, persistent right/left decisions per voter and candidate |

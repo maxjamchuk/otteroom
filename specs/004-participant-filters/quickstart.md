@@ -1,6 +1,6 @@
 # Quickstart and Validation: Participant Filters
 
-**Status**: Planned validation, not executed evidence.
+**Status**: Complete; planned validation and final evidence are recorded below.
 **Date**: 2026-09-11.
 
 No command in this guide was run by planning and no PASS is claimed. During
@@ -758,3 +758,56 @@ Do not turn this planning document into evidence before commands actually run.
   consumed. The existing H02 acceptance receipt remains applicable to the
   unchanged observable contract; the new PostgreSQL regression is the
   authoritative proof for the corrected snapshot interleaving.
+
+### Independent focused final review — T045 completion
+
+- Review source was clean `main` at fix SHA
+  `fa0e4a0abe36c04fa924de4ffae36d1ed7c1db7e`, initially equal to
+  `origin/main`. The fix commit changes only the Feature 004 migration,
+  recovery-vs-submit pgTAP/dblink regression and its evidence/task wording;
+  generated types, TypeScript and client contracts are unchanged.
+- `get_my_participant_filter` now obtains the room, caller membership,
+  caller-owned filter presence/values and correlated actual voter-filter count
+  in one SQL statement. PostgreSQL READ COMMITTED assigns that statement one
+  MVCC snapshot, so every returned field and every integrity comparison is
+  wholly pre-commit or wholly post-commit. The join remains keyed by
+  `m.user_id = auth.uid()`, the filter join remains keyed by that membership,
+  and only the aggregate count observes other voters. The existing missing/
+  foreign mask, non-voter rule, Waiting rule, count/state checks and impossible
+  N/N-without-own-row exception remain unchanged.
+- Recovery remains read-only: the function contains no DML, repair, default-row
+  creation or row lock. Its ordinary relation reads do not conflict with the
+  room-row serialization used by `submit_my_participant_filter`, so it remains
+  non-blocking with respect to the approved submit contract. The test-only
+  ACCESS EXCLUSIVE relation lock is solely a deterministic barrier.
+- The regression dispatches authenticated recovery while the filter relation is
+  observably blocked, performs a real authenticated READ COMMITTED final submit,
+  then releases recovery. The former implementation could complete its old
+  room/member statement before the barrier and its count statement after the
+  submit, producing the confirmed false integrity exception. The corrected
+  implementation can return only coherent `not_submitted` 1/2 or `locked` 2/2,
+  and the test additionally proves recovery writes 0/0, submit writes 1/1,
+  exact final ownership/state and backend/fixture cleanup.
+- No equivalent mixed-statement recovery defect remains. Room refetch is one
+  projection statement; create retry/recovery reads room plus creator membership
+  in one statement; join locks and reads the authoritative room before its
+  membership read; submit's later statements are protected by that room lock,
+  which every participant filter mutation must acquire. Migration verification
+  runs behind its cutover lock. Cross-request aggregate/detail arrival remains
+  intentionally guarded by the client monotonic watermark and independent
+  own-detail generation.
+- H02 was not technically required after this SQL-only fix. Its previously
+  accepted browser behavior and client wiring are unchanged, and a browser run
+  is not the authoritative or deterministic oracle for a statement-snapshot
+  race. The post-fix 16/16 targeted database result, 710-assertion full database
+  result and check-only generated-type pass cover the affected boundary. G2,
+  G3, repeatability and exact-SHA fresh-checkout evidence remain applicable to
+  every unchanged layer; the post-fix clean latest reset/full database pass
+  separately proves the changed migration and database behavior.
+- An optional local spot-rerun attempt during final review stopped because the
+  managed `npm run supabase:start` command failed before reset or test
+  execution; cleanup found no owned stack to stop. This was not a newly required
+  acceptance gate and does not replace or weaken the committed post-fix receipts.
+  Final focused review found no blocker. All T001–T045 tasks are complete, with
+  exact coverage 35/35 FR, 6/6 NFR, 14/14 SC and 31/31 scenarios, and the release
+  remains bounded at the frozen Feature 005 handoff.
