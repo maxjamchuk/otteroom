@@ -224,8 +224,16 @@ begin
   if v_user_id is null then
     raise exception using errcode = '42501', message = 'Authentication required';
   end if;
-  select r as room_row, m as member_row into v_context
-    from public.rooms as r join public.room_members as m on m.room_id = r.id
+  select r as room_row, m as member_row, f as filter_row,
+      f.room_member_id is not null as has_filter,
+      (select pg_catalog.count(*)::integer
+        from public.participant_filters as submitted
+        join public.room_members as voter on voter.id = submitted.room_member_id
+        where voter.room_id = r.id and voter.is_voter) as actual_filter_count
+    into v_context
+    from public.rooms as r
+    join public.room_members as m on m.room_id = r.id
+    left join public.participant_filters as f on f.room_member_id = m.id
     where r.id = p_room_id and m.user_id = v_user_id;
   if not found then
     return query select 'not_found'::text, null::public.participant_genre[],
@@ -234,17 +242,13 @@ begin
   end if;
   v_room := v_context.room_row;
   v_member := v_context.member_row;
-  select pg_catalog.count(*)::integer into v_actual
-    from public.participant_filters as f join public.room_members as m
-      on m.id = f.room_member_id
-    where m.room_id = v_room.id and m.is_voter;
+  v_filter := v_context.filter_row;
+  v_has_filter := v_context.has_filter;
+  v_actual := v_context.actual_filter_count;
   if v_actual <> v_room.filter_completed_count
     or (v_room.filter_completed_count > 0 and v_room.state <> 'ready') then
     raise exception using errcode = 'P0001', message = 'Participant filter integrity failure';
   end if;
-  select f.* into v_filter from public.participant_filters as f
-    where f.room_member_id = v_member.id;
-  v_has_filter := found;
   if not v_member.is_voter then
     if v_member.user_id <> v_room.creator_user_id or v_has_filter then
       raise exception using errcode = 'P0001', message = 'Participant filter integrity failure';

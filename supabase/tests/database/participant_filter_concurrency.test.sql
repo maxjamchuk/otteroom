@@ -187,6 +187,136 @@ select * from pg_temp.concurrent_filter_trial('same_equal');
 select * from pg_temp.concurrent_filter_trial('same_different');
 select * from pg_temp.concurrent_filter_trial('edit_first');
 select * from pg_temp.concurrent_filter_trial('final_first');
+
+select ok(
+  pg_get_functiondef('public.get_my_participant_filter(uuid)'::regprocedure)
+    not like '%select pg_catalog.count(*)::integer into v_actual%'
+  and pg_get_functiondef('public.get_my_participant_filter(uuid)'::regprocedure)
+    not like '%select f.* into v_filter%'
+  and pg_get_functiondef('public.get_my_participant_filter(uuid)'::regprocedure)
+    like '%f as filter_row%'
+  and pg_get_functiondef('public.get_my_participant_filter(uuid)'::regprocedure)
+    like '%as actual_filter_count%'
+  and pg_get_functiondef('public.get_my_participant_filter(uuid)'::regprocedure)
+    like '%left join public.participant_filters as f%',
+  'recovery room/member/own-filter/actual-count authority is one SQL statement');
+
+-- Hold the private table in the submitting transaction so recovery reaches its
+-- participant-filter read and blocks without a timing sleep. The real final
+-- submit then commits before recovery continues. A recovery assembled from
+-- multiple READ COMMITTED statements mixes the old room row with the new
+-- filter count and raises a false integrity failure; one statement returns a
+-- coherent old or new business snapshot.
+create function pg_temp.recovery_submit_snapshot_trial() returns setof text language plpgsql as $trial$
+declare
+  ns text:='filter_concurrency_recovery_'||encode(extensions.gen_random_bytes(4),'hex');
+  own text:=ns||'_owner';recoverer text:=ns||'_recoverer';submitter text:=ns||'_submitter';
+  conninfo text:='dbname=postgres user=postgres connect_timeout=3';
+  recovering_user uuid:=extensions.gen_random_uuid();other_user uuid:=extensions.gen_random_uuid();
+  rid uuid:=extensions.gen_random_uuid();recovering_member uuid:=extensions.gen_random_uuid();
+  other_member uuid:=extensions.gen_random_uuid();code text:='C4'||upper(encode(extensions.gen_random_bytes(4),'hex'));
+  recoverer_pid integer;submitter_pid integer;result jsonb;submitted jsonb;final_state jsonb;
+  recover_filter_writes integer:=0;recover_room_writes integer:=0;
+  submit_filter_writes integer:=0;submit_room_writes integer:=0;
+  deadline timestamptz;failure text;cleanup_failure text;name text;j jsonb;
+  filter_stats text:='select to_jsonb(coalesce((select n_tup_ins+n_tup_upd from pg_stat_xact_user_tables where relid=''public.participant_filters''::regclass),0))';
+  room_stats text:='select to_jsonb(coalesce((select n_tup_upd from pg_stat_xact_user_tables where relid=''public.rooms''::regclass),0))';
+begin
+  begin
+    perform extensions.dblink_connect(own,conninfo);
+    perform extensions.dblink_exec(own,'set statement_timeout=''20s'';set lock_timeout=''15s''');
+    perform extensions.dblink_exec(own,format(
+      'insert into auth.users(id) values(%1$L),(%2$L);'
+      'insert into public.rooms(id,code,creation_request_id,creator_user_id,required_voter_count,voter_count,filter_completed_count) values(%3$L,%4$L,%5$L,%1$L,2,2,1);'
+      'insert into public.room_members(id,room_id,user_id,is_voter) values(%6$L,%3$L,%1$L,true),(%7$L,%3$L,%2$L,true);'
+      'insert into public.participant_filters(room_member_id,genres,release_year_from,release_year_to) values(%7$L,''{comedy}'',2000,2020)',
+      recovering_user,other_user,rid,code,extensions.gen_random_uuid(),recovering_member,other_member));
+
+    perform extensions.dblink_connect(recoverer,conninfo);
+    perform extensions.dblink_connect(submitter,conninfo);
+    perform extensions.dblink_exec(recoverer,'set statement_timeout=''20s'';set lock_timeout=''15s''');
+    perform extensions.dblink_exec(submitter,'set statement_timeout=''20s'';set lock_timeout=''15s''');
+    recoverer_pid:=pg_temp.remote_json(recoverer,'select to_jsonb(pg_backend_pid())')::integer;
+    submitter_pid:=pg_temp.remote_json(submitter,'select to_jsonb(pg_backend_pid())')::integer;
+    perform pg_temp.require(recoverer_pid<>submitter_pid,'recovery and submit use independent backends');
+    perform pg_temp.caller(recoverer,recovering_user);
+
+    -- The privileged connection acquires only the deterministic test barrier;
+    -- the actual RPC still runs as authenticated with the caller's JWT.
+    perform extensions.dblink_exec(submitter,
+      'begin isolation level read committed;lock table public.participant_filters in access exclusive mode;set role authenticated');
+    perform pg_temp.remote_json(submitter,format(
+      'select to_jsonb(set_config(''request.jwt.claims'',%L,false))',
+      jsonb_build_object('sub',recovering_user,'role','authenticated')::text));
+    perform pg_temp.require(pg_temp.remote_json(submitter,
+      'select jsonb_build_object(''role'',current_user,''uid'',auth.uid(),''isolation'',current_setting(''transaction_isolation''))')
+      =jsonb_build_object('role','authenticated','uid',recovering_user,'isolation','read committed'),
+      'real submit runs in an independent authenticated READ COMMITTED session');
+
+    perform pg_temp.require(extensions.dblink_send_query(recoverer,format(
+      'select to_jsonb(x) from public.get_my_participant_filter(%L) x',rid))=1,
+      'own-filter recovery dispatched while final submit barrier is held');
+    deadline:=clock_timestamp()+interval '8s';
+    loop
+      exit when extensions.dblink_is_busy(recoverer)=1
+        and submitter_pid=any(pg_blocking_pids(recoverer_pid))
+        and exists(select 1 from pg_locks where pid=recoverer_pid and relation='public.participant_filters'::regclass and not granted);
+      if clock_timestamp()>deadline then raise exception 'recovery did not reach deterministic participant-filter barrier';end if;
+    end loop;
+
+    submitted:=pg_temp.remote_json(submitter,format(
+      'select to_jsonb(x) from public.submit_my_participant_filter(%L,''{action}''::public.participant_genre[],1900::smallint,extract(year from transaction_timestamp() at time zone ''UTC'')::smallint) x',rid));
+    submit_filter_writes:=pg_temp.remote_json(submitter,filter_stats)::integer;
+    submit_room_writes:=pg_temp.remote_json(submitter,room_stats)::integer;
+    perform extensions.dblink_exec(submitter,'commit');
+
+    result:=pg_temp.collect(recoverer);
+    recover_filter_writes:=pg_temp.remote_json(recoverer,filter_stats)::integer;
+    recover_room_writes:=pg_temp.remote_json(recoverer,room_stats)::integer;
+    perform extensions.dblink_exec(recoverer,'commit');
+
+    perform pg_temp.require(submitted->>'outcome'='saved'
+      and (submitted->>'filter_completed_count')::integer=2
+      and submit_filter_writes=1 and submit_room_writes=1,
+      'overlapped real final submit reaches N/N with exact one filter/room write');
+    perform pg_temp.require(
+      (result->>'outcome'='not_submitted' and result->'genres'='null'::jsonb
+        and result->'release_year_from'='null'::jsonb and result->'release_year_to'='null'::jsonb
+        and (result->>'filter_completed_count')::integer=1)
+      or (result->>'outcome'='locked' and result->'genres'='["action"]'::jsonb
+        and (result->>'release_year_from')::integer=1900
+        and result->>'release_year_to'=result->>'allowed_release_year_max'
+        and (result->>'filter_completed_count')::integer=2),
+      'recovery returns one coherent old-or-new own-filter business snapshot');
+    perform pg_temp.require((result->>'required_voter_count')::integer=2
+      and recover_filter_writes=0 and recover_room_writes=0,
+      'overlapped recovery performs zero filter/room writes');
+    final_state:=pg_temp.remote_json(own,format(
+      'select jsonb_build_object(''count'',r.filter_completed_count,''rows'',count(f.*),''own'',count(f.*) filter(where f.room_member_id=%L)) from public.rooms r join public.room_members m on m.room_id=r.id left join public.participant_filters f on f.room_member_id=m.id where r.id=%L group by r.filter_completed_count',recovering_member,rid));
+    perform pg_temp.require(final_state=jsonb_build_object('count',2,'rows',2,'own',1),
+      'final recovery/submit state preserves exact row/count ownership');
+  exception when others then failure:=sqlerrm;end;
+
+  foreach name in array array[recoverer,submitter] loop begin
+    if name=any(coalesce(extensions.dblink_get_connections(),array[]::text[])) then
+      if extensions.dblink_is_busy(name)=1 then perform extensions.dblink_cancel_query(name);perform pg_temp.await_ready(name);
+        perform j from extensions.dblink_get_result(name,false) t(j jsonb);perform j from extensions.dblink_get_result(name,false) t(j jsonb);end if;
+      perform extensions.dblink_exec(name,'rollback');perform extensions.dblink_disconnect(name);end if;
+  exception when others then cleanup_failure:='client cleanup';end;end loop;
+  begin if own=any(coalesce(extensions.dblink_get_connections(),array[]::text[])) then
+    perform extensions.dblink_exec(own,'rollback');
+    perform extensions.dblink_exec(own,format(
+      'begin;delete from public.rooms where id=%L;delete from auth.users where id in(%L,%L);commit',rid,recovering_user,other_user));
+    perform extensions.dblink_disconnect(own);end if;
+  exception when others then cleanup_failure:='owner cleanup';end;
+  return next ok(failure is null,'recovery-vs-submit uses one coherent MVCC statement snapshot');
+  if failure is not null then return next diag(failure);end if;
+  return next ok(cleanup_failure is null and not(array[recoverer,submitter,own]&&coalesce(extensions.dblink_get_connections(),array[]::text[])),
+    'recovery-vs-submit exact fixture/backend cleanup');
+end;
+$trial$;
+
+select * from pg_temp.recovery_submit_snapshot_trial();
 select is((select count(*) from pg_stat_activity where application_name like 'filter_concurrency_%'),0::bigint,
   'no filter concurrency backend remains');
 select * from finish();

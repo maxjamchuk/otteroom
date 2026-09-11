@@ -610,3 +610,151 @@ Do not turn this planning document into evidence before commands actually run.
   2026-09-11 22:47:23 +05; the conservative T043 run-#2 resume time is
   2026-09-11 23:52:23 +05. Do not repeat C1 or any completed static/database/
   export gate when resuming run #2.
+
+### G4 repeatability complete — T043
+
+- On 2026-09-12, exact committed source
+  `05f56c6d852fb9acc0bf94f2e7ecd7c9e6b7dede` and the same cleanup-owning
+  Supabase stack were preserved from run #1 through the recovered allowance
+  window. No source, migration, C1 or completed G3 gate was rerun or changed.
+- Complete acceptance run #2 used fresh Playwright contexts with workers1,
+  retries0 and repeatEach1. All 36 cases passed with the identical
+  E47+G26+H9=82 identity inventory, scanner findings `[]`, no F discovery and
+  no candidate traffic/UI. The owned Playwright container was removed.
+- Repeatability is exactly C1=1 plus acceptance run #1=82 plus acceptance run
+  #2=82, for 165 identities across recovered windows. Actual cumulative R02
+  accounting through T043 is 287 attempts (the 205 recorded through T042 plus
+  run #2's 82); there was no manual attempt or 429.
+- Check-only R01 stability remained exact after the reviewed G3 check: SHA-256
+  `27743e7f37bd999e9c58c50f47f868783b48852cc7c2b9f81fa78b38f997c6e2`,
+  11,323 bytes, inode 671081, mtime 1789138679 and ctime 1789138680. No type
+  generation or write was run.
+- Latest signup was 2026-09-12 00:05:07 +05. The source stack then stopped and
+  no project or Playwright container remained. T044 requires a separate 83-
+  identity window, conservatively available at 2026-09-12 01:10:07 +05.
+
+### G4 exact-SHA fresh checkout complete — T044
+
+- On 2026-09-12, a no-local disposable clone at
+  `/tmp/otteroom-004-fresh.tpwtkR` checked out detached exact implementation
+  SHA `05f56c6d852fb9acc0bf94f2e7ecd7c9e6b7dede`. It received no source
+  worktree changes, environment, `node_modules`, Auth/browser sessions, caches
+  or Supabase state. The clone was never patched. Declared Node `v24.20.0`, npm
+  `11.19.0`, Supabase CLI `2.116.0` and Docker `28.5.1`; independent `npm ci`
+  installed 1,111 locked packages.
+- The clone-owned `otteroom-room-session` stack used its committed 5532x ports
+  and public-only generated `.env.local`. The unrelated preexisting `hrh`
+  stack on 5432x was neither used nor changed. An initial managed CLI start
+  completed only after applying the declared `DO_NOT_TRACK=1` environment;
+  this created no identity, changed no source/configuration and consumed no
+  browser attempt.
+- Clean reset applied all seven migrations. Both nonempty migration runners
+  passed: Feature 003 membership reported three preserved rooms/five synthetic
+  SQL users, and Participant Filters reported four preserved rooms/eight
+  members/eight synthetic SQL users. Both reported zero GoTrue signups, latest
+  reset/owned-fixture cleanup, filter count zero, candidate suppression and
+  generated types unchanged.
+- The required second clean latest reset passed. R01 used only
+  `npm run db:types:check`: PASS. Clone-local before/after SHA-256 and metadata
+  stayed `27743e7f37bd999e9c58c50f47f868783b48852cc7c2b9f81fa78b38f997c6e2`
+  and 11,323 bytes/inode 675632/mtime 1789157659/ctime 1789157659; no generation
+  or generated-type write occurred.
+- Lint and typecheck passed. Full client passed 30 suites/592 tests; full DB
+  passed 3 files/707 assertions. Web export produced four routes; Android and
+  iOS exports passed with 1,481 and 1,515 modules respectively.
+- Managed C1 passed its expected controlled diagnostic with one identity,
+  complete safe artifacts and scanner findings `[]`. The sole unfiltered
+  acceptance run then passed all 36 cases with workers1/retries0/repeatEach1,
+  E47+G26+H9=82 identities and scanner findings `[]`; no preliminary browser
+  suite, retry, manual attempt, F discovery, candidate traffic/UI or 429
+  occurred. Fresh-checkout Auth total was exactly 83; latest signup was
+  2026-09-12 01:32:17 +05. Repeatability plus fresh is exactly 165+83=248.
+- Detached clone status was clean and `git diff --check` passed. Its managed
+  Playwright runtime was removed, the clone-labeled Supabase stack stopped,
+  and no `otteroom-room-session` project or owned Playwright container
+  remained before disposal. The source `main` stayed at the reviewed SHA with
+  only the planned Feature 004 evidence files modified.
+
+### G4 final evidence and scope review — T045
+
+- Every task T001–T045 is checked in one unique sequential inventory and has
+  its required implementation, red/green, runtime or review receipt. G1, G2,
+  G3, same-source repeatability and exact-SHA fresh checkout are green on the
+  approved dependency path. Boundary commits remain
+  `32eaae91793111a295540219b7036a8ce8bb8e63` and
+  `05f56c6d852fb9acc0bf94f2e7ecd7c9e6b7dede`; both were pushed before this
+  deliberately uncommitted final evidence review.
+- Spec and task-matrix reconciliation is exact: 35/35 FR, 6/6 NFR, 14/14 SC
+  and 31/31 product scenarios. Browser evidence is E=24 cases/47 identities,
+  G=9/26 and H=3/9, exactly 36/82 per complete run; C1, R01 and R02 are all
+  represented by their executable receipts.
+- R02 actual cumulative accounting is 370 identities/attempts: 205 through
+  T042, repeatability run #2=82 and fresh checkout C1+acceptance=1+82. The
+  planned Phase 6 repeatability-plus-fresh block is exactly 165+83=248 across
+  recovered windows. No manual attempt or 429 occurred; `anonymous_users`
+  stayed 150 and no retry, limit increase, restart or reset evaded quota.
+- Recomputed SHA-256 values exactly match the T001 baseline for all six
+  historical migrations, Features 001–003 `spec.md`/`plan.md`/`tasks.md`, all
+  four candidate PNGs, `scripts/database-types.mjs` and the C1 capture test.
+  The baseline-to-reviewed-SHA migration diff contains only the additive
+  Feature 004 migration. Historical fixture/FK behavior remains preserved by
+  the nonempty migration and candidate-integrity receipts.
+- R01 has exactly one intentional generated-type write at T015. T016, G2, G3,
+  repeatability and fresh checkout were check-only; source generated types
+  remain SHA-256
+  `27743e7f37bd999e9c58c50f47f868783b48852cc7c2b9f81fa78b38f997c6e2`
+  with the recorded 11,323-byte source metadata unchanged.
+- Static scope review confirmed no direct participant-filter table grants or
+  policy, no filter-detail Realtime publication and exactly one rooms UPDATE
+  invalidation channel. Authenticated candidate EXECUTE remains revoked; the
+  normal route has no candidate import/call/card/retry, and acceptance observed
+  candidate traffic/UI zero. Frozen N/N remains the authoritative Feature 005
+  handoff, with no common-resolution, TMDB, candidate acquisition, swipe,
+  progression, match, provider, roster or dynamic-membership implementation.
+- Final format validation found exactly 45 checked sequential tasks, 35/6/14/
+  31 traceability rows and the reviewer requirements checklist 16/16 checked.
+  `git diff --check` and whitespace checks passed. No owned Supabase/Playwright
+  service or `/tmp/otteroom-004-fresh.*` clone remains. Exact source status is
+  `## main...origin/main` with only
+  `specs/004-participant-filters/quickstart.md` and
+  `specs/004-participant-filters/tasks.md` modified and uncommitted for
+  independent final review.
+
+### Independent-review blocker correction — recovery snapshot
+
+- On 2026-09-12, independent review of implementation parent
+  `05f56c6d852fb9acc0bf94f2e7ecd7c9e6b7dede` found that
+  `get_my_participant_filter` built its advertised coherent recovery result
+  with three successive SQL statements under the function's default VOLATILE,
+  READ COMMITTED behavior. A submit commit between the room/member read and
+  filter-count read could combine old `rooms.filter_completed_count` with a new
+  actual row count and falsely raise `Participant filter integrity failure`.
+  T045 was reopened; no roadmap or Feature 005 work was performed.
+- The recovery RPC now uses one PostgreSQL statement and therefore one MVCC
+  statement snapshot to read the room state/count/target, caller membership,
+  caller-owned filter row/presence and correlated actual submitted-voter count.
+  It takes no room row lock and performs no write. Its signature, outcomes,
+  nullability, own-only detail, foreign/missing mask, non-voter behavior and all
+  prior integrity checks are unchanged. Review of the other Feature 004 RPCs
+  found no second instance of this confirmed read-recovery defect.
+- Regression was added before the SQL fix. The red targeted run failed exactly
+  1/16 assertions on the old three-statement function shape. The deterministic
+  dblink trial uses independent authenticated READ COMMITTED recovery and submit
+  sessions, an observed `pg_blocking_pids`/ungranted relation-lock barrier and a
+  real final submit; it accepts only one coherent pre-commit `not_submitted` 1/2
+  or post-commit `locked` 2/2 own snapshot, proves recovery filter/room writes
+  `0/0`, submit writes `1/1`, exact final two-row/2-of-2 ownership and complete
+  fixture/backend cleanup. It uses no arbitrary sleep.
+- After the fix, a clean latest `npm run db:reset` applied all seven migrations.
+  The targeted concurrency file passed 16/16. Full `npm run db:test` passed
+  three files/710 assertions. Check-only `npm run db:types:check` passed; no
+  generation or generated-type write occurred. Lint/typecheck were not
+  applicable because the bounded change touches SQL/tests/evidence only and
+  changes no generated or TypeScript contract.
+- H02 was not rerun: the RPC can affect that browser recovery path, but at
+  2026-09-12 01:57 +05 only about 25 minutes had elapsed since the recorded
+  fresh-checkout latest signup at 01:32:17 +05, short of the conservative
+  recovered allowance window. No identity, quota probe, retry or 429 was
+  consumed. The existing H02 acceptance receipt remains applicable to the
+  unchanged observable contract; the new PostgreSQL regression is the
+  authoritative proof for the corrected snapshot interleaving.
