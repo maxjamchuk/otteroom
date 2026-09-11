@@ -12,8 +12,15 @@ type SafeInput = {
 };
 
 const membershipCases = new Map([
+  ['@membership G01 configured room invitations expose decoded QR', 'G01'],
+  ['@membership G02 room creation failures preserve configuration', 'G02'],
   ['@membership G03 three voting members assemble through link and code', 'G03'],
   ['@membership G04 non-voting creator observes three voters and stable candidate recovery', 'G04'],
+  ['@membership G05 decoded QR admission is idempotent', 'G05'],
+  ['@membership G06 non-voting creator and concurrent voters', 'G06'],
+  ['@membership G07 final slot capacity competition', 'G07'],
+  ['@membership G08 authorization and room isolation', 'G08'],
+  ['@membership G09 join failures and committed response loss', 'G09'],
 ]);
 
 function scenarioFor(title: unknown): string {

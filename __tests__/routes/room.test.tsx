@@ -1,9 +1,12 @@
 import { act, fireEvent, renderRouter, screen } from 'expo-router/testing-library';
 import { router } from 'expo-router';
 import { StrictMode, useEffect } from 'react';
+import { ScrollView } from 'react-native';
+import QRCode from 'react-native-qrcode-svg';
 import RoomRouteScreen from '../../app/room/[code]';
 const mockJoin = jest.fn(), mockEnsureCandidate = jest.fn();
 const candidate = { candidate_id: 'fixture-cardboard-comet', title: 'The Cardboard Comet', release_year: 2020, poster_key: 'cardboard-comet' };
+const encoder = jest.requireActual('qrcode') as { create: (value: string, options: { errorCorrectionLevel: string }) => unknown };
 jest.mock('../../src/candidates/service', () => ({ ensureRoomCandidate: (id: string) => mockEnsureCandidate(id) }));
 const mockRefetch = jest.fn(), mockBootstrap = jest.fn(), mockRemove = jest.fn();
 type TestChannel = { on: jest.Mock; subscribe: jest.Mock; status: (value: string) => void; update: () => void; system: (payload: unknown) => void };
@@ -39,6 +42,8 @@ it('recovers host by code after create navigation, not hidden result state', asy
   expect(screen.getByText('ABCDEF0123')).toBeVisible();
   expect(screen.getByText('Waiting for the voting group.')).toBeVisible();
   expect(screen.getByLabelText('Invitation link').props.children).toContain('/room/ABCDEF0123');
+  expect(screen.getByRole('image', { name: 'Room invitation QR code' })).toBeVisible();
+  expect(screen.UNSAFE_getByType(QRCode).props.value).toBe(screen.getByLabelText('Invitation link').props.children);
   expect(screen.queryByText(host.room_id)).toBeNull();
   expect(screen.queryByText('host')).toBeNull();
 });
@@ -57,6 +62,7 @@ it('renders authoritative host Ready on recovery', async () => {
   expect(screen.getByText('Ready')).toBeVisible();
   expect(screen.getByText('2 of 2 voters')).toBeVisible();
   expect(screen.queryByText('Waiting for the voting group.')).toBeNull();
+  expect(screen.UNSAFE_getByType(QRCode).props.value).toBe(screen.getByLabelText('Invitation link').props.children);
 });
 it('offers generic recovery without backend/identity details', async () => {
   mockJoin.mockRejectedValueOnce(new Error('private SQL and Auth UUID'));
@@ -152,6 +158,7 @@ it.each(['resolve', 'reject'])('invalidates the old room before pending %s can a
   await act(async () => { if (completion === 'resolve') resolve(host); else reject(new Error('old private failure')); });
   expect(screen.getByText('012345ABCD')).toBeVisible(); expect(screen.getByText('Ready')).toBeVisible();
   expect(screen.queryByText('ABCDEF0123')).toBeNull(); expect(screen.queryByText('Waiting')).toBeNull();
+  expect(screen.UNSAFE_getByType(QRCode).props.value).toContain('/room/012345ABCD');
   expect(screen.queryByRole('button', { name: 'Retry room' })).toBeNull();
 });
 it('hides accepted old projection immediately while new code is pending', async () => {
@@ -355,10 +362,31 @@ it.each(['joined', 'already_member'])('Waiting voter keeps invitation sharing af
   mockJoin.mockResolvedValue({...host,outcome,is_creator:false,is_voter:true,voter_count:2,required_voter_count:3});
   await mount();expect(screen.getByText('2 of 3 voters')).toBeVisible();expect(screen.getByText('Waiting')).toBeVisible();
   expect(screen.getByLabelText('Invitation link').props.children).toContain('/room/ABCDEF0123');
+  expect(screen.UNSAFE_getByType(QRCode).props.value).toBe(screen.getByLabelText('Invitation link').props.children);
   expect(mockEnsureCandidate).not.toHaveBeenCalled();
   mockRefetch.mockResolvedValue({id:host.room_id,code:host.room_code,state:'ready',voter_count:3,required_voter_count:3});
   await act(async()=>{channels[0].system({extension:'postgres_changes',status:'ok'});});
   expect(screen.getByText('3 of 3 voters')).toBeVisible();expect(screen.getByText('Ready')).toBeVisible();
   expect(screen.queryByLabelText('Invitation link')).toBeNull();
+  expect(screen.queryByRole('image', { name: 'Room invitation QR code' })).toBeNull();
   expect(mockJoin).toHaveBeenCalledTimes(1);expect(mockEnsureCandidate).toHaveBeenCalledTimes(1);
+});
+
+it('contains QR failure without changing room, invitation, membership or candidate acquisition', async () => {
+  const errors = jest.spyOn(console, 'error').mockImplementation(() => {});
+  jest.spyOn(encoder, 'create').mockImplementation(() => { throw new Error('private QR failure'); });
+  await mount();
+  const invitation = screen.getByLabelText('Invitation link').props.children;
+  expect(invitation).toContain('/room/ABCDEF0123');
+  expect(screen.getByText('Waiting')).toBeVisible();
+  expect(screen.getByText('1 of 2 voters')).toBeVisible();
+  expect(screen.getByText('QR code unavailable. Please try again.')).toBeVisible();
+  expect(screen.queryByRole('image', { name: 'Room invitation QR code' })).toBeNull();
+  expect(screen.UNSAFE_getByType(ScrollView).props.contentContainerStyle).toMatchObject({ flexGrow: 1, padding: 24 });
+  const roomCalls = mockJoin.mock.calls.length, candidateCalls = mockEnsureCandidate.mock.calls.length;
+  fireEvent.press(screen.getByRole('button', { name: 'Retry QR code' }));
+  expect(screen.getByLabelText('Invitation link').props.children).toBe(invitation);
+  expect(mockJoin).toHaveBeenCalledTimes(roomCalls);
+  expect(mockEnsureCandidate).toHaveBeenCalledTimes(candidateCalls);
+  expect(errors.mock.calls.some(call => call.some(value => String(value).includes('private QR failure')))).toBe(true);
 });

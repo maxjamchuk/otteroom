@@ -1094,3 +1094,149 @@ byte-identical; product decisions and approved architecture are unchanged.
 T001–T050 remain checked and T051–T067 unchecked. No commit, push, branch or
 Phase3 implementation was performed. This final receipt supersedes the pending
 review checkpoint while preserving its failure and quota evidence.
+
+### 2026-09-11 — Phase 3 G3 checkpoint: GREEN (T051–T064)
+
+The room route now renders the standalone local QR from the exact same
+`invitationLink(authoritativeRoomCode)` value as the selectable invitation text.
+Creators retain both after Ready; ordinary members can share them while Waiting.
+Route tests cover recovery, stale-route replacement, mobile scrolling and an
+isolated QR render failure/retry that preserves room/candidate state and adds zero
+room or candidate RPCs. The focused route suite passed **40/40**.
+
+The browser-only QR harness selects one visible labelled SVG, verifies positive
+viewport bounds and center hit-testing, accepts only bounded SVG geometry and
+definitions, removes the validated React Native root layout style, rasterizes the
+selected subtree through an in-memory Blob/canvas and independently decodes it
+with pinned jsQR. SVG is capped at64KiB and RGBA at512×512. Scripts,
+foreignObject, raster images, event handlers, external URLs/fonts and unknown
+content fail closed. Blob URLs and all pixel/markup buffers are revoked or cleared
+on every exit. It creates no screenshot, attachment, payload dump or persisted QR
+asset. Boundary/cleanup and final diagnostic metadata tests passed.
+
+Final discovery is **41 browser cases / 91 identities**: E/Auth24/47,
+F01–F08 8/18 and G01–G09 9/26. G01–G09 all passed on the final source, including
+four creator configurations with decoded visible QR, same-session configuration
+stability, idempotent decoded-target admission, voting/non-voting assembly,
+final-slot competition, ordinary-JWT isolation and recoverable/committed join
+failures. The unfiltered receipt reported every case passed, retries0, workers1,
+all context cleanup receipts and scanner findings0. C1 passed separately with its
+expected controlled negative probe and one identity; the final block was
+**92/92 signups/identities**.
+
+Development accounting retained every earlier partial run: two initial G01–G09
+attempts consumed21 each, a loader failure consumed0, focused G01 attempts
+consumed1+1, and the G02/G05/G06/G07 selection consumed11. The final C1+complete
+block consumed92. A stricter post-gate G02 authoring attempt failed safely with
+scanner enforcement and consumed1; its corrected rerun passed all six transport
+trials with scanner0 and consumed1. The final focused G01 validation rerun consumed
+the last1, for **150 signups/150 identities** in the active window. No429, rate
+change, automatic retry or quota-evading restart occurred.
+
+The complete G3 path passed npm ci, local start/env, a preparatory clean reset,
+the real nonempty migration cutover (**3 legacy rooms, 5 synthetic users,
+statistics=true, authenticated recovery=true, no reassignment, generated types
+unchanged**), its owned latest reset, then an independent clean reset and
+`db:types:check` only. Lint and typecheck passed. Client tests passed
+**24 suites / 521 tests** and pgTAP passed **922/922**. Web, iOS and Android
+exports passed; the web bundle contains the integrated QR implementation and all
+four original candidate PNGs are present in export output. Native evidence is
+module-bundle/export evidence only; no physical camera/scanner runtime was added.
+
+R01 remains check-only in Phase3. The established rooms-only Realtime channel,
+C1 policy, DB migrations/RPCs/generated types, Feature001/002 artifacts, product
+docs, dependency pins and four source PNGs are unchanged. There is no external
+QR/movie provider, stored QR asset, second channel or future product interaction.
+The final driver returned0 and removed the browser runtime and Supabase stack.
+T001–T064 are complete; T065–T067 remain unchecked. No commit or push was made.
+
+### 2026-09-11 — Phase 3 final barrier audit: quota-blocked continuation
+
+The G3 run above is green for its exact source, and subsequent focused G01 and
+G02 reruns are green after strengthening validation and the six creation
+transport trials. A final audit then found that G05/G06/G07 dispatched concurrent
+real joins but did not hold every outgoing request at an observable browser
+barrier before forwarding, as T057–T059 explicitly require. The shared harness
+now counts all arrivals, proves forwarded0 at the barrier, releases together and
+cleans every route. This latest harness change has passed typecheck but has not
+yet been executed against the real stack.
+
+R02 is the only remaining blocker: the final focused G01 consumed the 150th
+signup/identity in the current window. Running G05/G06/G07 now would knowingly
+cross `anonymous_users=150`, so no attempt or automatic429 retry was made. The
+first development group becomes conservatively eligible outside the harness
+after **2026-09-10 22:12 UTC**. T057–T059 and the final-source T064 checkpoint are
+therefore reopened; T051–T056 and T060–T063 retain successful evidence. Supabase
+and the browser runtime are stopped. This entry supersedes only the premature
+completion bookkeeping, not the recorded successful receipts.
+
+### 2026-09-11 — Strengthened admission barriers: GREEN (T057–T059)
+
+The outside-harness gate opened after22:12 UTC; the single targeted invocation
+started after22:15 UTC. G05, G06 and G07 passed once on the strengthened source
+through the normal safe runner with **10 signups/10 identities** (2+4+4), scanner
+findings0 and complete browser/Supabase cleanup. Each case observed every planned
+outgoing `join_room` request at the shared barrier, asserted forwarded0, released
+the gate once, and observed exactly the planned number forwarded. G05 produced
+joined/already_member for one subject and one membership increment; G06 admitted
+three distinct voters while preserving the creator's non-voting row; G07 produced
+exactly joined/full at the final slot and stable full/re-entry behavior. No429,
+automatic retry, rate/configuration change or quota-evading restart occurred.
+
+### 2026-09-11 — Final-source G3 checkpoint: GREEN (T064)
+
+The complete final-source checkpoint passed. npm ci and local start/env passed;
+a preparatory reset admitted the real nonempty migration proof, which preserved
+three legacy rooms and five synthetic users and reported `statistics=true`,
+authenticated recovery, no reassignment and generated types unchanged. Its owned
+latest reset and the independent clean reset passed. `db:types:check` alone
+reported the canonical artifact consistent; `npm run db:types` was not executed.
+
+Lint and typecheck passed. Full client validation passed **24 suites / 521 tests**;
+pgTAP passed **922/922**. Web, iOS and Android exports passed. The web bundle
+contains the integrated local QR implementation, native metadata exists, and all
+four original candidate posters are bundled. No camera/native scan dependency or
+external QR/movie service was introduced.
+
+The first Playwright image preparation attempt failed before Auth because of a
+transient Docker preparation/registry check and consumed zero identities. The
+already-present pinned image was verified locally; the next preparation passed.
+C1 then passed with A/B and the expected controlled C failure, one signup/identity,
+all required artifacts and scanner findings0. Unfiltered acceptance passed
+**41/41**: E/Auth24/24, F01–F08 8/8 and G01–G09 9/9, with **91 signups/91
+identities**, retries0, workers1, scanner0 and all cleanup receipts.
+
+The new quota window consumed **10** identities for the one targeted G05–G07 run
+plus **92** for C1 and complete acceptance, exactly **102 signups/102 identities**.
+No429, automatic retry, quota/configuration change or restart to evade quota
+occurred. Supabase and both Playwright runtimes were removed by their owning
+drivers. T001–T064 are complete and T065–T067 remain unchecked. No commit or push
+was made.
+
+### 2026-09-11 — Focused pre-commit review corrections: GREEN
+
+The focused review found that successful earlier cases did not fully prove five
+planned boundaries. The QR decoder now returns the independently decoded target,
+checks the SVG itself with opacity/CSS visibility, and its failure test clears a
+nonzero RGBA buffer. G05 now launches two same-session pages through that decoded
+target and verifies both authenticated subjects at the observed-before-forward
+barrier. G06 exercises the non-voting creator's QR/link/code, reload and real
+Realtime recovery before and after the three-voter barrier. G07 holds the sole
+candidate request while one Realtime membership UPDATE is counted, checks a
+strict-null full projection, then recovers all existing members. G08 adds own and
+foreign ID/code reads, foreign candidate non-disclosure, strict-full join and
+denied member/catalog mutations. G09 holds the committed upstream response until
+the owner snapshot proves membership, then verifies the retry's exact
+`already_member` result. The shared join barrier now validates JWT subjects and
+settles pending calls on every exit; G02's duplicate create path also observes
+both same-subject requests held with forwarded0 before release.
+
+Lint and typecheck passed. The affected client/config/route selection passed
+**3 suites / 94 tests**. One normal safe targeted browser invocation passed
+**G02/G05/G06/G07/G08/G09 6/6** with **18 signups/18 identities**, retries0,
+workers1, scanner findings0 and owned browser cleanup. G05/G06/G07 each observed
+all expected subjects before forwarding; G07 observed exactly one membership
+Realtime UPDATE while candidate assignment was held. The full 92-identity gate
+was not repeated because these changes are confined to the reviewed QR and G-case
+assertion harnesses; every affected browser case was rerun. The prior final G3
+receipt remains the complete inventory result, and T001–T064 remain complete.

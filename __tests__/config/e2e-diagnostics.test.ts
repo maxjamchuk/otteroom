@@ -25,6 +25,24 @@ const prelude = `
 `;
 
 describe('credential-safe diagnostics boundaries', () => {
+  it('rejects unsafe QR subtrees and clears every decoded RGBA buffer on failure', () => verify(prelude + `
+    const { assertSafeQrMarkup, decodeQrRgba } = await import('./e2e/support/qr-harness.ts');
+    assert.doesNotThrow(() => assertSafeQrMarkup('<svg width="240" height="240" viewBox="0 0 240 240"><rect x="0" y="0" width="240" height="240" fill="#fff"/><path d="M1 1h2v2z" fill="#000"/></svg>'));
+    for (const markup of [
+      '<svg><script>throw 1</script></svg>', '<svg><foreignObject/></svg>', '<svg><image href="data:image/png;base64,AA"/></svg>',
+      '<svg onload="bad()"><path d="M0 0"/></svg>', '<svg><text font-family="remote">x</text></svg>',
+      '<svg><path style="fill:url(https://remote.invalid/x)"/></svg>', '<svg><unknown/></svg>', '<svg>' + 'x'.repeat(65536) + '</svg>',
+    ]) assert.throws(() => assertSafeQrMarkup(markup), /E2E_SAFE_FAILURE/);
+    for (const dimensions of [[513, 1], [1, 513], [2, 2]]) {
+      const pixels = new Uint8ClampedArray(dimensions[0] * dimensions[1] * 4);
+      pixels.fill(255);
+      assert.throws(() => decodeQrRgba(pixels, dimensions[0], dimensions[1], 'https://example.invalid/room/ABCDEF0123'), /E2E_SAFE_FAILURE/);
+      assert.equal(pixels.every(value => value === 0), true);
+    }
+    const source = fs.readFileSync('e2e/support/qr-harness.ts', 'utf8');
+    for (const required of ['scrollIntoViewIfNeeded', 'checkVisibility', 'elementFromPoint', 'XMLSerializer', 'createObjectURL', 'revokeObjectURL', 'getImageData', 'jsQR']) assert.equal(source.includes(required), true);
+    for (const forbidden of ['screenshot(', 'attach(', 'writeFile']) assert.equal(source.includes(forbidden), false);
+  `));
   it('parallelizes only acceptance while keeping the security gate serial and capture off', () => verify(prelude + `
     const { default: config } = await import('./playwright.config.ts');
     assert.equal(config.fullyParallel, false); assert.equal(config.workers, 1);
@@ -360,7 +378,7 @@ it('explicitly discovers F01–F08 with fixed safe labels while rejecting future
   assert.equal(safeDiagnosticLocation('e2e/arbitrary.ts:12:3'), undefined);
   for (const file of ['scripts/run-e2e.mjs', 'e2e/support/safe-diagnostics.ts']) {
     const source = fs.readFileSync(file, 'utf8');
-    assert.equal(/acceptance[ -]N=72/.test(source), true);
+    assert.equal(/acceptance[ -]N=91/.test(source), true);
     assert.equal(source.includes('N=47'), false);
   }
   const runner = fs.readFileSync('scripts/run-e2e.mjs', 'utf8');
@@ -554,24 +572,27 @@ it('candidate traffic guards ignore unrelated runtime resources while rejecting 
 `));
 
 
-it('registers only the two reviewed membership titles and their exact safe source location', () => verify(prelude + `
+it('registers only the nine reviewed membership titles and their exact safe source locations', () => verify(prelude + `
   const { safeResult } = await import('./e2e/support/safe-reporter.ts');
   const { safeDiagnosticLocation } = await import('./e2e/support/sanitize-diagnostics.ts');
-  for (const title of ['@membership G03 three voting members assemble through link and code',
-    '@membership G04 non-voting creator observes three voters and stable candidate recovery']) {
+  for (const title of ['@membership G01 configured room invitations expose decoded QR',
+    '@membership G02 room creation failures preserve configuration',
+    '@membership G03 three voting members assemble through link and code',
+    '@membership G04 non-voting creator observes three voters and stable candidate recovery',
+    '@membership G05 decoded QR admission is idempotent', '@membership G06 non-voting creator and concurrent voters',
+    '@membership G07 final slot capacity competition', '@membership G08 authorization and room isolation',
+    '@membership G09 join failures and committed response loss']) {
     const result = safeResult({ title }, { status: 'passed' });
     assert.equal(result.scenario, 'membership'); assert.equal(result.browserCase, title.split(' ')[1]);
   }
-  for (const title of ['@membership G01 future', '@membership G02 future', '@membership G05 future',
-    '@membership G06 future', '@membership G07 future', '@membership G08 future', '@membership G09 future',
-    '@membership G03 arbitrary', '@membership G04 ' + sentinel()]) {
+  for (const title of ['@membership G00 future', '@membership G10 future', '@membership G01 arbitrary', '@membership G04 ' + sentinel()]) {
     const result = safeResult({ title }, { status: 'passed' });
     assert.equal(result.scenario, 'unclassified'); assert.equal(result.browserCase, 'none');
   }
   assert.equal(safeDiagnosticLocation('e2e/generalized-room-membership-qr.spec.ts:15:9'), 'e2e/generalized-room-membership-qr.spec.ts:15:9');
-  assert.equal(safeDiagnosticLocation('e2e/support/qr-harness.ts:15:9'), undefined);
+  assert.equal(safeDiagnosticLocation('e2e/support/qr-harness.ts:15:9'), 'e2e/support/qr-harness.ts:15:9');
   const runner = fs.readFileSync('scripts/run-e2e.mjs', 'utf8');
-  for (const label of ["'membership'", "'G03'", "'G04'"]) assert.equal(runner.includes(label), true);
+  for (const label of ["'membership'", ...Array.from({ length: 9 }, (_, i) => "'G0" + (i + 1) + "'")]) assert.equal(runner.includes(label), true);
 `));
 
 it.each([2, 3, 4])('candidate barriers require all %i independent callers and cleanup every held route', count => verify(prelude + `

@@ -4,6 +4,7 @@ import { Pressable, ScrollView, StyleSheet, Text } from 'react-native';
 import { CandidateCard } from '../../src/candidates/candidate-card';
 import { useRoomCandidate } from '../../src/candidates/use-room-candidate';
 import { invitationLink, parseRoomSegment } from '../../src/rooms/code';
+import { InvitationQr } from '../../src/rooms/invitation-qr';
 import { joinRoom } from '../../src/rooms/service';
 import { joinRoomState, joinErrorState, malformedInvitationState, type AcceptedRoomState } from '../../src/rooms/state';
 import { useRoomSubscription } from '../../src/rooms/use-room-subscription';
@@ -78,6 +79,7 @@ function AcceptedRoom({ initial }: { initial: AcceptedRoomState & { invitation?:
   // An accepted RPC is immediately visible, including intermediate Waiting counts.
   const state = room ?? initial;
   const candidate = useRoomCandidate(state);
+  const invitation = state.isCreator || state.state === 'waiting' ? initial.invitation : undefined;
   return <>
     <Text accessibilityRole="header" style={styles.title}>{state.title}</Text>
     <Text accessibilityLabel="Room code" selectable>{state.code}</Text>
@@ -86,7 +88,10 @@ function AcceptedRoom({ initial }: { initial: AcceptedRoomState & { invitation?:
       ? 'You created this room and are voting.'
       : 'You created this room and are not voting.'}</Text>}
     {state.state === 'waiting' && <Text>Waiting for the voting group.</Text>}
-    {(state.isCreator || state.state === 'waiting') && <Text accessibilityLabel="Invitation link" selectable>{initial.invitation}</Text>}
+    {invitation && <>
+      <Text accessibilityLabel="Invitation link" selectable>{invitation}</Text>
+      <InvitationQr value={invitation} />
+    </>}
     {error && <>
       <Text accessibilityLiveRegion="polite">Unable to synchronize this room. Please try again.</Text>
       <Pressable accessibilityRole="button" accessibilityLabel="Retry synchronization" disabled={retrying} onPress={retry}>
