@@ -1240,3 +1240,124 @@ Realtime UPDATE while candidate assignment was held. The full 92-identity gate
 was not repeated because these changes are confined to the reviewed QR and G-case
 assertion harnesses; every affected browser case was rerun. The prior final G3
 receipt remains the complete inventory result, and T001–T064 remain complete.
+
+### 2026-09-11 — Same-stack repeatability: GREEN (T065)
+
+T065 ran against exact committed source
+`43bedcf06cebf58f2654b9113eb190623d437d81` from one cleanup-owning driver. Two
+pre-driver environment attempts stopped before Supabase/Auth use: the first
+caught Node22 before validation, and the sandboxed retry reached a denied Docker
+socket after `npm ci`. Both consumed **0 signups/0 identities** and neither ran
+C1 or acceptance. The admitted driver used Node24.20.0/npm11.19.0 and retained
+the same source and Supabase stack through both complete acceptance runs.
+
+The normal run #1 block passed npm ci, local Supabase start/env and preparatory
+reset. The version-limited migration proof preserved **3 legacy rooms** and **5
+synthetic users**, with `statistics=true`, authenticated recovery, no
+reassignment, generated types unchanged and its owned latest reset complete.
+After an independent clean reset, `db:types:check` alone preserved canonical
+generated-type hash
+`fcd0b773b75e71bc74dfaddde2fd96ecf05e62f132eac0132ba2777891890cea` and
+metadata; `npm run db:types` was not run. Lint/typecheck, **24 client suites / 521
+tests**, **922/922 pgTAP**, and web/iOS/Android exports passed. The web bundle
+contained the integrated local QR implementation, and all four original posters
+were present in export output.
+
+C1 passed once with its A/B probes and expected controlled C failure, all six
+required artifacts, scanner findings0 and **1 signup/1 identity**. Acceptance run
+#1 started at **2026-09-11 08:26:00 UTC** and ended at **08:30:10 UTC**. It passed
+**41/41** cases (E/Auth24, F01–F08 8 and G01–G09 9) with **91 signups/91
+identities**, workers1, retries0, complete probe artifacts and scanner findings0.
+The first window therefore consumed exactly **92 signups/92 identities**.
+
+The driver then waited outside every test harness from **08:30:10 UTC** until
+release at **09:36:58 UTC**, preserving the same running Supabase stack and
+unchanged source. No process waited inside Playwright. The permitted suite-level
+clean reset and `db:types:check` passed on that same stack; neither was used to
+claim quota recovery. Acceptance run #2 started at **09:37:45 UTC** and ended at
+**09:41:55 UTC** using fresh browser contexts. It again passed **41/41** cases
+with the identical E/Auth, F01–F08 and G01–G09 behavior, **91 signups/91
+identities**, workers1, retries0, complete probe artifacts, `innerExit=0` and
+scanner findings0.
+
+Total T065 R02 accounting is exactly **183 signups/183 identities**: C1 once plus
+two complete acceptance runs (**1+91+91**). No429, automatic retry, anonymous-user
+rate change, quota-evading restart/reset, or preliminary acceptance run occurred.
+Each Playwright runtime was removed after its owning invocation. After run #2 the
+cleanup-owning driver stopped the preserved Supabase stack, reported
+`supabase:stop` finished and exited0. T001–T065 are complete; T066–T067 remain
+unchecked. No commit or push was made.
+
+### 2026-09-11 — Fresh checkout: GREEN (T066)
+
+T066 began only after a conservative full signup-free hour from T065's final
+counted attempt. It ran from **11:09:51 UTC** through **11:25:44 UTC** in the
+disposable clone `/tmp/otteroom-003-fresh.xZhrwc/repo`, sourced locally without
+hardlinks from `/home/maks/work/otteroom` and detached at exact reviewed SHA
+`43bedcf06cebf58f2654b9113eb190623d437d81`. Initial clone status was clean and
+it contained no inherited node_modules, environment, test results, exports,
+Supabase volume or browser state. Node24.20.0/npm11.19.0 were used.
+
+The approved normal path passed `npm ci`, local Supabase start/env and the
+preparatory reset. The version-limited migration proof preserved **3 legacy
+rooms** and **5 synthetic users**, found post-cutover room-state statistics,
+proved authenticated recovery and no candidate reassignment, changed no
+generated types and completed its owned latest reset. The independent latest
+reset then passed. `db:types:check` alone preserved canonical SHA-256
+`fcd0b773b75e71bc74dfaddde2fd96ecf05e62f132eac0132ba2777891890cea` and exact
+clone metadata `inode673027/size8442/mtime1789124994/ctime1789124994`; `db:types`
+was not run.
+
+Lint/typecheck passed. Full client validation passed **24 suites / 521 tests**
+and full database validation passed **922/922 pgTAP**. Web, iOS and Android
+exports passed; all four original poster bytes were found in export output,
+native metadata was present and the web bundle contained the integrated QR
+surface. Managed Playwright preparation passed.
+
+C1 passed with A/B and its expected controlled C failure, all six required
+artifacts, scanner findings0 and **1 signup/1 identity**. Unfiltered acceptance
+passed **41/41** cases: E/Auth **24/24** using47 identities, F01–F08 **8/8**
+using18, and G01–G09 **9/9** using26. It used workers1, retries0, complete probe
+artifacts, `innerExit=0`, **91 signups/91 identities** and scanner findings0.
+T066 therefore consumed exactly **92 signups/92 identities** in its separately
+admitted window; no429, automatic retry, quota/configuration change or
+quota-evading restart/reset occurred.
+
+The clone remained unpatched and clean through `git diff --check` and exact
+status. Both managed browser runtimes were removed. The cleanup-owning driver
+stopped the fresh Supabase stack, deleted only
+`/tmp/otteroom-003-fresh.xZhrwc`, verified it absent and exited0. Source `main`
+was untouched apart from these Phase4 evidence documents. T001–T066 are complete;
+T067 remains unchecked. No commit or push was made.
+
+### 2026-09-11 — Feature 003 final closure: PHASE 4 GREEN (T067)
+
+The accumulated G1–G4 receipts back all **35/35 FR**, **4/4 NFR**, **12/12 SC**,
+**36/36 product acceptance scenarios** and **3/3 P1 stories**. Final browser
+coverage is E/Auth24/24, F01–F08 **8/8** and G01–G09 **9/9**; C1, R01 and R02
+are backed by their executable receipts. G4 ran the same reviewed implementation
+SHA for same-stack repeatability and independent fresh-checkout validation.
+T001–T067 each have executable evidence and all67 tasks are checked.
+
+R02 G4 accounting is exact: T065 used **183 identities** (`1+91+91`) across
+recovered windows and T066 used **92 identities** (`1+91`) in a separately
+admitted window, for **275 identities** total. There was no429, automatic retry,
+rate-limit increase or quota-evading restart/reset. R01 remained check-only in
+both G4 tasks and retained canonical generated-type bytes and metadata.
+
+Diff-based protection against the T001 baseline confirmed Feature001 and
+Feature002 specifications, both product documents, all five historical
+migrations and all four original PNG posters unchanged. Runtime source contains
+no host/guest authority and exactly one Realtime channel: the existing filtered
+`public.rooms` UPDATE invalidation/refetch channel. Changed paths and dependency
+inspection found no Feature004+ scope, camera/scanner, external movie provider,
+Presence, Broadcast or second channel.
+
+Final ownership checks found no `/tmp/otteroom-003-fresh.*` directory, Otteroom
+Supabase/Playwright container or matching validation process. The listeners on
+the standard local Supabase ports belong to the pre-existing unrelated `hrh`
+stack and were not touched. `git diff --check` and tracked/new-file whitespace
+checks passed; there are no untracked files. Exact source status is `main` at
+`origin/main`, with only this Phase4 evidence in
+`specs/003-generalized-room-membership-qr/quickstart.md` and `tasks.md` modified.
+No commit or push was made.
