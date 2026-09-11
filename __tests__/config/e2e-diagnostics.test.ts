@@ -25,6 +25,41 @@ const prelude = `
 `;
 
 describe('credential-safe diagnostics boundaries', () => {
+  it('validates only the exact safe participant-filter RPC projection', () => verify(prelude + `
+    const { validateOwnFilterResult } = await import('./e2e/support/filter-harness.ts');
+    const saved = [{ outcome: 'saved', genres: ['action', 'comedy'], release_year_from: 1990,
+      release_year_to: 2026, filter_completed_count: 1, required_voter_count: 2,
+      allowed_release_year_max: 2026 }];
+    assert.deepEqual(validateOwnFilterResult(saved), saved[0]);
+    for (const bad of [[], [{ ...saved[0], room_id: randomUUID() }], [{ ...saved[0], genres: ['comedy', 'action'] }],
+      [{ ...saved[0], outcome: 'not_ready', genres: ['action'] }]]) assert.throws(() => validateOwnFilterResult(bad), /E2E_SAFE_FAILURE/);
+  `));
+  it('cleans participant-filter abort, loss, hold and overlap barriers without retaining payloads', () => verify(prelude + `
+    const { installPreCommitFailure, installCommittedResponseLoss, installSubmitHold, installSubmitOverlap } =
+      await import('./e2e/support/filter-harness.ts');
+    const makePage = () => ({ routes: [], async route(match, handler) { this.routes.push({ match, handler }); },
+      async unroute(match, handler) { this.routes = this.routes.filter(item => item.match !== match || item.handler !== handler); } });
+    const body = { p_room_id: randomUUID(), p_genres: ['action'], p_release_year_from: 1900, p_release_year_to: 2026 };
+    const request = () => ({ postDataJSON: () => body });
+    const first = makePage(), abort = await installPreCommitFailure(first); let aborted = 0;
+    await first.routes[0].handler({ abort: async () => { aborted++; } });
+    assert.equal(abort.calls(), 1); await abort.close(); assert.equal(first.routes.length, 0); assert.equal(aborted, 1);
+    const loss = await installCommittedResponseLoss(first); let disposed = 0;
+    await first.routes[0].handler({ fetch: async options => { assert.deepEqual(options, { maxRetries: 0, maxRedirects: 0, timeout: 15000 });
+      return { ok: () => true, json: async () => [{ outcome: 'saved', genres: ['action'], release_year_from: 1900,
+        release_year_to: 2026, filter_completed_count: 1, required_voter_count: 2, allowed_release_year_max: 2026 }],
+        dispose: async () => { disposed++; } }; }, abort: async () => { aborted++; } });
+    assert.equal(loss.calls(), 1); assert.equal(loss.result().outcome, 'saved'); assert.equal(disposed, 1);
+    await loss.close(); assert.equal(first.routes.length, 0);
+    const held = await installSubmitHold(first); let continued = 0;
+    const heldCall = first.routes[0].handler({ continue: async () => { continued++; } }); await held.wait();
+    assert.equal(held.calls(), 1); held.release(); await heldCall; await held.close(); assert.equal(first.routes.length, 0); assert.equal(continued, 1);
+    const pages = [makePage(), makePage()], overlap = await installSubmitOverlap(pages);
+    const calls = pages.map(page => page.routes[0].handler({ request, continue: async () => { continued++; }, abort: async () => { aborted++; } }));
+    await overlap.wait(); overlap.release(); await Promise.all(calls); await overlap.close();
+    assert.equal(pages.every(page => page.routes.length === 0), true); assert.equal(continued, 3);
+    assert.equal(JSON.stringify(overlap).includes(body.p_room_id), false);
+  `));
   it('rejects unsafe QR subtrees and clears every decoded RGBA buffer on failure', () => verify(prelude + `
     const { assertSafeQrMarkup, decodeQrRgba } = await import('./e2e/support/qr-harness.ts');
     assert.doesNotThrow(() => assertSafeQrMarkup('<svg width="240" height="240" viewBox="0 0 240 240"><rect x="0" y="0" width="240" height="240" fill="#fff"/><path d="M1 1h2v2z" fill="#000"/></svg>'));
@@ -355,35 +390,38 @@ it('ordinary safeBody final check inspects image-bearing text, fails credentials
   assert.equal(closed, 5); assert.equal(registry.size, 0);
 `));
 
-it('explicitly discovers F01–F08 with fixed safe labels while rejecting future or arbitrary labels', () => verify(prelude + `
+it('explicitly discovers H01–H03 with fixed safe labels while excluding candidate and arbitrary labels', () => verify(prelude + `
   const { default: config } = await import('./playwright.config.ts');
   const { safeResult } = await import('./e2e/support/safe-reporter.ts');
   const { safeDiagnosticLocation } = await import('./e2e/support/sanitize-diagnostics.ts');
   assert.deepEqual(config.projects.find(p => p.name === 'acceptance').testMatch,
-    ['room-session.spec.ts', 'first-movie-candidate.spec.ts', 'generalized-room-membership-qr.spec.ts']);
-  const f01 = safeResult({ title: '@candidate F01 shared first candidate', repeatEachIndex: 0 },
-    { status: 'passed', error: { message: 'E2E_SAFE_FAILURE at e2e/first-movie-candidate.spec.ts:12:3' } });
-  assert.equal(f01.scenario, 'candidate'); assert.equal(f01.browserCase, 'F01');
-  for (let i = 1; i <= 8; i++) {
-    const label = 'F0' + i, result = safeResult({ title: '@candidate ' + label + ' fixed case' }, { status: 'passed' });
-    assert.equal(result.scenario, 'candidate'); assert.equal(result.browserCase, label);
+    ['room-session.spec.ts', 'generalized-room-membership-qr.spec.ts', 'participant-filters.spec.ts']);
+  const titles = ['@filters H01 validates private owned filters and editable saved state',
+    '@filters H02 recovers filters through failures and lost acknowledgements',
+    '@filters H03 serializes final completion and freezes every filter'];
+  for (const title of titles) {
+    const result = safeResult({ title, repeatEachIndex: 0 }, { status: 'passed',
+      error: { message: 'E2E_SAFE_FAILURE at e2e/participant-filters.spec.ts:12:3' } });
+    assert.equal(result.scenario, 'filters'); assert.equal(result.browserCase, title.split(' ')[1]);
+    assert.equal(result.location, 'e2e/participant-filters.spec.ts:12:3');
   }
-  assert.equal(f01.location, 'e2e/first-movie-candidate.spec.ts:12:3');
-  for (const file of ['first-movie-candidate.spec', 'support/candidate-harness', 'support/room-harness'])
+  for (const file of ['participant-filters.spec', 'support/filter-harness', 'support/room-harness'])
     assert.equal(safeDiagnosticLocation('E2E_SAFE_FAILURE at e2e/' + file + '.ts:12:3'), 'e2e/' + file + '.ts:12:3');
-  for (const title of ['@candidate F00 future', '@candidate F09 future', '@candidate F080 invalid', '@candidate ' + sentinel()]) {
+  for (const title of ['@filters H00 future', '@filters H04 future', '@candidate F01 retired', '@filters ' + sentinel()]) {
     const result = safeResult({ title }, { status: 'failed' });
     assert.equal(result.scenario, 'unclassified'); assert.equal(result.browserCase, 'none');
   }
   assert.equal(safeDiagnosticLocation('e2e/arbitrary.ts:12:3'), undefined);
   for (const file of ['scripts/run-e2e.mjs', 'e2e/support/safe-diagnostics.ts']) {
     const source = fs.readFileSync(file, 'utf8');
-    assert.equal(/acceptance[ -]N=91/.test(source), true);
+    assert.equal(/acceptance[ -]N=82/.test(source), true);
     assert.equal(source.includes('N=47'), false);
   }
   const runner = fs.readFileSync('scripts/run-e2e.mjs', 'utf8');
-  assert.equal(runner.includes("'F01'"), true);
-  assert.equal(runner.includes("'candidate'"), true);
+  assert.equal(runner.includes("'H01'"), true);
+  assert.equal(runner.includes("'filters'"), true);
+  assert.equal(runner.includes("'F01'"), false);
+  assert.equal(runner.includes("'candidate'"), false);
 `));
 
 const candidatePrelude = prelude + `
@@ -391,7 +429,7 @@ const candidatePrelude = prelude + `
   import { candidateHarness } from './e2e/support/candidate-harness.ts';
   process.env.EXPO_PUBLIC_SUPABASE_URL = 'http://127.0.0.1:55321';
   const api = { origin: process.env.EXPO_PUBLIC_SUPABASE_URL, publicKey: 'synthetic-public' };
-  const room = { id: '11111111-1111-4111-8111-111111111111', code: 'ABCDEF0123', state: 'ready', voter_count: 2, required_voter_count: 2 };
+  const room = { id: '11111111-1111-4111-8111-111111111111', code: 'ABCDEF0123', state: 'ready', voter_count: 2, required_voter_count: 2, filter_completed_count: 0 };
   const ids = [randomUUID(), randomUUID()];
   const pages = ids.map(() => Object.assign(new EventEmitter(), {
     routes: [], addInitScript: async () => {},
@@ -497,10 +535,10 @@ it.each(['valid', 'missing-commit', 'upstream-failure'])('commit-loss ordering f
   const trial = '${trial}', events = [], row = { ...room, creator_user_id: ids[0],
     movie_candidate_id: null, creation_request_id: randomUUID(), created_at: 'fixed', updated_at: 'fixed' };
   const members = ids.map(user_id => ({ id: randomUUID(), room_id: room.id, user_id, is_voter: true, joined_at: 'fixed' }));
-  const before = { row, members, xmin: '10' };
+  const before = { row, members, filters: [], xmin: '10' };
   cp.spawnSync = () => {
     events.push('snapshot');
-    return { status: 0, stdout: JSON.stringify([{ row: { ...row, movie_candidate_id: trial === 'missing-commit' ? null : 'fixture-cardboard-comet' }, members, xmin: '11' }]) };
+    return { status: 0, stdout: JSON.stringify([{ row: { ...row, movie_candidate_id: trial === 'missing-commit' ? null : 'fixture-cardboard-comet' }, members, filters: [], xmin: '11' }]) };
   }; syncBuiltinESMExports();
   h.configureInitial(['commit-loss', 'commit-loss']);
   const send = index => {
@@ -578,7 +616,7 @@ it('registers only the nine reviewed membership titles and their exact safe sour
   for (const title of ['@membership G01 configured room invitations expose decoded QR',
     '@membership G02 room creation failures preserve configuration',
     '@membership G03 three voting members assemble through link and code',
-    '@membership G04 non-voting creator observes three voters and stable candidate recovery',
+    '@membership G04 non-voting creator observes voter filter progress',
     '@membership G05 decoded QR admission is idempotent', '@membership G06 non-voting creator and concurrent voters',
     '@membership G07 final slot capacity competition', '@membership G08 authorization and room isolation',
     '@membership G09 join failures and committed response loss']) {
@@ -609,7 +647,7 @@ it.each([2, 3, 4])('candidate barriers require all %i independent callers and cl
     await assert.rejects(candidateHarness(invalid, 'http://127.0.0.1:8081'));
   const h = await candidateHarness(participants, 'http://127.0.0.1:8081');
   let forwarded = 0, aborted = 0;
-  const ids = pages.map(() => randomUUID()), room = { id: randomUUID(), code: 'ABCDEF0123', state: 'ready', voter_count: 3, required_voter_count: 3 };
+  const ids = pages.map(() => randomUUID()), room = { id: randomUUID(), code: 'ABCDEF0123', state: 'ready', voter_count: 3, required_voter_count: 3, filter_completed_count: 0 };
   const api = { origin: process.env.EXPO_PUBLIC_SUPABASE_URL, publicKey: 'synthetic-public' };
   try {
     assert.throws(() => h.bind(room, ids.slice(1), api)); h.bind(room, ids, api);
@@ -640,13 +678,13 @@ it('Realtime dispatch accounting distinguishes a late prior response from a new 
     await connect(browser);
     serverMessage(JSON.stringify([null, null, 'realtime:room:' + id, 'system',
       { extension: 'postgres_changes', status: 'ok', message: 'Subscribed to PostgreSQL' }]));
-    const url = 'http://127.0.0.1:55321/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count&id=eq.' + id;
+    const url = 'http://127.0.0.1:55321/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count&id=eq.' + id;
     const request = { url: () => url }; page.emit('request', request);
     const delayed = new Promise(resolve => { finish = resolve; });
     page.emit('response', { request: () => request, url: () => url, ok: () => true, body: async () => Buffer.from(JSON.stringify(await delayed)) });
     assert.equal(transport.stats.readRequests, 1); assert.equal(transport.stats.reads, 0);
     const before = { ...transport.stats };
-    finish([{ id, code: 'ABCDEF0123', state: 'waiting', voter_count: 2, required_voter_count: 3 }]);
+    finish([{ id, code: 'ABCDEF0123', state: 'waiting', voter_count: 2, required_voter_count: 3, filter_completed_count: 0 }]);
     await transport.wait('reads', 1);
     assert.equal(transport.stats.readRequests, before.readRequests);
     assert.notEqual(transport.stats.reads, before.reads);
@@ -669,7 +707,7 @@ const realtimePrelude = prelude + `
   const system = JSON.stringify([null, null, 'realtime:room:' + id, 'system',
     { extension: 'postgres_changes', status: 'ok', message: 'Subscribed to PostgreSQL' }]);
   serverMessage(system);
-  const url = 'http://127.0.0.1:55321/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count&id=eq.' + id;
+  const url = 'http://127.0.0.1:55321/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count&id=eq.' + id;
   const request = { url: () => url };
   const turn = () => new Promise(resolve => setImmediate(resolve));
 `;
@@ -714,7 +752,7 @@ it.each(['retired-body', 'active-body', 'retired-malformed', 'retired-valid'])('
     if ('${trial}'.startsWith('retired')) page.emit('framenavigated', { parentFrame: () => null });
     if ('${trial}'.endsWith('body')) reject(Error('synthetic unavailable body'));
     else finish(Buffer.from('${trial}' === 'retired-malformed' ? '{}' : JSON.stringify([
-      { id, code: 'ABCDEF0123', state: 'waiting', voter_count: 2, required_voter_count: 3 }])));
+      { id, code: 'ABCDEF0123', state: 'waiting', voter_count: 2, required_voter_count: 3, filter_completed_count: 0 }])));
     await turn();
     if (['active-body', 'retired-malformed'].includes('${trial}')) assert.throws(() => transport.assertHealthy());
     else {

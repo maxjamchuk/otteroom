@@ -1,13 +1,13 @@
 import { expect, type Page, type Route } from '@playwright/test';
 import { test, safeBody, type SafeDiagnostics } from './support/safe-diagnostics';
 import { createWaiting, startHost, ownParticipant, withParticipants, realtimeBarrier, assertAccepted,
-  assertReady, committedRoomSnapshot, createWaitingWithSession, ownRooms, configureCreation, type RoomProjection, type PublicApi } from './support/room-harness';
-import { candidateHarness, firstCandidate } from './support/candidate-harness';
+  assertReady, committedRoomSnapshot, createWaitingWithSession, ownRooms, configureCreation, observeCandidateRpcZero,
+  type RoomProjection, type PublicApi } from './support/room-harness';
+import { assertFilterProgress, recoverOwnFilter, submitOwnFilter } from './support/filter-harness';
 import { verifyInvitationQr } from './support/qr-harness';
 
 export const membershipAnonymousBudget = Object.freeze({ G01: 1, G02: 1, G03: 3, G04: 4, G05: 2, G06: 4, G07: 4, G08: 4, G09: 3 });
 type Transport = Awaited<ReturnType<typeof realtimeBarrier>>;
-type Candidates = Awaited<ReturnType<typeof candidateHarness>>;
 const member = { isCreator: false, isVoter: true };
 const joinResponse = (d: { page: Page }) => d.page.waitForResponse(r => new URL(r.url()).pathname === '/rest/v1/rpc/join_room');
 
@@ -33,24 +33,20 @@ async function admit(d: SafeDiagnostics, room: RoomProjection, invitation: strin
 function stable(room: RoomProjection, snapshot: ReturnType<typeof committedRoomSnapshot>) {
   expect(JSON.stringify(committedRoomSnapshot(room)) === JSON.stringify(snapshot)).toBe(true);
 }
-async function displays(c: Candidates, size: number) {
-  const sources: string[] = [];
-  for (let i = 0; i < size; i++) sources.push(await c.assertDisplay(i));
-  expect(new Set(sources).size === 1).toBe(true); return sources[0];
-}
 async function nextRoomRead(d: SafeDiagnostics, room: RoomProjection, count: number) {
   const request = await d.page.waitForRequest(request => {
     const url = new URL(request.url());
     return url.pathname === '/rest/v1/rooms' && url.searchParams.get('id') === `eq.${room.id}` &&
-      url.searchParams.get('select')?.replaceAll(' ', '') === 'id,code,state,voter_count,required_voter_count';
+      url.searchParams.get('select')?.replaceAll(' ', '') === 'id,code,state,voter_count,required_voter_count,filter_completed_count';
   });
   const response = await request.response();
   expect(response?.ok() === true && await response.finished() === null).toBe(true);
   const rows = await response!.json();
   expect(Array.isArray(rows) && rows.length === 1 &&
-    Object.keys(rows[0]).sort().join(',') === 'code,id,required_voter_count,state,voter_count' &&
+    Object.keys(rows[0]).sort().join(',') === 'code,filter_completed_count,id,required_voter_count,state,voter_count' &&
     rows[0].id === room.id && rows[0].code === room.code && rows[0].voter_count === count &&
-    rows[0].required_voter_count === 3 && rows[0].state === (count === 3 ? 'ready' : 'waiting')).toBe(true);
+    rows[0].required_voter_count === 3 && Number.isInteger(rows[0].filter_completed_count) &&
+    rows[0].state === (count === 3 ? 'ready' : 'waiting')).toBe(true);
 }
 async function reload(d: SafeDiagnostics, room: RoomProjection, creator: boolean, votes: boolean, count: number, transport?: Transport) {
   const held = transport?.stats.readyHeld ?? 0;
@@ -82,9 +78,10 @@ async function reenter(d: SafeDiagnostics, api: PublicApi, room: RoomProjection,
     return (await Promise.all((await Promise.all([send(), send()])).map(async response => {
       const rows = await response.json(), row = rows?.[0];
       return response.ok && Array.isArray(rows) && rows.length === 1 && row &&
-        Object.keys(row).sort().join(',') === 'is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
+        Object.keys(row).sort().join(',') === 'filter_completed_count,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
         row.outcome === 'already_member' && row.room_id === room.id && row.room_code === room.code && row.room_state === 'ready' &&
-        row.is_creator === creator && row.is_voter === votes && row.voter_count === 3 && row.required_voter_count === 3;
+        row.is_creator === creator && row.is_voter === votes && row.voter_count === 3 && row.required_voter_count === 3 &&
+        Number.isInteger(row.filter_completed_count);
     }))).every(Boolean);
   }, { api, room, creator, votes });
   expect(valid).toBe(true);
@@ -103,8 +100,8 @@ async function reconnect(d: SafeDiagnostics, transport: Transport) {
   await expect(d.page.getByText('Unable to synchronize this room. Please try again.', { exact: true })).toHaveCount(0);
   expect(transport.stats.joins === joins).toBe(true);
 }
-async function cleanup(c: Candidates, transports: Transport[]) {
-  const results = await Promise.allSettled([c.close(), ...transports.map(t => t.close())]);
+async function cleanup(transports: Transport[]) {
+  const results = await Promise.allSettled(transports.map(t => t.close()));
   if (results.some(r => r.status === 'rejected')) throw new Error('E2E_SAFE_FAILURE');
 }
 
@@ -123,8 +120,8 @@ async function directJoin(page: Page, api: PublicApi, code: string) {
 }
 
 function isStrictFull(row: Record<string, unknown> | undefined): boolean {
-  return !!row && Object.keys(row).sort().join(',') === 'is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
-    row.outcome === 'full' && ['is_creator', 'is_voter', 'required_voter_count', 'room_code', 'room_id', 'room_state', 'voter_count']
+  return !!row && Object.keys(row).sort().join(',') === 'filter_completed_count,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
+    row.outcome === 'full' && ['filter_completed_count', 'is_creator', 'is_voter', 'required_voter_count', 'room_code', 'room_id', 'room_state', 'voter_count']
       .every(key => row[key] === null);
 }
 
@@ -243,7 +240,8 @@ test('@membership G02 room creation failures preserve configuration', async ({ d
                   const rows = await response.json(), row = rows?.[0];
                   if (!response.ok() || !row?.room_id || !row?.room_code) throw new Error('E2E_SAFE_FAILURE');
                   committed = committedRoomSnapshot({ id: row.room_id, code: row.room_code, state: 'waiting',
-                    voter_count: Number(configurations[index].creatorIsVoter), required_voter_count: configurations[index].requiredVoterCount });
+                    voter_count: Number(configurations[index].creatorIsVoter), required_voter_count: configurations[index].requiredVoterCount,
+                    filter_completed_count: 0 });
                 } finally { await response.dispose(); }
                 await route.abort('failed');
               } catch { interceptionFailed = true; await route.abort('failed').catch(() => {}); }
@@ -313,8 +311,7 @@ test('@membership G02 room creation failures preserve configuration', async ({ d
 test('@membership G03 three voting members assemble through link and code', async ({ diagnostics, browser, baseURL, viewport }, info) => {
   test.setTimeout(90000);
   await safeBody(diagnostics, () => withParticipants(browser, { baseURL, viewport }, info, 2, async ([middle, last]) => {
-    const group = [diagnostics, middle, last], c = await candidateHarness(group, baseURL!);
-    c.limitAutomatic([2, 2, 1]);
+    const group = [diagnostics, middle, last];
     const creatorTransport = await realtimeBarrier(diagnostics.page), middleTransport = await realtimeBarrier(middle.page);
     let stage = 'setup';
     try {
@@ -322,8 +319,8 @@ test('@membership G03 three voting members assemble through link and code', asyn
       await creatorTransport.wait('readiness', 1); await creatorTransport.wait('reads', 1);
       for (const voter of [middle, last]) await startHost(voter.page, voter);
       const ids = [participant, await ownParticipant(middle.page), await ownParticipant(last.page)];
-      c.bind(room, ids, api); await occupancy(diagnostics, 1);
-      await c.probe(0, 'not_ready');
+      await occupancy(diagnostics, 1);
+      expect((await recoverOwnFilter(diagnostics.page, api, room)).outcome === 'not_ready').toBe(true);
       await admit(middle, room, invitation, 2); await occupancy(diagnostics, 2);
       await creatorTransport.wait('updates', 1); await middleTransport.wait('reads', 1);
       stage = 'waiting-reload';
@@ -334,7 +331,6 @@ test('@membership G03 three voting members assemble through link and code', asyn
       await expect(middle.page.getByText('Unable to synchronize this room. Please try again.', { exact: true })).toBeVisible();
       stable(room, before);
       const transportBefore = { ...middleTransport.stats };
-      expect(c.stats.every(s => s.automatic === 0)).toBe(true);
       stage = 'final-admission';
       await admit(last, room, invitation, 3, true); await occupancy(diagnostics, 3); await occupancy(middle, 2);
       await creatorTransport.wait('updates', 2);
@@ -346,106 +342,99 @@ test('@membership G03 three voting members assemble through link and code', asyn
       const completed = middleTransport.stats.reads, refetched = nextRoomRead(middle, room, 3);
       middleTransport.releaseReadiness(); await refetched; await middleTransport.wait('readRequests', transportBefore.readRequests + 1);
       await middleTransport.wait('reads', completed + 1);
-      await occupancy(middle, 3); await c.held();
+      await occupancy(middle, 3);
       const ready = committedRoomSnapshot(room);
       expect(ready.row.state === 'ready' && ready.row.voter_count === 3 && ready.row.required_voter_count === 3 &&
         ready.row.movie_candidate_id === null && ready.members.length === 3 && ready.members.every(m => m.is_voter) &&
-        creatorTransport.stats.updates === 2 && c.stats.every(s => s.held === 1 && s.forwarded === 0)).toBe(true);
+        creatorTransport.stats.updates === 2 && ready.row.filter_completed_count === 0).toBe(true);
       for (const d of group) await assertReady(d.page, d, room, false);
-      stage = 'first-candidate';
-      c.release(); await c.available(); const source = await displays(c, 3);
-      await creatorTransport.wait('updates', 3);
-      const assigned = committedRoomSnapshot(room);
-      expect(assigned.row.movie_candidate_id === firstCandidate.candidate_id && assigned.xmin !== ready.xmin &&
-        JSON.stringify(assigned.members) === JSON.stringify(ready.members)).toBe(true);
+      stage = 'filters';
+      const inputs = [[diagnostics, ['action'], 1900, 2000], [middle, ['comedy'], 2001, 2010],
+        [last, [], 2011, 2026]] as const;
+      for (let index = 0; index < inputs.length; index++) {
+        const [voter, genres, from, to] = inputs[index];
+        const result = await submitOwnFilter(voter.page, api, room, genres, from, to);
+        expect(result.outcome === 'saved' && result.filter_completed_count === index + 1).toBe(true);
+        await creatorTransport.wait('updates', 3 + index); await assertFilterProgress(diagnostics.page, room, index + 1);
+        expect((await recoverOwnFilter(voter.page, api, room)).outcome === (index === 2 ? 'locked' : 'saved')).toBe(true);
+      }
+      const completedRoom = committedRoomSnapshot(room);
+      expect(completedRoom.row.filter_completed_count === 3 && completedRoom.row.movie_candidate_id === null &&
+        completedRoom.filters.length === 3 && JSON.stringify(completedRoom.members) === JSON.stringify(ready.members)).toBe(true);
       stage = 'ready-reloads';
       await reload(diagnostics, room, true, true, 3, creatorTransport); await reload(middle, room, false, true, 3, middleTransport);
-      await c.available([2, 2, 1]);
-      await displays(c, 3); stable(room, assigned);
+      await assertFilterProgress(diagnostics.page, room, 3); await assertFilterProgress(middle.page, room, 3);
       stage = 'ready-reconnect';
-      await reconnect(middle, middleTransport); expect(await displays(c, 3) === source).toBe(true);
+      await reconnect(middle, middleTransport); await assertFilterProgress(middle.page, room, 3);
       stage = 'reentry';
       for (let i = 0; i < group.length; i++) {
-        await reenter(group[i], api, room, i === 0, true); await c.probe(i, 'available', true);
+        await reenter(group[i], api, room, i === 0, true);
         expect(await ownParticipant(group[i].page) === ids[i]).toBe(true);
+        expect((await recoverOwnFilter(group[i].page, api, room)).outcome === 'locked').toBe(true);
+        expect(observeCandidateRpcZero(group[i].page).count()).toBe(0);
       }
-      stable(room, assigned); await c.assertHealthy([2, 2, 1]);
+      expect(committedRoomSnapshot(room).row.movie_candidate_id === null).toBe(true);
       expect(creatorTransport.stats.prematureReads === 0).toBe(true);
       expect(middleTransport.stats.prematureReads === 0).toBe(true);
       creatorTransport.assertHealthy(); middleTransport.assertHealthy();
       expect(group.reduce((n, d) => n + d.signupAttempts, 0) === membershipAnonymousBudget.G03).toBe(true);
-      await diagnostics.record({ scenario: 'G03', outcome: '1/3 -> link2/3 -> manual3/3; real Waiting reload/socket outage/system recovery; held3 forwarded0; membership UPDATE2 then assignment UPDATE1; same three visible local posters; recovery/re-entry xmin stable; automatic2/2/1; identities3 recovery0' });
+      await diagnostics.record({ scenario: 'G03', outcome: 'voting creator link/code assembly; Ready progress0/3->1/3->2/3->3/3; own saved then locked recovery; reload/socket/re-entry convergence; candidate requests/UI0; identities3' });
     } finally {
       try {
         const counts = (t: Transport) => `requests=${t.stats.readRequests},completed=${t.stats.reads},retired=${t.stats.retiredBodies},premature=${t.stats.prematureReads},readFailures=${t.stats.readFailures},frameFailures=${t.stats.frameFailures},bindings=${t.stats.readiness}`;
         await diagnostics.record({ scenario: 'G03', outcome: `stage=${stage}; creator ${counts(creatorTransport)}; voter ${counts(middleTransport)}` });
-      } finally { await cleanup(c, [creatorTransport, middleTransport]); }
+      } finally { await cleanup([creatorTransport, middleTransport]); }
     }
   }));
 });
 
-test('@membership G04 non-voting creator observes three voters and stable candidate recovery', async ({ diagnostics, browser, baseURL, viewport }, info) => {
+test('@membership G04 non-voting creator observes voter filter progress', async ({ diagnostics, browser, baseURL, viewport }, info) => {
   test.setTimeout(90000);
   await safeBody(diagnostics, () => withParticipants(browser, { baseURL, viewport }, info, 3, async voters => {
-    const group = [diagnostics, ...voters], c = await candidateHarness(group, baseURL!);
-    c.limitAutomatic([3, 2, 1, 1]);
+    const group = [diagnostics, ...voters];
     const transport = await realtimeBarrier(diagnostics.page);
     try {
       const { api, room, invitation, participant } = await createWaiting(diagnostics.page, diagnostics, { requiredVoterCount: 3, creatorIsVoter: false });
       await transport.wait('readiness', 1); await transport.wait('reads', 1);
       for (const voter of voters) await startHost(voter.page, voter);
-      const ids = [participant, ...await Promise.all(voters.map(d => ownParticipant(d.page)))]; c.bind(room, ids, api);
+      const ids = [participant, ...await Promise.all(voters.map(d => ownParticipant(d.page)))];
       for (let count = 0; count < 3; count++) {
         await occupancy(diagnostics, count);
         await expect(diagnostics.page.getByText('You created this room and are not voting.', { exact: true })).toBeVisible();
         const before = committedRoomSnapshot(room);
         expect(before.members.length === count + 1 && before.row.voter_count === count &&
           before.members.find(m => m.user_id === participant)?.is_voter === false && before.row.movie_candidate_id === null).toBe(true);
-        await c.probe(0, 'not_ready'); stable(room, before);
-        expect(c.stats.every(s => s.automatic === 0)).toBe(true);
+        stable(room, before);
         await admit(voters[count], room, invitation, count + 1, count === 1);
         for (const d of group.slice(0, count + 2)) await occupancy(d, count + 1);
         await transport.wait('updates', count + 1);
       }
-      await c.held(); const ready = committedRoomSnapshot(room);
+      const ready = committedRoomSnapshot(room);
       expect(ready.row.voter_count === 3 && ready.members.length === 4 && ready.row.movie_candidate_id === null &&
         ready.members.filter(m => m.is_voter).length === 3 && ready.members.find(m => m.user_id === participant)?.is_voter === false &&
-        transport.stats.updates === 3 && c.stats.every(s => s.held === 1 && s.forwarded === 0)).toBe(true);
+        transport.stats.updates === 3 && ready.row.filter_completed_count === 0).toBe(true);
       for (const d of group) await assertReady(d.page, d, room, false);
-      c.release(); await c.available(); const source = await displays(c, 4);
-      await transport.wait('updates', 4); const assigned = committedRoomSnapshot(room);
-      expect(assigned.xmin !== ready.xmin && assigned.row.movie_candidate_id === firstCandidate.candidate_id &&
-        JSON.stringify(assigned.members) === JSON.stringify(ready.members)).toBe(true);
-      // A fresh acquisition after previously successful display fails before forwarding.
-      // Persisted assignment and the creator's non-voting membership survive it.
-      c.arm(['abort', null, null, null]); await reload(diagnostics, room, true, false, 3);
-      await c.held(); c.release();
-      await expect(diagnostics.page.getByTestId('candidate-status')).toHaveText('Unable to load this movie. Please try again.');
-      await expect(diagnostics.page.getByRole('button', { name: 'Retry candidate', exact: true })).toBeVisible();
-      await occupancy(diagnostics, 3); stable(room, assigned);
-      await diagnostics.page.getByRole('button', { name: 'Retry candidate', exact: true }).click();
-      await c.available([2, 1, 1, 1]); expect(await c.assertDisplay(0) === source).toBe(true); stable(room, assigned);
-      // Arm the exact already-resolved bundled image BEFORE this voter's real reload.
-      const fault = await c.failPosterOnce(1, source, true);
-      await reload(voters[0], room, false, true, 3); await c.available([2, 2, 1, 1]);
-      await expect(voters[0].page.getByTestId('candidate-status')).toHaveText('Unable to load this movie. Please try again.');
-      await expect(voters[0].page.getByTestId('candidate-title')).toHaveText(firstCandidate.title);
-      await expect(voters[0].page.getByTestId('candidate-year')).toHaveText('2020');
-      expect(fault.failed === 1 && fault.retried === 0).toBe(true); stable(room, assigned);
-      const calls = c.stats.map(s => s.automatic), auth = c.stats.map(s => s.auth);
-      await voters[0].page.getByRole('button', { name: 'Retry candidate', exact: true }).click();
-      expect(await c.assertDisplay(1) === source && fault.failed === 1 && fault.retried >= 1 &&
-        c.stats.every((s, i) => s.automatic === calls[i] && s.auth === auth[i])).toBe(true);
-      await transport.wait('readiness', 2); await reconnect(diagnostics, transport);
-      for (let i = 0; i < group.length; i++) {
-        await reenter(group[i], api, room, i === 0, i !== 0); await c.probe(i, 'available');
-        expect(await ownParticipant(group[i].page) === ids[i]).toBe(true);
+      expect((await recoverOwnFilter(diagnostics.page, api, room)).outcome === 'not_voter').toBe(true);
+      expect((await submitOwnFilter(diagnostics.page, api, room, ['action'], 1900, 2026)).outcome === 'not_voter').toBe(true);
+      for (let index = 0; index < voters.length; index++) {
+        const result = await submitOwnFilter(voters[index].page, api, room, index === 0 ? [] : ['drama'], 1900 + index, 2026);
+        expect(result.outcome === 'saved' && result.filter_completed_count === index + 1).toBe(true);
+        await transport.wait('updates', 4 + index); await assertFilterProgress(diagnostics.page, room, index + 1);
+        await expect(diagnostics.page.getByRole('heading', { name: 'Choose your filters', exact: true })).toHaveCount(0);
+        expect((await recoverOwnFilter(diagnostics.page, api, room)).outcome === 'not_voter').toBe(true);
       }
-      expect(await displays(c, 4) === source).toBe(true); stable(room, assigned);
-      await c.assertHealthy([3, 2, 1, 1]); transport.assertHealthy();
+      await reconnect(diagnostics, transport);
+      for (let i = 0; i < group.length; i++) {
+        await reenter(group[i], api, room, i === 0, i !== 0);
+        expect(await ownParticipant(group[i].page) === ids[i]).toBe(true);
+        expect(observeCandidateRpcZero(group[i].page).count()).toBe(0);
+      }
+      const completed = committedRoomSnapshot(room);
+      expect(completed.row.filter_completed_count === 3 && completed.row.movie_candidate_id === null && completed.filters.length === 3).toBe(true);
+      transport.assertHealthy();
       expect(group.reduce((n, d) => n + d.signupAttempts, 0) === membershipAnonymousBudget.G04).toBe(true);
-      await diagnostics.record({ scenario: 'G04', outcome: 'non-voting creator0/3 ->1/3 ->2/3 ->3/3; automatic Waiting0/probes not_ready; held4 forwarded0; admission UPDATE3 assignment UPDATE1; four same local posters; acquisition failure/retry after success; exact poster fault before reload/retry RPC0 Auth0; stable members/FK/xmin; identities4 recovery0' });
-    } finally { await cleanup(c, [transport]); }
+      await diagnostics.record({ scenario: 'G04', outcome: 'non-voting creator observes aggregate-only0/3->1/3->2/3->3/3; own recovery/submit not_voter; no private form/details; reconnect/re-entry stable; candidate requests/UI0; identities4' });
+    } finally { await cleanup([transport]); }
   }));
 });
 
@@ -513,13 +502,11 @@ test('@membership G07 final slot capacity competition', async ({ diagnostics, br
   test.setTimeout(90000);
   await safeBody(diagnostics, () => withParticipants(browser, { baseURL, viewport }, info, 3, async ([prior, a, b]) => {
     const group = [diagnostics, prior, a, b], transport = await realtimeBarrier(diagnostics.page);
-    const candidates = await candidateHarness(group, baseURL!); candidates.limitAutomatic([1, 1, 1, 1]);
     try {
       const { api, room, invitation, participant } = await createWaiting(diagnostics.page, diagnostics, { requiredVoterCount: 3, creatorIsVoter: true });
       await transport.wait('readiness', 1); await transport.wait('reads', 1);
       const decoded = await assertQr(diagnostics, invitation); for (const d of [prior, a, b]) await startHost(d.page, d);
       const ids = [participant, ...await Promise.all([prior, a, b].map(d => ownParticipant(d.page)))];
-      candidates.bind(room, ids, api); candidates.configureInitial(['continue', null, null, null]);
       expect((await directJoin(prior.page, api, room.code)).row?.outcome === 'joined').toBe(true);
       await transport.wait('updates', 1);
       const before = committedRoomSnapshot(room); expect(before.row.voter_count === 2 && before.row.movie_candidate_id === null).toBe(true);
@@ -536,9 +523,7 @@ test('@membership G07 final slot capacity competition', async ({ diagnostics, br
       for (const [d, code] of [[winner, room.code], [prior, room.code.toLowerCase()], [diagnostics, ` ${room.code} `]] as const)
         expect((await directJoin(d.page, api, code)).row?.outcome === 'already_member').toBe(true);
       expect(transport.stats.updateHeld === updateHeld + 1).toBe(true);
-      transport.releaseUpdates(); await candidates.held();
-      expect(candidates.stats[0].held === 1 && candidates.stats[0].forwarded === 0 && committedRoomSnapshot(room).row.movie_candidate_id === null).toBe(true);
-      candidates.release(); await candidates.available([1, 0, 0, 0]); await candidates.close();
+      transport.releaseUpdates();
       for (const d of [winner, prior, diagnostics]) {
         expect((await navigationJoin(d.page, decoded)).row?.outcome === 'already_member').toBe(true);
         expect((await navigationJoin(d.page, invitation)).row?.outcome === 'already_member').toBe(true);
@@ -546,10 +531,11 @@ test('@membership G07 final slot capacity competition', async ({ diagnostics, br
       }
       const recovered = committedRoomSnapshot(room);
       expect(recovered.row.voter_count === assembled.row.voter_count && recovered.row.required_voter_count === assembled.row.required_voter_count &&
-        recovered.row.creation_request_id === assembled.row.creation_request_id && JSON.stringify(recovered.members) === JSON.stringify(assembled.members)).toBe(true);
+        recovered.row.creation_request_id === assembled.row.creation_request_id && recovered.row.movie_candidate_id === null &&
+        JSON.stringify(recovered.members) === JSON.stringify(assembled.members) && group.every(d => observeCandidateRpcZero(d.page).count() === 0)).toBe(true);
       expect(group.reduce((n, d) => n + d.signupAttempts, 0) === membershipAnonymousBudget.G07).toBe(true);
-      await diagnostics.record({ scenario: 'G07', outcome: 'two held final-slot subjects forwarded together; joined/strict-null full; exactly one membership Realtime UPDATE while candidate traffic held; loser QR/link/code remains full; existing members recover; identities4' });
-    } finally { await cleanup(candidates, [transport]); }
+      await diagnostics.record({ scenario: 'G07', outcome: 'two held final-slot subjects forwarded together; joined/strict-null full; exactly one membership Realtime UPDATE; loser QR/link/code remains full; existing members recover; candidate requests/UI0; identities4' });
+    } finally { await cleanup([transport]); }
   }));
 });
 
@@ -565,33 +551,38 @@ test('@membership G08 authorization and room isolation', async ({ diagnostics, b
       const key = Object.keys(localStorage).find(name => /^sb-.+-auth-token$/.test(name)); const token = key ? JSON.parse(localStorage.getItem(key) ?? 'null')?.access_token : null;
       const headers = { apikey: api.publicKey, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
       const requests = [
-        fetch(`${api.origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count&id=eq.${room.id}`, { headers }),
-        fetch(`${api.origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count&code=eq.${room.code}`, { headers }),
-        fetch(`${api.origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count&id=eq.${own.id}`, { headers }),
-        fetch(`${api.origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count&code=eq.${own.code}`, { headers }),
-        fetch(`${api.origin}/rest/v1/room_members?select=*`, { headers }), fetch(`${api.origin}/rest/v1/movie_candidates?select=*`, { headers }),
+        fetch(`${api.origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count&id=eq.${room.id}`, { headers }),
+        fetch(`${api.origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count&code=eq.${room.code}`, { headers }),
+        fetch(`${api.origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count&id=eq.${own.id}`, { headers }),
+        fetch(`${api.origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count&code=eq.${own.code}`, { headers }),
+        fetch(`${api.origin}/rest/v1/room_members?select=*`, { headers }), fetch(`${api.origin}/rest/v1/participant_filters?select=*`, { headers }),
         fetch(`${api.origin}/rest/v1/rooms?id=eq.${room.id}`, { method: 'PATCH', headers, body: JSON.stringify({ required_voter_count: 9, voter_count: 9, movie_candidate_id: 'fixture-clockwork-orchard' }) }),
         fetch(`${api.origin}/rest/v1/room_members`, { method: 'POST', headers, body: JSON.stringify({ room_id: room.id, user_id: own.id, is_voter: true }) }),
-        fetch(`${api.origin}/rest/v1/movie_candidates?id=eq.fixture-cardboard-comet`, { method: 'PATCH', headers, body: JSON.stringify({ title: 'mutated' }) }),
-        fetch(`${api.origin}/rest/v1/rpc/ensure_room_candidate`, { method: 'POST', headers, body: JSON.stringify({ p_room_id: room.id }) }),
+        fetch(`${api.origin}/rest/v1/participant_filters`, { method: 'POST', headers,
+          body: JSON.stringify({ room_member_id: own.id, genres: ['action'], release_year_from: 1900, release_year_to: 2026 }) }),
+        fetch(`${api.origin}/rest/v1/rpc/get_my_participant_filter`, { method: 'POST', headers, body: JSON.stringify({ p_room_id: room.id }) }),
+        fetch(`${api.origin}/rest/v1/rpc/submit_my_participant_filter`, { method: 'POST', headers,
+          body: JSON.stringify({ p_room_id: room.id, p_genres: ['action'], p_release_year_from: 1900, p_release_year_to: 2026 }) }),
       ];
-      const [foreignId, foreignCode, ownId, ownCode, members, catalog, roomMutation, memberMutation, catalogMutation, candidate] = await Promise.all(requests);
+      const [foreignId, foreignCode, ownId, ownCode, members, filters, roomMutation, memberMutation, filterMutation, recovery, submission] = await Promise.all(requests);
       return {
         foreignId: await foreignId.json(), foreignCode: await foreignCode.json(), ownId: await ownId.json(), ownCode: await ownCode.json(),
-        membersOk: members.ok, catalogOk: catalog.ok, roomMutationOk: roomMutation.ok,
-        memberMutationOk: memberMutation.ok, catalogMutationOk: catalogMutation.ok,
-        candidateOk: candidate.ok, candidate: (await candidate.json())?.[0],
+        membersOk: members.ok, filtersOk: filters.ok, roomMutationOk: roomMutation.ok,
+        memberMutationOk: memberMutation.ok, filterMutationOk: filterMutation.ok,
+        recoveryOk: recovery.ok, recovery: (await recovery.json())?.[0], submissionOk: submission.ok, submission: (await submission.json())?.[0],
       };
     }, { api, room, own: roomB.room });
     expect(Array.isArray(denied.foreignId) && denied.foreignId.length === 0 && Array.isArray(denied.foreignCode) && denied.foreignCode.length === 0 &&
-      denied.ownId?.length === 1 && denied.ownCode?.length === 1 && !denied.membersOk && !denied.catalogOk &&
-      !denied.roomMutationOk && !denied.memberMutationOk && !denied.catalogMutationOk && denied.candidateOk &&
-      denied.candidate?.outcome === 'not_found' && ['candidate_id', 'poster_key', 'release_year', 'title'].every(key => denied.candidate[key] === null)).toBe(true);
+      denied.ownId?.length === 1 && denied.ownCode?.length === 1 && !denied.membersOk && !denied.filtersOk &&
+      !denied.roomMutationOk && !denied.memberMutationOk && !denied.filterMutationOk && denied.recoveryOk && denied.submissionOk &&
+      denied.recovery?.outcome === 'not_found' && denied.submission?.outcome === 'not_found' &&
+      ['genres', 'release_year_from', 'release_year_to', 'filter_completed_count', 'required_voter_count', 'allowed_release_year_max']
+        .every(key => denied.recovery[key] === null && denied.submission[key] === null)).toBe(true);
     expect(isStrictFull((await directJoin(outsider.page, api, room.code)).row)).toBe(true);
     stable(room, roomA); expect(committedRoomSnapshot(roomB.room).row.voter_count === 0).toBe(true);
     expect(await outsider.page.evaluate(values => values.every(value => !document.body.innerText.includes(value)), roomA.members.map(m => m.user_id))).toBe(true);
     expect([diagnostics, v1, v2, outsider].reduce((n, d) => n + d.signupAttempts, 0) === membershipAnonymousBudget.G08).toBe(true);
-    await diagnostics.record({ scenario: 'G08', outcome: 'ordinary JWT own ID/code access; foreign ID/code hidden; foreign candidate not_found; full join strict-null; roster/catalog browse and room/member/catalog mutation denied; owner snapshots stable; identities4' });
+    await diagnostics.record({ scenario: 'G08', outcome: 'ordinary JWT own room access; foreign room/filter recovery/submit hidden; full join strict-null; roster/filter browse and room/member/filter mutation denied; owner snapshots stable; candidate requests/UI0; identities4' });
   }));
 });
 

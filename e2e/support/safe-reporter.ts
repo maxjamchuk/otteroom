@@ -15,20 +15,25 @@ const membershipCases = new Map([
   ['@membership G01 configured room invitations expose decoded QR', 'G01'],
   ['@membership G02 room creation failures preserve configuration', 'G02'],
   ['@membership G03 three voting members assemble through link and code', 'G03'],
-  ['@membership G04 non-voting creator observes three voters and stable candidate recovery', 'G04'],
+  ['@membership G04 non-voting creator observes voter filter progress', 'G04'],
   ['@membership G05 decoded QR admission is idempotent', 'G05'],
   ['@membership G06 non-voting creator and concurrent voters', 'G06'],
   ['@membership G07 final slot capacity competition', 'G07'],
   ['@membership G08 authorization and room isolation', 'G08'],
   ['@membership G09 join failures and committed response loss', 'G09'],
 ]);
+const filterCases = new Map([
+  ['@filters H01 validates private owned filters and editable saved state', 'H01'],
+  ['@filters H02 recovers filters through failures and lost acknowledgements', 'H02'],
+  ['@filters H03 serializes final completion and freezes every filter', 'H03'],
+]);
 
 function scenarioFor(title: unknown): string {
   if (typeof title !== 'string') return 'unclassified';
   if (membershipCases.has(title)) return 'membership';
+  if (filterCases.has(title)) return 'filters';
   if (title.startsWith('@baseline ')) return 'baseline';
   if (title.startsWith('@auth ')) return 'auth';
-  if (/^@candidate F0[1-8] /.test(title)) return 'candidate';
   if (title.startsWith('@us1 E01 ')) return 'us1';
   if (/^@us2-join E(?:02|04|10|11) /.test(title)) return 'us2-join';
   if (/^@us2-realtime E03 /.test(title)) return 'us2-realtime';
@@ -50,7 +55,7 @@ function browserCaseFor(title: unknown): string {
   ]) if (title.startsWith(prefix)) return label;
   const scenario = scenarioFor(title);
   if (scenario === 'membership') return membershipCases.get(title)!;
-  if (scenario === 'candidate') return title.match(/^@candidate (F0[1-8]) /)![1];
+  if (scenario === 'filters') return filterCases.get(title)!;
   if (['us1', 'us2-join', 'us2-realtime', 'us4'].includes(scenario)) {
     return title.match(/^@[^ ]+ (E(?:0[1-9]|1[0-2])) /)?.[1] ?? 'none';
   }

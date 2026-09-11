@@ -560,3 +560,53 @@ Do not turn this planning document into evidence before commands actually run.
   lint/typecheck and web/native exports were rerun green.
 - The owned Supabase stack stopped successfully. G2 is green and the complete
   DB/types/client cutover is coherent for the first implementation commit.
+
+### Acceptance authoring and R02 checkpoint — T036–T041
+
+- The room harness now validates exact nine-field create/join and six-field
+  room projections, bounded in-memory owner snapshots, filter progress and an
+  outgoing candidate-RPC zero counter. The filter harness validates only the
+  seven safe own-result fields and provides cleanup-tested abort, overlap,
+  hold and committed-response-loss barriers without exporting Auth sessions.
+- E remains 24 cases/47 identities. G remains nine cases/26 identities; G03
+  and G04 passed their 0/N→N/N aggregate flows, G07 passed membership-only
+  final-slot competition, and G08 passed ordinary-JWT foreign filter privacy
+  and mutation denial. Candidate traffic/UI was zero.
+- H discovery is exactly the three approved titles/timeouts and fixed budgets
+  H01=3, H02=3, H03=3. The first H run consumed 9 and exposed two test-code
+  defects; the corrected full H rerun passed 3/3 with scanner0. A final H02
+  strengthening for incomplete/completed voter disconnect recovery passed in
+  a separate 3-identity run.
+- T041 assertion-first evidence failed as required (four old-metadata/config
+  expectations), then passed 56/56 after the atomic discovery/diagnostic
+  evolution. Acceptance discovery is exactly room-session, generalized
+  membership and participant filters; 36 cases/82 identities, no F discovery,
+  unknown titles/locations fail closed, global600000/workers1/retries0/
+  repeatEach1, `anonymous_users=150`, and C1 is byte-unchanged.
+
+### G3 complete — T042
+
+- Both nonempty migration runners passed after clean latest resets. R01
+  check-only passed. Lint/typecheck passed; full client passed 30 suites/592
+  tests; database passed 3 files/707 assertions; web and iOS/Android exports
+  passed; managed C1 passed with its expected one identity and scanner0.
+- The exact-source unfiltered acceptance rerun passed all 36 cases with
+  E47+G26+H9=82, scanner0, owned runtime cleanup, no F discovery and no
+  candidate traffic/UI. Together with the unchanged managed C1 pass, G3 admits
+  exactly 1+82=83 identities across recovered windows and covers all 31 product
+  scenarios, 35 FRs, six NFRs and 14 success criteria for both creator modes
+  and three-voter rooms.
+- The required final lint rerun passed. Focused review of the complete
+  T036–T042 cutover found no defect: exact projections and fail-closed
+  diagnostics remain bounded, private filters remain owner-only, membership/QR
+  invariants remain represented, and the runtime stops at frozen N/N with
+  authoritative candidate suppression.
+- Actual accounting through T042 is 205: failed H=9, corrected H=9, G03=3,
+  failed G04=4, corrected G04=4, G07=4, G08=4, C1=1, first complete
+  acceptance=82, reviewed H02=3 and exact-source complete acceptance=82. No
+  manual attempt or 429 occurred.
+- The same owned Supabase stack remains running for T043. The exact-source G3
+  C1+complete block is repeatability run #1. Latest signup was
+  2026-09-11 22:47:23 +05; the conservative T043 run-#2 resume time is
+  2026-09-11 23:52:23 +05. Do not repeat C1 or any completed static/database/
+  export gate when resuming run #2.

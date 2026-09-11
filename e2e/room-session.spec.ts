@@ -18,7 +18,7 @@ async function assertHostRecovery(response: import('@playwright/test').Response,
   const rows = await response.json();
   expect(response.ok() && Array.isArray(rows) && rows.length === 1 &&
     rows[0].outcome === 'already_member' && rows[0].is_creator === true && rows[0].is_voter === true &&
-    rows[0].room_state === 'waiting' && rows[0].voter_count === 1 && rows[0].required_voter_count === 2 &&
+    rows[0].room_state === 'waiting' && rows[0].voter_count === 1 && rows[0].required_voter_count === 2 && rows[0].filter_completed_count === 0 &&
     rows[0].room_id === room.id && rows[0].room_code === room.code).toBe(true);
 }
 
@@ -185,8 +185,8 @@ const fullMessage = 'Room Full. The voting group is already assembled.';
 async function assertRejected(response: Response, outcome: 'not_found' | 'full') {
   const rows: unknown = await response.json();
   expect(response.ok() && Array.isArray(rows) && rows.length === 1 && rows[0] &&
-    Object.keys(rows[0]).sort().join(',') === 'is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
-    rows[0].outcome === outcome && ['room_id', 'room_code', 'room_state', 'is_creator', 'is_voter', 'voter_count', 'required_voter_count'].every(key => rows[0][key] === null)).toBe(true);
+    Object.keys(rows[0]).sort().join(',') === 'filter_completed_count,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
+    rows[0].outcome === outcome && ['room_id', 'room_code', 'room_state', 'is_creator', 'is_voter', 'voter_count', 'required_voter_count', 'filter_completed_count'].every(key => rows[0][key] === null)).toBe(true);
 }
 
 async function assertNoRoomDetails(page: Page, diagnostics: SafeDiagnostics, message: string) {
@@ -396,20 +396,8 @@ test('@us3 E06 overlapping final-seat requests accept exactly one guest', async 
             forwarded.add(index); await route.continue();
           } catch { interceptionFailed = true; await route.abort().catch(() => {}); }
         });
-        // Hold automatic assignment until the genuine membership UPDATE is observed.
-        // This preserves the one-seat-transition oracle despite the new UPDATE.
-        let releaseCandidates!: () => void, candidateTimedOut = false;
-        const candidateGate = new Promise<void>(resolve => { releaseCandidates = resolve; });
-        const candidateDeadline = setTimeout(() => { candidateTimedOut = true; releaseCandidates(); }, 15000);
-        const candidateEndpoint = '**/rest/v1/rpc/ensure_room_candidate';
-        const holdCandidate = async (route: Route) => {
-          try { await candidateGate; if (candidateTimedOut) await route.abort(); else await route.continue(); }
-          catch { interceptionFailed = true; await route.abort().catch(() => {}); }
-        };
-        const callers = [diagnostics, ...guests];
         const monitors = [];
         try {
-          for (const caller of callers) await caller.page.route(candidateEndpoint, holdCandidate, { times: 1 });
           // Both routes precede navigation. Both callers are already authenticated.
           for (let index = 0; index < guests.length; index++) {
             await guests[index].page.route(joinEndpoint, handlers[index], { times: 1 });
@@ -433,7 +421,6 @@ test('@us3 E06 overlapping final-seat requests accept exactly one guest', async 
           const joinedRow = roomSnapshot(room);
           expect(transport.stats.updates === 1 && joinedRow.members.some(m => m.user_id === identities[winnerIndex] && m.is_voter) &&
             joinedRow.state === 'ready' && joinedRow.movie_candidate_id === null).toBe(true);
-          clearTimeout(candidateDeadline); releaseCandidates();
           await assertReady(winner.page, winner, room);
           await assertNoRoomDetails(loser.page, loser, fullMessage);
           expect(!await monitors[loserIndex].violated()).toBe(true);
@@ -450,18 +437,16 @@ test('@us3 E06 overlapping final-seat requests accept exactly one guest', async 
           expect(transport.stats.joins === 1).toBe(true);
           await repeatJoin(page, api, room, 'host'); await repeatJoin(winner.page, api, room, 'guest');
           expect(JSON.stringify(roomSnapshot(room)) === JSON.stringify(committed)).toBe(true);
-          await transport.wait('updates', 2);
-          expect(!candidateTimedOut && !interceptionFailed && transport.stats.updates === 2 && transport.stats.joins === 2 &&
-            committed.movie_candidate_id !== null).toBe(true);
+          expect(!interceptionFailed && transport.stats.updates === 1 && transport.stats.joins === 2 &&
+            committed.movie_candidate_id === null).toBe(true);
           for (let index = 0; index < guests.length; index++) {
             expect((await ownParticipant(guests[index].page)) === identities[index]).toBe(true);
             await guests[index].assertAuthAccounting(1, 1);
           }
           transport.assertHealthy();
-          await diagnostics.record({ scenario: 'E06', outcome: 'two authenticated requests held then forwarded; exactly joined/full; one membership UPDATE plus one candidate assignment UPDATE; no transient loser Ready; stable committed winner; SQL lock evidence paired' });
+          await diagnostics.record({ scenario: 'E06', outcome: 'two authenticated requests held then forwarded; exactly joined/full; one membership UPDATE; no transient loser Ready; stable committed winner; candidate requests0; SQL lock evidence paired' });
         } finally {
-          clearTimeout(deadline); release(); clearTimeout(candidateDeadline); releaseCandidates();
-          for (const caller of callers) await caller.page.unroute(candidateEndpoint, holdCandidate);
+          clearTimeout(deadline); release();
           for (let index = 0; index < guests.length; index++) {
             await guests[index].page.unroute(joinEndpoint, handlers[index]);
             await monitors[index]?.close();
@@ -801,8 +786,8 @@ async function repeatJoin(page: Page, api: PublicApi, room: RoomProjection, role
     return (await Promise.all(responses.map(async response => {
       const rows = await response.json();
       return response.ok && Array.isArray(rows) && rows.length === 1 &&
-        Object.keys(rows[0]).sort().join(',') === 'is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
-        rows[0].outcome === 'already_member' && rows[0].is_creator === (role === 'host') && rows[0].is_voter === true && rows[0].voter_count === 2 && rows[0].required_voter_count === 2 &&
+        Object.keys(rows[0]).sort().join(',') === 'filter_completed_count,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
+        rows[0].outcome === 'already_member' && rows[0].is_creator === (role === 'host') && rows[0].is_voter === true && rows[0].voter_count === 2 && rows[0].required_voter_count === 2 && Number.isInteger(rows[0].filter_completed_count) &&
         rows[0].room_id === room.id && rows[0].room_code === room.code && rows[0].room_state === 'ready';
     }))).every(Boolean);
   }, { api, room, role, overlap });

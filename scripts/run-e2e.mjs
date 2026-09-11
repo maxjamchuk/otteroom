@@ -7,6 +7,9 @@ import { localExecutable, runManagedProcess } from './safe-process.mjs';
 import { withPlaywrightRuntime, runtimeEnvironment, runtimeDiagnostic, signalExit } from './playwright-runtime.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+const acceptanceSelections = new Set(['@membership', 'G01', 'G02', 'G03', 'G04', 'G05', 'G06', 'G07', 'G08', 'G09',
+  '@filters', 'H01', 'H02', 'H03', '@auth', '@us1', '@us2-join', '@us2-realtime', '@us3', '@us4', '@capacity-smoke',
+  'E01', 'E02', 'E03', 'E04', 'E05', 'E06', 'E07', 'E08', 'E09', 'E10', 'E11', 'E12']);
 
 export function parseInvocation(argv) {
   const [mode, ...options] = argv;
@@ -21,6 +24,7 @@ export function parseInvocation(argv) {
     if (name === '--grep') {
       if (typeof value !== 'string' || value.length > 120 || !/^[@A-Za-z0-9 _:.|^$()*+?\\-]+$/.test(value)) throw new Error('UNSAFE_OVERRIDE_REJECTED');
       if (mode === 'security' && value !== '@diagnostics-static') throw new Error('SECURITY_SELECTION_REJECTED');
+      if (mode === 'acceptance' && !acceptanceSelections.has(value)) throw new Error('UNSAFE_OVERRIDE_REJECTED');
       grep = value;
     } else if (!/^[1-4]$/.test(value ?? '') ||
       (mode === 'security' && value !== '1') || (name === '--repeat-each' && Number(value) > 3)) throw new Error('UNSAFE_OVERRIDE_REJECTED');
@@ -90,13 +94,13 @@ export async function executeInvocation(invocation, { artifactRoot = path.join(r
     process.stdout.write(JSON.stringify({ component: 'e2e-controller', selection: invocation.staticOnly ? 'synthetic-only' : invocation.mode,
       status: outcome === 0 ? 'passed' : 'failed', artifacts: scan.fileCount, findings: scan.findings,
       innerExit: exitCode, probeArtifactsComplete: completeProbe,
-      scenarios: results.map(result => ({ scenario: ['A', 'B', 'C', 'baseline', 'auth', 'candidate', 'membership', 'us1', 'us2-join', 'us2-realtime', 'us3', 'us4', 'capacity-smoke'].includes(result.scenario) ? result.scenario : 'other', status: result.status === 'passed' ? 'passed' : 'failed',
-        browserCase: ['G01', 'G02', 'G03', 'G04', 'G05', 'G06', 'G07', 'G08', 'G09', 'F01', 'F02', 'F03', 'F04', 'F05', 'F06', 'F07', 'F08', 'E01', 'E02', 'E03', 'E04', 'E05', 'E06', 'E07', 'E08', 'E09', 'E10', 'E11', 'E12-read', 'E12-subscription', 'E12-navigation', 'E12-mutation'].includes(result.browserCase) ? result.browserCase : 'none',
+      scenarios: results.map(result => ({ scenario: ['A', 'B', 'C', 'baseline', 'auth', 'filters', 'membership', 'us1', 'us2-join', 'us2-realtime', 'us3', 'us4', 'capacity-smoke'].includes(result.scenario) ? result.scenario : 'other', status: result.status === 'passed' ? 'passed' : 'failed',
+        browserCase: ['G01', 'G02', 'G03', 'G04', 'G05', 'G06', 'G07', 'G08', 'G09', 'H01', 'H02', 'H03', 'E01', 'E02', 'E03', 'E04', 'E05', 'E06', 'E07', 'E08', 'E09', 'E10', 'E11', 'E12-read', 'E12-subscription', 'E12-navigation', 'E12-mutation'].includes(result.browserCase) ? result.browserCase : 'none',
         worker: Number.isInteger(result.worker) && result.worker >= 0 && result.worker < 4 ? result.worker : -1,
         repetition: Number.isInteger(result.repetition) && result.repetition >= 1 && result.repetition <= 3 ? result.repetition : 0,
         signups: Number.isInteger(result.signups) ? result.signups : 0, identities: Number.isInteger(result.identities) ? result.identities : 0 })),
     }) + '\n');
-    if (results.some(result => result.budgetFailure === true)) process.stderr.write('AUTH_BUDGET_FAILURE HTTP 429: acceptance N=91, local anonymous_users=150. Check configured limit and remaining hourly allowance; stop/start only after config change, never retry/reset/restart to evade quota.\n');
+    if (results.some(result => result.budgetFailure === true)) process.stderr.write('AUTH_BUDGET_FAILURE HTTP 429: acceptance N=82, local anonymous_users=150. Check configured limit and remaining hourly allowance; stop/start only after config change, never retry/reset/restart to evade quota.\n');
   } catch (error) { process.stderr.write(runtimeDiagnostic(error) + '\n'); outcome = signalExit(signal) ?? 1; }
   finally {
     try { await server?.close(); } catch { process.stderr.write('E2E_CLEANUP_FAILED\n'); outcome = 1; }
