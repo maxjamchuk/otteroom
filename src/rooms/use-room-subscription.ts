@@ -3,7 +3,7 @@ import type { RealtimeChannel } from '@supabase/supabase-js';
 import { bootstrapAnonymousSession } from '../auth/anonymous-session';
 import { getSupabase } from '../lib/supabase';
 import { refetchRoom } from './service';
-import { applyRoomRefetch, type AcceptedRoomState } from './state';
+import { applyRoomFilterProgress, applyRoomRefetch, type AcceptedRoomState } from './state';
 
 // Owned by one accepted route, never a global room cache. The RPC model stays
 // stable as input, including creator/voter flags and target. Authoritative reads
@@ -42,7 +42,8 @@ export function useRoomSubscription(accepted: AcceptedRoomState | null) {
       try {
         const row = await refetchRoom(id);
         if (current() && bound && request === latest) {
-          room = applyRoomRefetch(room, row);
+          const watermark = lastAccepted.current?.source === owner ? lastAccepted.current.room : room;
+          room = applyRoomRefetch(watermark, row);
           retryFlight.current = false; publish(false);
         }
       } catch { if (current() && bound && request === latest) failure(); }
@@ -115,5 +116,17 @@ export function useRoomSubscription(accepted: AcceptedRoomState | null) {
     setView(previous => ({ ...previous, retrying: true }));
     setAttempt(value => value + 1);
   }, [accepted, visible.error]);
-  return { room: visible.room, error: visible.error, retrying: visible.retrying, retry };
+  const observeFilterProgress = useCallback((count: number) => {
+    if (!accepted) return;
+    setView(previous => {
+      if (previous.source !== accepted || !previous.room) return previous;
+      let room: AcceptedRoomState;
+      try { room = applyRoomFilterProgress(previous.room, count); }
+      catch { return previous; }
+      if (room === previous.room) return previous;
+      lastAccepted.current = { source: accepted, room };
+      return { ...previous, room };
+    });
+  }, [accepted]);
+  return { room: visible.room, error: visible.error, retrying: visible.retrying, retry, observeFilterProgress };
 }

@@ -1,8 +1,8 @@
 import { Link, router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text } from 'react-native';
-import { CandidateCard } from '../../src/candidates/candidate-card';
-import { useRoomCandidate } from '../../src/candidates/use-room-candidate';
+import { ParticipantFilterForm } from '../../src/filters/participant-filter-form';
+import { useParticipantFilter } from '../../src/filters/use-participant-filter';
 import { invitationLink, parseRoomSegment } from '../../src/rooms/code';
 import { InvitationQr } from '../../src/rooms/invitation-qr';
 import { joinRoom } from '../../src/rooms/service';
@@ -75,10 +75,10 @@ function RoomEntry({ code }: { code: string }) {
 }
 
 function AcceptedRoom({ initial }: { initial: AcceptedRoomState & { invitation?: string } }) {
-  const { room, error, retry, retrying } = useRoomSubscription(initial);
+  const { room, error, retry, retrying, observeFilterProgress } = useRoomSubscription(initial);
   // An accepted RPC is immediately visible, including intermediate Waiting counts.
   const state = room ?? initial;
-  const candidate = useRoomCandidate(state);
+  const filters = useParticipantFilter(state, error, observeFilterProgress);
   const invitation = state.isCreator || state.state === 'waiting' ? initial.invitation : undefined;
   return <>
     <Text accessibilityRole="header" style={styles.title}>{state.title}</Text>
@@ -98,7 +98,14 @@ function AcceptedRoom({ initial }: { initial: AcceptedRoomState & { invitation?:
         <Text>{retrying ? 'Reconnecting…' : 'Retry synchronization'}</Text>
       </Pressable>
     </>}
-    <CandidateCard model={candidate} />
+    {state.state === 'ready' && (state.isVoter
+      ? <ParticipantFilterForm model={filters} />
+      : <>
+        <Text>{state.filterCompletedCount} of {state.requiredVoterCount} filters collected</Text>
+        {state.filtersComplete
+          ? <Text accessibilityRole="header">All filters collected. Feature 005 is next.</Text>
+          : <Text>Waiting for voters to finish their filters.</Text>}
+      </>)}
   </>;
 }
 

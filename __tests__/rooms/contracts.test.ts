@@ -1,7 +1,8 @@
 import { narrowCreateResult, narrowJoinResult, RoomContractError } from '../../src/rooms/contracts';
 
 const accepted = { outcome: 'created', room_id: '11111111-1111-4111-8111-111111111111', room_code: 'ABCDEF0123',
-  is_creator: true, is_voter: true, room_state: 'waiting', voter_count: 1, required_voter_count: 2 };
+  is_creator: true, is_voter: true, room_state: 'waiting', voter_count: 1, required_voter_count: 2,
+  filter_completed_count: 0 };
 
 it.each([[2, true], [3, true], [2, false], [3, false]] as const)('accepts explicit target%s creator-voter=%s creation', (target, voting) => {
   const row = { ...accepted, required_voter_count: target, is_voter: voting, voter_count: voting ? 1 : 0 };
@@ -33,7 +34,7 @@ it.each([
 ])('rejects inconsistent create field %#', patch => {
   expect(() => narrowCreateResult([{ ...accepted, ...patch }])).toThrow(RoomContractError);
 });
-it('requires all eight fields and rejects null, omissions and extra data for accepted outcomes', () => {
+it('requires all nine fields and rejects null, omissions and extra data for accepted outcomes', () => {
   for (const [parser, outcome, is_creator] of [[narrowCreateResult, 'created', true], [narrowJoinResult, 'joined', false],
     [narrowJoinResult, 'already_member', true]] as const) {
     const row = { ...accepted, outcome, is_creator, required_voter_count: 3 };
@@ -73,7 +74,8 @@ it('new join is a non-creator voter only; no implicit creator promotion', () => 
 });
 it.each(['invalid_code', 'not_found', 'full'])('requires exact seven NULLs for %s and no partial disclosure', outcome => {
   const rejected = { outcome, room_id: null, room_code: null, room_state: null,
-    is_creator: null, is_voter: null, voter_count: null, required_voter_count: null };
+    is_creator: null, is_voter: null, voter_count: null, required_voter_count: null,
+    filter_completed_count: null };
   expect(narrowJoinResult([rejected])).toEqual(rejected);
   for (const field of Object.keys(rejected).filter(key => key !== 'outcome')) {
     expect(() => narrowJoinResult([{ ...rejected, [field]: accepted[field as keyof typeof accepted] }])).toThrow(RoomContractError);

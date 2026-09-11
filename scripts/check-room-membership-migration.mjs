@@ -106,7 +106,7 @@ try {
   await managed('docker', sqlArgs, { input: `\\set legacy_snapshot '${variable}'\n${await fs.readFile(path.join(root, 'supabase/tests/migration/room_membership.after.sql'), 'utf8')}`, timeoutMs: 20000 });
   snapshot = ''; rows.length = 0;
   if (digest(await fs.readFile(canonical)) !== typesBefore) fail();
-  receipt('preserved-rooms=3 statistics=true authenticated-recovery=true no-reassignment=true types-unchanged=true');
+  receipt('preserved-rooms=3 statistics=true authenticated-recovery=true filter-count-zero=true candidate-suppressed=true types-unchanged=true');
 } catch {
   receipt(`stage=${stage} result=FAIL`);
   process.exitCode = abort.signal.aborted ? abort.signal.reason === 'SIGINT' ? 130 : 143 : 1;
@@ -118,7 +118,10 @@ try {
       await managed(localExecutable('supabase'), ['db', 'reset', '--local', '--no-seed'], { signal: null });
       const empty = await bounded('docker', sqlArgs, { signal: null, input: `set statement_timeout='5s';
         select not exists(select 1 from public.rooms) and not exists(select 1 from public.room_members)
-        and not exists(select 1 from auth.users) and to_regprocedure('public.create_room(uuid,integer,boolean)') is not null;
+        and not exists(select 1 from public.participant_filters) and not exists(select 1 from auth.users)
+        and to_regprocedure('public.create_room(uuid,integer,boolean)') is not null
+        and to_regprocedure('public.get_my_participant_filter(uuid)') is not null
+        and not has_function_privilege('authenticated','public.ensure_room_candidate(uuid)'::regprocedure,'EXECUTE');
 ` });
       if (empty.trim() !== 't') fail();
       receipt('latest-reset=true owned-fixtures=0');

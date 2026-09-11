@@ -374,3 +374,189 @@ commands actually run, result/test totals, nonempty migration receipts, lock/
 write/xmin receipts, generated-type hash/metadata, browser discovery and R02
 window accounting, C1/scanner result, export observation and verified cleanup.
 Do not turn this planning document into evidence before commands actually run.
+
+### Implementation baseline — T001
+
+- Captured: 2026-09-11, Asia/Qyzylorda.
+- Source: branch `main`, HEAD
+  `88953faccc5a47f13af82fd7a65e65c787fb0c34`
+  (`docs: define participant filters feature`), clean worktree before this
+  evidence-only edit.
+- Declared toolchain selected for implementation: Node `v24.20.0`, npm
+  `11.19.0`, project-local Supabase CLI package `2.116.0`, Docker `28.5.1`.
+  The interactive shell default (`v22.23.2`/npm `10.9.8`) is not used for
+  evidence commands.
+- Protected-artifact SHA-256 baseline:
+  - historical migrations, in order:
+    `d6222184274428c6dd5d629e4d3416a582e0a74f355c8c6fe1d389630ecad439`,
+    `fda4126812feffb7bac5d737d6faae1930db35bbc26a1cb9402fcbad24b5b45c`,
+    `71816083a6e1630ab663fa4fd41354b936efa714571809fffca4528f2312f7a9`,
+    `04487a75fadafe40a255f9ab3998b64c1109c9de6f4e4324ba441f8856531c38`,
+    `1b78eeb52ce9bb194b9530f48b49428b8f5bb7c523ab22d5406e9814d0e8dc52`,
+    `9813e830957f82febe184e54a5148faff159f046912b325b0a77d835ae33a71f`;
+  - Feature 001 spec/plan/tasks:
+    `0f22de5a95c31008606ff4a26302454aef134d526fbb9df5f19e4a93e374f23c`,
+    `5e4b33ea6c34cc69ae25305cb0151ee169ee4dfa20c0b28af2035ce194aa9a1f`,
+    `5ea40688d00e967c96e77c4d634481474e05076eb211db613f65034dec2fe7fa`;
+  - Feature 002 spec/plan/tasks:
+    `bb31d8bfa93912069dbffad9a545dd2f160c87a7ed82866df02df8fb1fde7f07`,
+    `bf2b25adfcf52877481a1394a132ebbad04838d6bc244fc3f06934bcd58c1bd1`,
+    `c7277cd7cde18981f16b8cec8123171d497ce03b2fff5a0a9b0cffd9d85e5ba7`;
+  - Feature 003 spec/plan/tasks:
+    `5d30acca873f9c60e3788a03f3a96cd2d1580b33ab15a0fc7c4d5087c1ab2514`,
+    `de71782da3670e231cc875852a9cdf37e51d969a6b2ff15c8a49780a147ce24e`,
+    `a59d0a5ec49f8b2ff734124ee4751eb20f06bbdf1cd0637ce102a5741e806aff`;
+  - candidate PNGs, filename order:
+    `5a243057dc4b4cc4e3e80f1f962d17231cf8c28abb324fc4e5e129917884a89e`,
+    `0d24c74d6f93c305809f2d8e7d9f585a828faec87689ca1c48948ff3fcb2dd13`,
+    `b5f35244b2baa18340d702772995b5029f4841eae6ac89d3ed6eec67f25931d3`,
+    `3b8b642fa0dca328c6a0cae9e340d0f243357b65cb471f65931e751f5653e4d7`;
+  - generated types `fcd0b773b75e71bc74dfaddde2fd96ecf05e62f132eac0132ba2777891890cea`
+    (inode/size/mtime/ctime `571258 8442 1789063032 1789063034`);
+  - type generator `9c3fa890e0993d30252a5aeb60ab40733011713e5e1d2f8447e9afcbd7f5b6a9`;
+  - C1 capture test `8052008d5876fab15a3be808e876f138218a0e9a2bd7a79178dd0c1f5a4fd6a5`.
+- Evidence ledger opened: G1 records nonempty upgrade/DB/R01 receipts; G2
+  records the coherent filter-first DB/types/client cutover; G3 records the
+  exact 36-case/82-identity acceptance run plus C1/scanner0; G4 records
+  repeatability and the exact-SHA fresh checkout. No gate is claimed here.
+- Unchanged-scope guard: preserve C1, R01 and R02; do not edit the six historical
+  migrations, Features 001–003 normative artifacts, four candidate PNGs,
+  `scripts/database-types.mjs` or `__tests__/config/c1-capture.test.ts`; do not
+  implement Feature 005+, restore Ready-to-fixture behavior, expose filter
+  details, or add a second Realtime channel.
+
+### G1 database authority — T002–T014
+
+- Environment: 2026-09-11, source worktree based on `88953fac…`, declared
+  Node `v24.20.0`/npm `11.19.0`, local Supabase CLI `2.116.0`, one owned
+  `otteroom-room-session` stack; `DO_NOT_TRACK=1`; zero GoTrue identities.
+- Tests were added before the Feature 004 migration. Against an exact
+  `20260910000000` reset, the first contract run failed exactly on the missing
+  enum/table/room aggregate/recovery RPC/submission RPC and still-granted
+  candidate EXECUTE boundary (6 expected failures across 928 then-current
+  assertions).
+- `npm run db:reset`: PASS; all seven versioned migrations applied, including
+  the one additive `20260911000000_participant_filters.sql` transaction.
+- `node scripts/check-room-membership-migration.mjs`: PASS; three legacy rooms,
+  five synthetic SQL users, preserved generalized membership/statistics/
+  authenticated recovery, filter count zero, candidate suppressed, generated
+  types unchanged, latest reset and owned cleanup PASS.
+- `node scripts/check-participant-filters-migration.mjs`: PASS; four Feature 003
+  rooms/eight members/eight synthetic SQL users, including Waiting, both
+  creator modes and preassigned non-lowest candidate; all exact logical values
+  preserved, filters zero/count zero, candidate suppressed, generated types
+  unchanged, latest reset and owned cleanup PASS.
+- Independent latest `npm run db:reset` then `npm run db:test`: PASS — 3 files,
+  707 pgTAP assertions. This includes exact schema/ACL/RLS/RPC/nullability,
+  genre/year boundaries, private ownership, aggregate/timestamp/xmin/no-op,
+  fault rollback, candidate suppression, and independent authenticated
+  READ COMMITTED dblink lock/write trials for distinct voters, final two from
+  1/3, equal/different same-voter overlap, edit-first and final-first ordering.
+- Cleanup: migration runners ended at latest empty schema; database tests are
+  rollback-only and their committed dblink fixtures/backends were removed.
+  G1 is internal only; no client/runtime release is claimed.
+
+### R01 generation receipt — T015–T016
+
+- T015 performed the only intentional `npm run db:types` invocation in this
+  implementation. It changed the canonical type hash from
+  `fcd0b773b75e71bc74dfaddde2fd96ecf05e62f132eac0132ba2777891890cea`
+  to `27743e7f37bd999e9c58c50f47f868783b48852cc7c2b9f81fa78b38f997c6e2`;
+  metadata changed from `571258 8442 1789063032 1789063034` to
+  `671081 11323 1789138679 1789138680`. Immediate
+  `npm run db:types:check`: PASS.
+- Reviewed canonical generator output: the ordered `participant_genre` enum,
+  four-column participant filter table/FK, room aggregate, ninth create/join
+  field, and exact get/submit arguments and seven-field result structures are
+  present. Generated structural nullability is not manually patched; strict
+  runtime result parsers own the business nullability matrix.
+- T016 independently ran a latest `npm run db:reset`, then check-only
+  `npm run db:types:check`: PASS. Before/after hash and
+  inode/size/mtime/ctime were identically
+  `27743e7f37bd999e9c58f47f868783b48852cc7c2b9f81fa78b38f997c6e2` and
+  `671081 11323 1789138679 1789138680`.
+- The owned Supabase stack stopped successfully. Every later R01 gate is
+  check-only.
+
+### US1 client filter flow — T017–T025
+
+- Added the vocabulary/parser/room projection suites before their runtime
+  implementations. The focused pre-implementation run failed on the three
+  absent filter modules and 32 old eight-/five-field room-contract
+  expectations, then passed after the typed cutover.
+- Added service/state/hook/form tests before those modules existed; the required
+  red run had three missing-module suites and one already-green service suite.
+  The route tests were then changed from obsolete Ready-to-candidate behavior
+  before the route implementation; 10 of 15 cases failed against the old route.
+- Final T025 focused run: PASS — 13 suites, 302 tests covering filter, room and
+  room-route behavior. This includes exact vocabulary/defaults/year validation,
+  accepted-versus-draft state, one-flight submission, both creator modes,
+  Waiting/no-call, Ready voter recovery, non-voter progress-only, invitations,
+  N/N read-only handoff, six-/nine-field contracts, one rooms channel, and zero
+  candidate service/UI calls through normal route states.
+- `npm run lint`: PASS after removing render-time ref access from the filter
+  hook. `npm run typecheck`: PASS. No dependency changed; the route imports no
+  candidate module and implements no resolution, TMDB, swipe, progression or
+  match behavior.
+
+### US2 recovery and concurrency — T026–T030
+
+- Recovery/service/state/route subset: PASS — 4 suites, 47 tests before the
+  final explicit lost-ack/equal-retry/overlap additions; the augmented hook
+  suite also proves committed-response recovery, `unchanged` adoption,
+  different pre-lock replacement, synchronous ten-tap collapse, separate save
+  retry versus own-detail recovery, and A→B→A generation isolation. Reload,
+  retry and route re-entry reuse the accepted anonymous identity and create no
+  client-side member/filter row or optimistic contribution.
+- Owned latest-stack reset plus deterministic SQL fault/concurrency subset:
+  PASS — 2 files, 666 assertions. First inserts change room/filter xmin and
+  contribute exactly once; replacement changes only filter xmin; canonical
+  equal retries and every blocked post-N/N attempt preserve rows/xmin. Distinct
+  saves serialize with `1/1` filter/room deltas, same-voter equal overlap totals
+  one insert/contribution with an `unchanged` loser, edit-first commits before
+  final freeze, final-first returns `locked` with `0/0` blocked-edit writes, and
+  the injected post-insert fault rolls row and summary back together.
+- No GoTrue identity was created by these focused client/SQL runs. The owned
+  stack remains available for the immediately following G2 work and will be
+  independently reset before that gate.
+
+### US3 aggregate coordination — T031–T034
+
+- Added the route-level aggregate-watermark test with the merge point removed;
+  it failed specifically because `observeFilterProgress` was absent. After the
+  implementation, the US3 focused run passed 5 suites/85 tests and the expanded
+  filter/room/route run passed 13 suites/307 tests with lint and typecheck green.
+- Join, rooms refetch, own recovery and submit now feed one same-route maximum;
+  a stale lower refetch cannot replace recovery/submit progress and N/N remains
+  dominant. Synchronization degradation disables only new saves; active saves
+  remain generation-guarded and may adopt authoritative `saved` or `locked`
+  detail without reopening the form.
+- The deterministic concurrency file was rerun after adding explicit
+  `pg_locks` ungranted-wait assertions alongside `pg_blocking_pids`: PASS,
+  13 top-level assertions across all six trials and cleanup.
+
+### G2 atomic client cutover — T035
+
+- Independent latest `npm run db:reset`: PASS. R01 check-only: PASS with
+  generated type hash/metadata unchanged at
+  `27743e7f37bd999e9c58c50f47f868783b48852cc7c2b9f81fa78b38f997c6e2`
+  and `671081 11323 1789138679 1789138680`.
+- `npm run lint` and `npm run typecheck`: PASS. The first full client attempt
+  exposed one stale configuration expectation for the new third pgTAP file;
+  after the exact inventory fix, the full client suite passed 30 suites/587
+  tests. The post-review rerun passed 30 suites/589 tests after adding both
+  active-save/N/N response orders and committed-ack-loss recovery.
+- Full `npm run db:test`: PASS — 3 files/707 assertions. `npm run web:export`:
+  PASS with four static routes. iOS/Android export to
+  `dist/native-validation`: PASS (1515/1628 modules before the review-only
+  client fix; 1515/1650 modules after it).
+- Focused cutover review verified exact seven-/nine-/six-field boundaries,
+  immutable target cross-checks, one rooms UPDATE/id channel, aggregate
+  monotonicity, private detail ownership, candidate route-import/call/UI zero,
+  preserved invitation/QR assets, no Feature 005+ implementation, protected
+  migration/spec/PNG/C1/generator hashes, `git diff --check`, and no generated
+  type rewrite. It fixed one N/N lost-active-save state so the approved
+  read-only own-detail recovery action cannot disappear; affected tests,
+  lint/typecheck and web/native exports were rerun green.
+- The owned Supabase stack stopped successfully. G2 is green and the complete
+  DB/types/client cutover is coherent for the first implementation commit.

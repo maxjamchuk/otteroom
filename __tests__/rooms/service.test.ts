@@ -6,9 +6,9 @@ const mockSelect = jest.fn(), mockEq = jest.fn(), mockLimit = jest.fn();
 const mockFrom = jest.fn(() => ({ select: mockSelect }));
 jest.mock('../../src/auth/anonymous-session', () => ({ bootstrapAnonymousSession: () => mockBootstrap() }));
 jest.mock('../../src/lib/supabase', () => ({ getSupabase: () => ({ rpc: mockRpc, from: mockFrom }) }));
-const row = { outcome: 'created', room_id: '11111111-1111-4111-8111-111111111111', room_code: 'ABCDEF0123', room_state: 'waiting', is_creator: true, is_voter: true, voter_count: 1, required_voter_count: 2 };
+const row = { outcome: 'created', room_id: '11111111-1111-4111-8111-111111111111', room_code: 'ABCDEF0123', room_state: 'waiting', is_creator: true, is_voter: true, voter_count: 1, required_voter_count: 2, filter_completed_count: 0 };
 const requestId = '22222222-2222-4222-8222-222222222222';
-const projection = { id: row.room_id, code: row.room_code, state: 'ready', voter_count: 2, required_voter_count: 2 };
+const projection = { id: row.room_id, code: row.room_code, state: 'ready', voter_count: 2, required_voter_count: 2, filter_completed_count: 1 };
 beforeEach(() => { jest.resetAllMocks(); mockBootstrap.mockResolvedValue({ user: { id: 'private-participant' } }); mockRpc.mockResolvedValue({ data: [row], error: null }); });
 it('forwards exactly request UUID, target and explicit choice through the typed RPC', async () => {
   expect(await createRoom(requestId, 2, true)).toEqual(row);
@@ -50,7 +50,7 @@ it.each([
   guest, { ...guest, outcome: 'already_member' },
   { ...row, outcome: 'already_member' },
   { ...guest, outcome: 'already_member', is_creator: true },
-  ...['invalid_code', 'not_found', 'full'].map(outcome => ({ outcome, room_id: null, room_code: null, room_state: null, is_creator: null, is_voter: null, voter_count: null, required_voter_count: null })),
+  ...['invalid_code', 'not_found', 'full'].map(outcome => ({ outcome, room_id: null, room_code: null, room_state: null, is_creator: null, is_voter: null, voter_count: null, required_voter_count: null, filter_completed_count: null })),
 ])('shared join preserves the closed server outcome %#', async result => {
   mockRpc.mockResolvedValue({ data: [result], error: null });
   expect(await joinRoom(row.room_code)).toEqual(result);
@@ -85,7 +85,7 @@ describe('authoritative member refetch', () => {
     await Promise.resolve(); expect(mockFrom).not.toHaveBeenCalled();
     resolve(); expect(await read).toEqual(projection);
     expect(mockFrom).toHaveBeenCalledWith('rooms');
-    expect(mockSelect).toHaveBeenCalledWith('id, code, state, voter_count, required_voter_count');
+    expect(mockSelect).toHaveBeenCalledWith('id, code, state, voter_count, required_voter_count, filter_completed_count');
     expect(mockEq).toHaveBeenCalledWith('id', row.room_id);
     // Read two to detect a cardinality violation, never hide it with limit(1).
     expect(mockLimit).toHaveBeenCalledWith(2); expect(mockRpc).not.toHaveBeenCalled();

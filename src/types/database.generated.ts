@@ -33,6 +33,35 @@ export type Database = {
         }
         Relationships: []
       }
+      participant_filters: {
+        Row: {
+          genres: Database["public"]["Enums"]["participant_genre"][]
+          release_year_from: number
+          release_year_to: number
+          room_member_id: string
+        }
+        Insert: {
+          genres?: Database["public"]["Enums"]["participant_genre"][]
+          release_year_from: number
+          release_year_to: number
+          room_member_id: string
+        }
+        Update: {
+          genres?: Database["public"]["Enums"]["participant_genre"][]
+          release_year_from?: number
+          release_year_to?: number
+          room_member_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "participant_filters_room_member_id_fkey"
+            columns: ["room_member_id"]
+            isOneToOne: true
+            referencedRelation: "room_members"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       room_members: {
         Row: {
           id: string
@@ -71,6 +100,7 @@ export type Database = {
           created_at: string
           creation_request_id: string
           creator_user_id: string
+          filter_completed_count: number
           id: string
           movie_candidate_id: string | null
           required_voter_count: number
@@ -83,6 +113,7 @@ export type Database = {
           created_at?: string
           creation_request_id: string
           creator_user_id: string
+          filter_completed_count?: number
           id?: string
           movie_candidate_id?: string | null
           required_voter_count?: number
@@ -95,6 +126,7 @@ export type Database = {
           created_at?: string
           creation_request_id?: string
           creator_user_id?: string
+          filter_completed_count?: number
           id?: string
           movie_candidate_id?: string | null
           required_voter_count?: number
@@ -124,6 +156,7 @@ export type Database = {
           p_required_voter_count: number
         }
         Returns: {
+          filter_completed_count: number
           is_creator: boolean
           is_voter: boolean
           outcome: string
@@ -144,9 +177,22 @@ export type Database = {
           title: string
         }[]
       }
+      get_my_participant_filter: {
+        Args: { p_room_id: string }
+        Returns: {
+          allowed_release_year_max: number
+          filter_completed_count: number
+          genres: Database["public"]["Enums"]["participant_genre"][]
+          outcome: string
+          release_year_from: number
+          release_year_to: number
+          required_voter_count: number
+        }[]
+      }
       join_room: {
         Args: { p_room_code: string }
         Returns: {
+          filter_completed_count: number
           is_creator: boolean
           is_voter: boolean
           outcome: string
@@ -157,9 +203,45 @@ export type Database = {
           voter_count: number
         }[]
       }
+      submit_my_participant_filter: {
+        Args: {
+          p_genres: Database["public"]["Enums"]["participant_genre"][]
+          p_release_year_from: number
+          p_release_year_to: number
+          p_room_id: string
+        }
+        Returns: {
+          allowed_release_year_max: number
+          filter_completed_count: number
+          genres: Database["public"]["Enums"]["participant_genre"][]
+          outcome: string
+          release_year_from: number
+          release_year_to: number
+          required_voter_count: number
+        }[]
+      }
     }
     Enums: {
-      [_ in never]: never
+      participant_genre:
+        | "action"
+        | "adventure"
+        | "animation"
+        | "comedy"
+        | "crime"
+        | "documentary"
+        | "drama"
+        | "family"
+        | "fantasy"
+        | "history"
+        | "horror"
+        | "music"
+        | "mystery"
+        | "romance"
+        | "science_fiction"
+        | "tv_movie"
+        | "thriller"
+        | "war"
+        | "western"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -286,7 +368,29 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      participant_genre: [
+        "action",
+        "adventure",
+        "animation",
+        "comedy",
+        "crime",
+        "documentary",
+        "drama",
+        "family",
+        "fantasy",
+        "history",
+        "horror",
+        "music",
+        "mystery",
+        "romance",
+        "science_fiction",
+        "tv_movie",
+        "thriller",
+        "war",
+        "western",
+      ],
+    },
   },
 } as const
 
