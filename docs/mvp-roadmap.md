@@ -1,8 +1,7 @@
 # Otteroom MVP Roadmap
 
 **Status:** Normative current sequencing and directional feature decomposition.
-Established 2026-09-10. Features 001 and 002 are complete; 003–009 are planned.
-Feature 003 has not been specified or started.
+Established 2026-09-10. Features 001–003 are complete; 004–009 are planned.
 
 ## Authority and feature boundaries
 
@@ -34,7 +33,7 @@ roadmap does not authorize implementing the whole MVP at once.
 | --- | --- | --- | --- |
 | 001 | Room Session | COMPLETE | Create/join a room with authoritative membership and reconnect |
 | 002 | First Movie Candidate | COMPLETE | One shared authoritative fixture candidate and stable display/recovery |
-| 003 | Generalized Room Membership & QR Join | PLANNED | Configured required voter count, creator voting choice, fixed group assembly and QR joining |
+| 003 | Generalized Room Membership & QR Join | COMPLETE | Configured required voter count, creator voting choice, fixed group assembly and QR joining |
 | 004 | Participant Filters | PLANNED | Each assembled voter configures recoverable genres and release-year filters |
 | 005 | Common Filter Resolution | PLANNED | Resolve compatible candidate constraints across the assembled voting group |
 | 006 | TMDB Candidate Source | PLANNED | Real eligible TMDB candidates with stable room assignment |
@@ -81,7 +80,7 @@ guarantees into the filter-first TMDB flow.
 
 ## Proposed MVP features
 
-### 003 — Generalized Room Membership & QR Join
+### 003 — Generalized Room Membership & QR Join — COMPLETE
 
 **Goal:** Assemble a configured voting group without fixed host/guest seats,
 support voting or non-voting creators, and make QR invitation/join a working
