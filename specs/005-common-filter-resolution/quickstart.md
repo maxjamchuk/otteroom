@@ -1,7 +1,7 @@
 # Quickstart and Validation: Common Filter Resolution
 
-**Status**: Planned validation; no command in this guide was run by planning and
-no implementation PASS is claimed.
+**Status**: Complete; the planning-time validation procedure and the recorded
+implementation evidence below are finalized for Feature 005.
 **Date**: 2026-09-12.
 
 During implementation, record exact source SHA/worktree scope, environment,
@@ -612,3 +612,120 @@ b9c9c11589bc285a0094544d98a1a7d28d408985a977d021498e0c74acb1f10d  src/candidates
   Auth retry, limit change, stack restart/reset for quota, storage sharing or
   unwrapped browser/manual attempt. The successful logical normal receipt is
   still the approved `29`; the additional `43` is retained honestly.
+
+### T046 unchanged-source repeatability — 2026-09-12
+
+- Repeatability used exact committed/pushed G3 source
+  `c7f765993ce0ab83edf37f7f30d0cc018b35037a` with a clean worktree. T045
+  `run-nstDPW` plus `run-1su5ik` are run #1.
+- Before run #2, check-only `npm run db:types:check` passed and exact metadata
+  remained `7d9c800c...ed82d1 / 676005 / 12159 / 1789168582 / 1789168583`.
+- Run #2 owner `run-8JMB3Y`: PASS I01/I02/I03=`3/4/2`; run #2 smoke
+  `run-ctSiwa`: PASS G03/G04/G05/G08/H01=`3/4/2/4/3`. Both had scanner
+  findings `0`, workers `1`, retries `0`, repeatEach `1`, fresh case contexts
+  and complete owned context/runtime cleanup.
+- No second C1 or H03 ran. No quota probe, 429, Auth retry, limit/config change,
+  service reset/restart or Auth storage sharing occurred between repeatability
+  runs. The approved successful-evidence aggregate is
+  `1 + 2 × (16 + 9) + 3 = 54`.
+- Actual charged accounting through T046 is T045 actual `72` plus repeat run #2
+  `25` = `97` identities/attempts. R01 remains exactly `1/1`.
+
+### T047 exact-SHA fresh checkout — 2026-09-12
+
+- Created `/tmp/otteroom-005-fresh.YQ1lll/checkout` from repository objects with
+  no local hardlinks, detached at exact committed/pushed G3 SHA
+  `c7f765993ce0ab83edf37f7f30d0cc018b35037a`. Before setup, the checkout was
+  clean and contained no `.env.local`, `node_modules`, `test-results`, Auth
+  storage, cache or service-volume data.
+- Declared Node `v24.20.0`/npm `11.19.0`; `npm ci` installed 1111 packages from
+  the committed lockfile. The repository-owned local public environment and a
+  clean unshared Supabase stack were created. No permanent/service-role browser
+  account or shared browser storage was used.
+- All three nonempty migration runners passed independently with their exact
+  `3/5`, `4/8/0/8` and `4/10/6/4/9` fixtures, zero GoTrue signups, stable
+  rows/xmin/types, latest reset and owned-fixture cleanup. A separate clean
+  reset applied all eight migrations.
+- Check-only types passed with identical before/after fresh metadata
+  `7d9c800c...ed82d1 / 676744 / 12159 / 1789172093 / 1789172093`. Full gates
+  passed: lint, typecheck, client `35/688`, database `4/793`, web `4` static
+  routes, iOS/Android exports and pinned Playwright runtime preparation.
+- Fresh C1 `run-EK3Ksp`: PASS controlled failure, exactly `1` identity, six
+  complete bounded artifacts, capture verified once and scanner zero. Fresh
+  smoke `run-lhf5z5`: PASS exact G03/G04/G05/G08/H01=`3/4/2/4/3`, total `16`,
+  scanner zero. Both used workers `1`, retries `0`, repeatEach `1` and complete
+  context/runtime cleanup. Owner and H03 were not run in the fresh checkout.
+- Fresh `git status` was clean at the exact SHA and `git diff --check` passed.
+  The fresh stack was stopped without backup, its owned volumes were removed,
+  and the validated disposable directory was deleted (not recoverable).
+- Approved successful accounting is repeatability `54` + fresh `17` = `71`.
+  Honest charged accounting is T046 actual `97` + fresh `17` = `114`
+  identities/attempts. There was no 429, automatic retry or quota probe. R01
+  remains exactly `1/1`.
+
+### T048 final reconciliation — 2026-09-12
+
+- Implementation commit:
+  `e47cca4a59325eb23925388cb3f69fa7ba023977` (`feat: add common filter
+  resolution`). Acceptance commit:
+  `c7f765993ce0ab83edf37f7f30d0cc018b35037a` (`test: complete common filter
+  resolution acceptance`). Both were pushed together to `origin/main`; local
+  HEAD and `origin/main` resolve to the exact acceptance SHA.
+- G2 passed DB `4 files / 793 assertions`, client `35 / 686`, lint/typecheck,
+  web `4` routes and native exports. The G3 post-defect release candidate passed
+  DB `4 / 793`, client `35 / 688`, lint/typecheck, web `4` routes, native
+  exports, normal C1/owner/smoke/H03 and scanner/cleanup. Repeatability and fresh
+  exact-SHA evidence passed as recorded above.
+- Traceability reconciliation is complete: functional requirements `27/27`,
+  non-functional requirements `6/6`, success criteria `12/12`, acceptance
+  scenarios `25/25`, testing-strategy boundaries and all evolution/handoff rows
+  have their mapped DB/client/browser evidence. Exact max-lower/min-upper years,
+  AND-of-OR canonical genre clauses, source-order independence, intentional
+  duplicate equal clauses, first-writer/idempotent terminal status, rollback and
+  pending-on-operational-failure are covered by the focused `74`-assertion DB
+  suite within the full `793`.
+- Protected SHA-256 values match T001 for all seven historical migrations, all
+  three Feature 004 contracts, `scripts/database-types.mjs` and C1. A baseline
+  path comparison also confirms candidate source/tests/assets unchanged. All
+  three nonempty runners proved Feature 004 room/member/filter/candidate values
+  and filter xmin stable, and cleaned owned fixtures.
+- R01 is exactly `1/1`: T016 was the only `npm run db:types` write. Every later
+  validation used `npm run db:types:check`; main metadata remains
+  `7d9c800c...ed82d1 / 676005 / 12159 / 1789168582 / 1789168583`, and the fresh
+  check preserved its independent inode/timestamps.
+- R02 approved accounting passed exactly: normal `29`, additional
+  repeatability `25`, fresh `17`, Phase-6 successful-evidence total `71`.
+  Actual charged work is `114`: owner `5 × 9 = 45`, smoke `4 × 16 = 64`, H03
+  `1 × 3 = 3`, and C1 `2 × 1 = 2`. This includes two failed owner profiles
+  (`18`), one failed smoke (`16`) and one superseded post-fix owner pass (`9`)
+  in addition to the required `71`. There were no partial/manual attempts, 429,
+  quota probe, automatic Auth retry, limit increase, quota-evasion reset/restart
+  or shared/exported Auth storage.
+- Scope inspection found one and only one production room channel, with rooms
+  UPDATE/id-only invalidation; generated public types contain no private result
+  relation. Resolution production/route code contains no TMDB/provider,
+  candidate RPC/card/hook, exact years/genres/clauses, roster/identity, ranking,
+  swipe, progression or match surface. Pending/incompatible/failure expose no
+  Feature 006 handoff; compatible retains only the approved private prerequisite
+  and future-sourcing text. No filter reopen/new round, dynamic membership, TV,
+  permanent-account or Feature 006+ implementation was added.
+- Final `git diff --check` and checklist validation pass with T001–T048 exactly
+  `48/48` checked. The only uncommitted files are this quickstart and
+  `tasks.md`, intentionally left for independent final review; no completion
+  docs/roadmap commit was created. The main local stack and disposable fresh
+  stack are stopped, and `/tmp/otteroom-005-fresh.YQ1lll` was removed.
+
+### Independent final review and completion sign-off — 2026-09-12
+
+- Reviewed the constitution, product vision, roadmap, testing strategy, every
+  Feature 005 specification/design/contract/task/validation artifact and the
+  complete implementation range
+  `452ba6ca8872cde221847da70d78a3ba57e175bd..c7f765993ce0ab83edf37f7f30d0cc018b35037a`.
+- No substantive correctness, concurrency, privacy, migration, Realtime,
+  testing-strategy or scope defect was found. The recorded G2/G3,
+  repeatability and exact-SHA fresh-checkout receipts are internally coherent
+  and sufficient; expensive suites were not rerun without a concrete finding.
+- Confirmed T001–T048=`48/48`, DB G2/G3=`4/793`, client G2=`686`, client
+  G3=`688`, logical normal browser gate=`29`, repeatability=`54`, fresh
+  checkout=`17`, actual cumulative R02 usage=`114`, R01=`1/1`, no 429/quota
+  evasion and fresh checkout at exact G3 SHA `c7f765993ce0ab83edf37f7f30d0cc018b35037a`.

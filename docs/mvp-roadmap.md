@@ -1,7 +1,7 @@
 # Otteroom MVP Roadmap
 
 **Status:** Normative current sequencing and directional feature decomposition.
-Established 2026-09-10. Features 001–003 are complete; 004–009 are planned.
+Established 2026-09-10. Features 001–005 are COMPLETE; Features 006–009 are PLANNED.
 
 ## Authority and feature boundaries
 
@@ -35,7 +35,7 @@ roadmap does not authorize implementing the whole MVP at once.
 | 002 | First Movie Candidate | COMPLETE | One shared authoritative fixture candidate and stable display/recovery |
 | 003 | Generalized Room Membership & QR Join | COMPLETE | Configured required voter count, creator voting choice, fixed group assembly and QR joining |
 | 004 | Participant Filters | COMPLETE | Each assembled voter configures recoverable genres and release-year filters |
-| 005 | Common Filter Resolution | PLANNED | Resolve compatible candidate constraints across the assembled voting group |
+| 005 | Common Filter Resolution | COMPLETE | Resolve compatible candidate constraints across the assembled voting group |
 | 006 | TMDB Candidate Source | PLANNED | Real eligible TMDB candidates with stable room assignment |
 | 007 | Swipe Decisions | PLANNED | Independent, persistent right/left decisions per voter and candidate |
 | 008 | Candidate Progression | PLANNED | Recoverable progression governed by resolved agreement semantics; stop advancing on agreement |
