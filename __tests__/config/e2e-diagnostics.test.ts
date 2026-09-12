@@ -390,12 +390,12 @@ it('ordinary safeBody final check inspects image-bearing text, fails credentials
   assert.equal(closed, 5); assert.equal(registry.size, 0);
 `));
 
-it('explicitly discovers H01–H03 with fixed safe labels while excluding candidate and arbitrary labels', () => verify(prelude + `
+it('explicitly discovers H01–H03 and I01–I03 with fixed safe labels while excluding candidate and arbitrary labels', () => verify(prelude + `
   const { default: config } = await import('./playwright.config.ts');
   const { safeResult } = await import('./e2e/support/safe-reporter.ts');
   const { safeDiagnosticLocation } = await import('./e2e/support/sanitize-diagnostics.ts');
   assert.deepEqual(config.projects.find(p => p.name === 'acceptance').testMatch,
-    ['room-session.spec.ts', 'generalized-room-membership-qr.spec.ts', 'participant-filters.spec.ts']);
+    ['room-session.spec.ts', 'generalized-room-membership-qr.spec.ts', 'participant-filters.spec.ts', 'common-filter-resolution.spec.ts']);
   const titles = ['@filters H01 validates private owned filters and editable saved state',
     '@filters H02 recovers filters through failures and lost acknowledgements',
     '@filters H03 serializes final completion and freezes every filter'];
@@ -405,21 +405,33 @@ it('explicitly discovers H01–H03 with fixed safe labels while excluding candid
     assert.equal(result.scenario, 'filters'); assert.equal(result.browserCase, title.split(' ')[1]);
     assert.equal(result.location, 'e2e/participant-filters.spec.ts:12:3');
   }
-  for (const file of ['participant-filters.spec', 'support/filter-harness', 'support/room-harness'])
+  const resolutionTitles = ['@resolution I01 converges a three-voter compatible room across reload reconnect and re-entry',
+    '@resolution I02 converges a non-voting creator and three voters on terminal incompatibility',
+    '@resolution I03 recovers pre-commit failure and committed-response loss with two reused identities'];
+  for (const title of resolutionTitles) {
+    const result = safeResult({ title, repeatEachIndex: 0 }, { status: 'passed',
+      error: { message: 'E2E_SAFE_FAILURE at e2e/common-filter-resolution.spec.ts:12:3' } });
+    assert.equal(result.scenario, 'resolution'); assert.equal(result.browserCase, title.split(' ')[1]);
+    assert.equal(result.location, 'e2e/common-filter-resolution.spec.ts:12:3');
+  }
+  for (const file of ['participant-filters.spec', 'common-filter-resolution.spec', 'support/filter-harness', 'support/room-harness', 'support/resolution-harness'])
     assert.equal(safeDiagnosticLocation('E2E_SAFE_FAILURE at e2e/' + file + '.ts:12:3'), 'e2e/' + file + '.ts:12:3');
-  for (const title of ['@filters H00 future', '@filters H04 future', '@candidate F01 retired', '@filters ' + sentinel()]) {
+  for (const title of ['@filters H00 future', '@filters H04 future', '@resolution I00 future', '@resolution I04 future',
+    '@candidate F01 retired', '@filters ' + sentinel(), '@resolution ' + sentinel()]) {
     const result = safeResult({ title }, { status: 'failed' });
     assert.equal(result.scenario, 'unclassified'); assert.equal(result.browserCase, 'none');
   }
   assert.equal(safeDiagnosticLocation('e2e/arbitrary.ts:12:3'), undefined);
   for (const file of ['scripts/run-e2e.mjs', 'e2e/support/safe-diagnostics.ts']) {
     const source = fs.readFileSync(file, 'utf8');
-    assert.equal(/acceptance[ -]N=82/.test(source), true);
+    assert.equal(/acceptance[ -]N=91/.test(source), true);
     assert.equal(source.includes('N=47'), false);
   }
   const runner = fs.readFileSync('scripts/run-e2e.mjs', 'utf8');
   assert.equal(runner.includes("'H01'"), true);
   assert.equal(runner.includes("'filters'"), true);
+  for (const label of ["'@resolution'", "'resolution'", "'I01'", "'I02'", "'I03'"])
+    assert.equal(runner.includes(label), true);
   assert.equal(runner.includes("'F01'"), false);
   assert.equal(runner.includes("'candidate'"), false);
 `));
@@ -429,7 +441,7 @@ const candidatePrelude = prelude + `
   import { candidateHarness } from './e2e/support/candidate-harness.ts';
   process.env.EXPO_PUBLIC_SUPABASE_URL = 'http://127.0.0.1:55321';
   const api = { origin: process.env.EXPO_PUBLIC_SUPABASE_URL, publicKey: 'synthetic-public' };
-  const room = { id: '11111111-1111-4111-8111-111111111111', code: 'ABCDEF0123', state: 'ready', voter_count: 2, required_voter_count: 2, filter_completed_count: 0 };
+  const room = { id: '11111111-1111-4111-8111-111111111111', code: 'ABCDEF0123', state: 'ready', voter_count: 2, required_voter_count: 2, filter_completed_count: 0, filter_resolution_status: 'pending' };
   const ids = [randomUUID(), randomUUID()];
   const pages = ids.map(() => Object.assign(new EventEmitter(), {
     routes: [], addInitScript: async () => {},
@@ -647,7 +659,7 @@ it.each([2, 3, 4])('candidate barriers require all %i independent callers and cl
     await assert.rejects(candidateHarness(invalid, 'http://127.0.0.1:8081'));
   const h = await candidateHarness(participants, 'http://127.0.0.1:8081');
   let forwarded = 0, aborted = 0;
-  const ids = pages.map(() => randomUUID()), room = { id: randomUUID(), code: 'ABCDEF0123', state: 'ready', voter_count: 3, required_voter_count: 3, filter_completed_count: 0 };
+  const ids = pages.map(() => randomUUID()), room = { id: randomUUID(), code: 'ABCDEF0123', state: 'ready', voter_count: 3, required_voter_count: 3, filter_completed_count: 0, filter_resolution_status: 'pending' };
   const api = { origin: process.env.EXPO_PUBLIC_SUPABASE_URL, publicKey: 'synthetic-public' };
   try {
     assert.throws(() => h.bind(room, ids.slice(1), api)); h.bind(room, ids, api);
@@ -678,13 +690,13 @@ it('Realtime dispatch accounting distinguishes a late prior response from a new 
     await connect(browser);
     serverMessage(JSON.stringify([null, null, 'realtime:room:' + id, 'system',
       { extension: 'postgres_changes', status: 'ok', message: 'Subscribed to PostgreSQL' }]));
-    const url = 'http://127.0.0.1:55321/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count&id=eq.' + id;
+    const url = 'http://127.0.0.1:55321/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status&id=eq.' + id;
     const request = { url: () => url }; page.emit('request', request);
     const delayed = new Promise(resolve => { finish = resolve; });
     page.emit('response', { request: () => request, url: () => url, ok: () => true, body: async () => Buffer.from(JSON.stringify(await delayed)) });
     assert.equal(transport.stats.readRequests, 1); assert.equal(transport.stats.reads, 0);
     const before = { ...transport.stats };
-    finish([{ id, code: 'ABCDEF0123', state: 'waiting', voter_count: 2, required_voter_count: 3, filter_completed_count: 0 }]);
+    finish([{ id, code: 'ABCDEF0123', state: 'waiting', voter_count: 2, required_voter_count: 3, filter_completed_count: 0, filter_resolution_status: 'pending' }]);
     await transport.wait('reads', 1);
     assert.equal(transport.stats.readRequests, before.readRequests);
     assert.notEqual(transport.stats.reads, before.reads);
@@ -707,7 +719,7 @@ const realtimePrelude = prelude + `
   const system = JSON.stringify([null, null, 'realtime:room:' + id, 'system',
     { extension: 'postgres_changes', status: 'ok', message: 'Subscribed to PostgreSQL' }]);
   serverMessage(system);
-  const url = 'http://127.0.0.1:55321/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count&id=eq.' + id;
+  const url = 'http://127.0.0.1:55321/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status&id=eq.' + id;
   const request = { url: () => url };
   const turn = () => new Promise(resolve => setImmediate(resolve));
 `;
@@ -752,7 +764,7 @@ it.each(['retired-body', 'active-body', 'retired-malformed', 'retired-valid'])('
     if ('${trial}'.startsWith('retired')) page.emit('framenavigated', { parentFrame: () => null });
     if ('${trial}'.endsWith('body')) reject(Error('synthetic unavailable body'));
     else finish(Buffer.from('${trial}' === 'retired-malformed' ? '{}' : JSON.stringify([
-      { id, code: 'ABCDEF0123', state: 'waiting', voter_count: 2, required_voter_count: 3, filter_completed_count: 0 }])));
+      { id, code: 'ABCDEF0123', state: 'waiting', voter_count: 2, required_voter_count: 3, filter_completed_count: 0, filter_resolution_status: 'pending' }])));
     await turn();
     if (['active-body', 'retired-malformed'].includes('${trial}')) assert.throws(() => transport.assertHealthy());
     else {

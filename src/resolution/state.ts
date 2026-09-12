@@ -81,6 +81,9 @@ export function syncResolutionRoom(current: CommonFilterResolutionState,
     return { ...current, status: incoming, attempt: 'inactive', message: null };
   }
   if (current.status !== 'pending') return current;
+  if (eligible(room) && current.attempt === 'inactive') {
+    return { ...current, attempt: 'resolving', message: null };
+  }
   if (!eligible(room) && current.attempt !== 'inactive') {
     return { ...current, attempt: 'inactive', message: null };
   }

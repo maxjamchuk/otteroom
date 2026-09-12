@@ -4,7 +4,8 @@ import { safeBody, SafeDiagnostics } from './safe-diagnostics.ts';
 
 export type PublicApi = { origin: string; publicKey: string };
 export type RoomProjection = { id: string; code: string; state: string; voter_count: number;
-  required_voter_count: number; filter_completed_count: number };
+  required_voter_count: number; filter_completed_count: number;
+  filter_resolution_status: 'pending' | 'compatible' | 'incompatible' };
 export type CreationConfiguration = { requiredVoterCount: number; creatorIsVoter: boolean };
 export const twoVoters = { requiredVoterCount: 2, creatorIsVoter: true } as const;
 type Member = { id: string; room_id: string; user_id: string; is_voter: boolean; joined_at: string };
@@ -46,12 +47,15 @@ export function committedRoomSnapshot(room: RoomProjection) {
     if (!Array.isArray(snapshots) || snapshots.length !== 1 || !/^[0-9]+$/.test(snapshots[0].xmin)) throw new Error();
     const { row, members, filters } = snapshots[0] as { row: StoredRoom; members: Member[]; filters: StoredFilter[] };
     if (!row || row.id !== room.id || row.code !== room.code ||
-      Object.keys(row).sort().join(',') !== 'code,created_at,creation_request_id,creator_user_id,filter_completed_count,id,movie_candidate_id,required_voter_count,state,updated_at,voter_count' ||
+      Object.keys(row).sort().join(',') !== 'code,created_at,creation_request_id,creator_user_id,filter_completed_count,filter_resolution_status,id,movie_candidate_id,required_voter_count,state,updated_at,voter_count' ||
       !Number.isInteger(row.required_voter_count) || row.required_voter_count < 2 || row.required_voter_count > 2147483647 ||
       !Number.isInteger(row.voter_count) || row.voter_count < 0 || row.voter_count > row.required_voter_count ||
       row.state !== (row.voter_count === row.required_voter_count ? 'ready' : 'waiting') ||
       !Number.isInteger(row.filter_completed_count) || row.filter_completed_count < 0 ||
       row.filter_completed_count > row.required_voter_count || row.filter_completed_count > 0 && row.state !== 'ready' ||
+      !['pending','compatible','incompatible'].includes(row.filter_resolution_status) ||
+      row.filter_resolution_status !== 'pending' &&
+        (row.state !== 'ready' || row.filter_completed_count !== row.required_voter_count) ||
       row.movie_candidate_id !== null && typeof row.movie_candidate_id !== 'string' ||
       !Array.isArray(members) || members.length < 1 || members.length > 5 ||
       members.some(m => Object.keys(m).sort().join(',') !== 'id,is_voter,joined_at,room_id,user_id' || m.room_id !== row.id ||
@@ -97,25 +101,28 @@ export async function startHost(page: Page, diagnostics: SafeDiagnostics): Promi
 
 export async function ownRooms(page: Page, api: PublicApi, targetId?: string, targetCode?: string): Promise<RoomProjection[]> {
   // A real member-authorized Data API read, never an owner/service-role oracle.
-  // Session access stays inside this browser context and only the six public room fields return.
+  // Session access stays inside this browser context and only the seven public room fields return.
   const rows: unknown = await page.evaluate(async ({ origin, publicKey, targetId, targetCode }) => {
     const key = Object.keys(localStorage).find(name => /^sb-.+-auth-token$/.test(name));
     const session = key ? JSON.parse(localStorage.getItem(key) ?? 'null') : null;
     if (!session?.access_token) throw new Error('E2E_SAFE_FAILURE');
     const filter = targetId ? `&id=eq.${encodeURIComponent(targetId)}` : targetCode ? `&code=eq.${encodeURIComponent(targetCode)}` : '';
-    const response = await fetch(`${origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count${filter}`, {
+    const response = await fetch(`${origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status${filter}`, {
       headers: { apikey: publicKey, Authorization: `Bearer ${session.access_token}` },
     });
     if (!response.ok) throw new Error('E2E_SAFE_FAILURE');
     return response.json();
   }, { ...api, targetId, targetCode });
   if (!Array.isArray(rows) || rows.length > 10 || rows.some(row => !row ||
-    Object.keys(row).sort().join(',') !== 'code,filter_completed_count,id,required_voter_count,state,voter_count' || typeof row.id !== 'string' ||
+    Object.keys(row).sort().join(',') !== 'code,filter_completed_count,filter_resolution_status,id,required_voter_count,state,voter_count' || typeof row.id !== 'string' ||
     typeof row.code !== 'string' || !/^[0-9A-F]{10}$/.test(row.code) || !Number.isInteger(row.voter_count) || !Number.isInteger(row.required_voter_count) || row.voter_count < 0 ||
     row.required_voter_count < 2 || row.required_voter_count > 2147483647 || row.voter_count > row.required_voter_count ||
     row.state !== (row.voter_count === row.required_voter_count ? 'ready' : 'waiting') ||
     !Number.isInteger(row.filter_completed_count) || row.filter_completed_count < 0 ||
-    row.filter_completed_count > row.required_voter_count || row.filter_completed_count > 0 && row.state !== 'ready')) {
+    row.filter_completed_count > row.required_voter_count || row.filter_completed_count > 0 && row.state !== 'ready' ||
+    !['pending','compatible','incompatible'].includes(row.filter_resolution_status) ||
+    row.filter_resolution_status !== 'pending' &&
+      (row.state !== 'ready' || row.filter_completed_count !== row.required_voter_count))) {
     throw new Error('E2E_SAFE_FAILURE');
   }
   return rows;
@@ -203,7 +210,7 @@ export async function realtimeBarrier(page: Page, holdInitial = false) {
     const url = new URL(r.url());
     if (url.pathname.endsWith('/rpc/join_room')) stats.joins++;
     if (url.pathname === '/rest/v1/rooms' && url.searchParams.get('id') &&
-      url.searchParams.get('select')?.replaceAll(' ', '') === 'id,code,state,voter_count,required_voter_count,filter_completed_count') {
+      url.searchParams.get('select')?.replaceAll(' ', '') === 'id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status') {
       // Dispatch and completion are distinct: a response already in flight can
       // finish after an observed socket loss without issuing any new request.
       stats.readRequests++; readDocuments.set(r, documentGeneration);
@@ -213,7 +220,7 @@ export async function realtimeBarrier(page: Page, holdInitial = false) {
   };
   const response = async (r: Response) => {
     const url = new URL(r.url());
-    if (url.pathname !== '/rest/v1/rooms' || !url.searchParams.get('id') || url.searchParams.get('select')?.replaceAll(' ', '') !== 'id,code,state,voter_count,required_voter_count,filter_completed_count') return;
+    if (url.pathname !== '/rest/v1/rooms' || !url.searchParams.get('id') || url.searchParams.get('select')?.replaceAll(' ', '') !== 'id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status') return;
     let bytes: Buffer;
     try { bytes = await r.body(); }
     catch {
@@ -232,7 +239,10 @@ export async function realtimeBarrier(page: Page, holdInitial = false) {
       if (bytes.length > 4096) throw new Error('E2E_SAFE_FAILURE');
       const rows = JSON.parse(bytes.toString('utf8'));
       if (!r.ok() || !Array.isArray(rows) || rows.length !== 1 ||
-        Object.keys(rows[0]).sort().join(',') !== 'code,filter_completed_count,id,required_voter_count,state,voter_count' || url.searchParams.get('id') !== `eq.${rows[0].id}`) throw new Error('E2E_SAFE_FAILURE');
+        Object.keys(rows[0]).sort().join(',') !== 'code,filter_completed_count,filter_resolution_status,id,required_voter_count,state,voter_count' || url.searchParams.get('id') !== `eq.${rows[0].id}` ||
+        !['pending','compatible','incompatible'].includes(rows[0].filter_resolution_status) ||
+        rows[0].filter_resolution_status !== 'pending' &&
+          (rows[0].state !== 'ready' || rows[0].filter_completed_count !== rows[0].required_voter_count)) throw new Error('E2E_SAFE_FAILURE');
       stats.reads++; changed();
     } catch { if (!disposed) failure('read'); }
   };
@@ -350,12 +360,15 @@ export async function assertAccepted(response: Response, room: RoomProjection, o
   member: { isCreator: boolean; isVoter: boolean }, state: 'waiting' | 'ready', count = state === 'ready' ? room.required_voter_count : room.voter_count) {
   const rows: unknown = await response.json();
   const valid = response.ok() && Array.isArray(rows) && rows.length === 1 && rows[0] &&
-    Object.keys(rows[0]).sort().join(',') === 'filter_completed_count,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
+    Object.keys(rows[0]).sort().join(',') === 'filter_completed_count,filter_resolution_status,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
     rows[0].outcome === outcome && rows[0].room_id === room.id && rows[0].room_code === room.code &&
     rows[0].is_creator === member.isCreator && rows[0].is_voter === member.isVoter &&
     rows[0].room_state === state && rows[0].voter_count === count && rows[0].required_voter_count === room.required_voter_count &&
     Number.isInteger(rows[0].filter_completed_count) && rows[0].filter_completed_count >= room.filter_completed_count &&
-    rows[0].filter_completed_count <= room.required_voter_count;
+    rows[0].filter_completed_count <= room.required_voter_count &&
+    ['pending','compatible','incompatible'].includes(rows[0].filter_resolution_status) &&
+    (rows[0].filter_resolution_status === 'pending' ||
+      rows[0].room_state === 'ready' && rows[0].filter_completed_count === room.required_voter_count);
   expect(!!valid).toBe(true);
 }
 
@@ -370,10 +383,10 @@ export async function createWaiting(page: Page, diagnostics: SafeDiagnostics, co
   expect(response.ok() && Object.keys(request).sort().join(',') === 'p_creation_request_id,p_creator_is_voter,p_required_voter_count' &&
     request.p_required_voter_count === configuration.requiredVoterCount && request.p_creator_is_voter === configuration.creatorIsVoter &&
     Array.isArray(rows) && rows.length === 1 && rows[0].outcome === 'created' &&
-    Object.keys(rows[0]).sort().join(',') === 'filter_completed_count,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
+    Object.keys(rows[0]).sort().join(',') === 'filter_completed_count,filter_resolution_status,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
     rows[0].is_creator === true && rows[0].is_voter === configuration.creatorIsVoter && rows[0].room_state === 'waiting' &&
     rows[0].voter_count === Number(configuration.creatorIsVoter) && rows[0].required_voter_count === configuration.requiredVoterCount &&
-    rows[0].filter_completed_count === 0).toBe(true);
+    rows[0].filter_completed_count === 0 && rows[0].filter_resolution_status === 'pending').toBe(true);
   const rooms = await ownRooms(page, api);
   expect(rooms.length === 1 && rooms[0].id === rows[0].room_id && rooms[0].code === rows[0].room_code).toBe(true);
   const room = rooms[0];

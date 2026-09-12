@@ -271,7 +271,9 @@ it('only a fresh canonical room entry clears a terminal integrity overlay',async
   await act(async()=>{router.setParams({code:'ABCDEF0123'});});
   expect(screen.getByText('Filters are compatible.')).toBeVisible();
   expect(screen.queryByText('Common-filter status could not be verified.')).toBeNull();
-  expect(mockResolve).not.toHaveBeenCalled();
+  // Room B's own-detail recovery advances its partial aggregate to N/N and is
+  // independently eligible; returning to stored-terminal room A is not.
+  expect(mockResolve.mock.calls).toEqual([[roomB.room_id]]);
 });
 
 it('sync degradation preserves filter state, disables new saves, and uses only room retry', async () => {

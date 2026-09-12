@@ -4,6 +4,8 @@ import { createWaiting, startHost, ownParticipant, withParticipants, realtimeBar
   assertReady, committedRoomSnapshot, createWaitingWithSession, ownRooms, configureCreation, observeCandidateRpcZero,
   type RoomProjection, type PublicApi } from './support/room-harness';
 import { assertFilterProgress, recoverOwnFilter, submitOwnFilter } from './support/filter-harness';
+import { assertResolutionTrafficZero, assertResolutionView, assertStoredResolution,
+  observeResolutionTraffic } from './support/resolution-harness';
 import { verifyInvitationQr } from './support/qr-harness';
 
 export const membershipAnonymousBudget = Object.freeze({ G01: 1, G02: 1, G03: 3, G04: 4, G05: 2, G06: 4, G07: 4, G08: 4, G09: 3 });
@@ -37,15 +39,16 @@ async function nextRoomRead(d: SafeDiagnostics, room: RoomProjection, count: num
   const request = await d.page.waitForRequest(request => {
     const url = new URL(request.url());
     return url.pathname === '/rest/v1/rooms' && url.searchParams.get('id') === `eq.${room.id}` &&
-      url.searchParams.get('select')?.replaceAll(' ', '') === 'id,code,state,voter_count,required_voter_count,filter_completed_count';
+      url.searchParams.get('select')?.replaceAll(' ', '') === 'id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status';
   });
   const response = await request.response();
   expect(response?.ok() === true && await response.finished() === null).toBe(true);
   const rows = await response!.json();
   expect(Array.isArray(rows) && rows.length === 1 &&
-    Object.keys(rows[0]).sort().join(',') === 'code,filter_completed_count,id,required_voter_count,state,voter_count' &&
+    Object.keys(rows[0]).sort().join(',') === 'code,filter_completed_count,filter_resolution_status,id,required_voter_count,state,voter_count' &&
     rows[0].id === room.id && rows[0].code === room.code && rows[0].voter_count === count &&
     rows[0].required_voter_count === 3 && Number.isInteger(rows[0].filter_completed_count) &&
+    ['pending','compatible','incompatible'].includes(rows[0].filter_resolution_status) &&
     rows[0].state === (count === 3 ? 'ready' : 'waiting')).toBe(true);
 }
 async function reload(d: SafeDiagnostics, room: RoomProjection, creator: boolean, votes: boolean, count: number, transport?: Transport) {
@@ -78,10 +81,11 @@ async function reenter(d: SafeDiagnostics, api: PublicApi, room: RoomProjection,
     return (await Promise.all((await Promise.all([send(), send()])).map(async response => {
       const rows = await response.json(), row = rows?.[0];
       return response.ok && Array.isArray(rows) && rows.length === 1 && row &&
-        Object.keys(row).sort().join(',') === 'filter_completed_count,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
+        Object.keys(row).sort().join(',') === 'filter_completed_count,filter_resolution_status,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
         row.outcome === 'already_member' && row.room_id === room.id && row.room_code === room.code && row.room_state === 'ready' &&
         row.is_creator === creator && row.is_voter === votes && row.voter_count === 3 && row.required_voter_count === 3 &&
-        Number.isInteger(row.filter_completed_count);
+        Number.isInteger(row.filter_completed_count) && ['pending','compatible','incompatible'].includes(row.filter_resolution_status) &&
+        (row.filter_resolution_status==='pending'||row.filter_completed_count===row.required_voter_count);
     }))).every(Boolean);
   }, { api, room, creator, votes });
   expect(valid).toBe(true);
@@ -120,8 +124,8 @@ async function directJoin(page: Page, api: PublicApi, code: string) {
 }
 
 function isStrictFull(row: Record<string, unknown> | undefined): boolean {
-  return !!row && Object.keys(row).sort().join(',') === 'filter_completed_count,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
-    row.outcome === 'full' && ['filter_completed_count', 'is_creator', 'is_voter', 'required_voter_count', 'room_code', 'room_id', 'room_state', 'voter_count']
+  return !!row && Object.keys(row).sort().join(',') === 'filter_completed_count,filter_resolution_status,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
+    row.outcome === 'full' && ['filter_completed_count', 'filter_resolution_status', 'is_creator', 'is_voter', 'required_voter_count', 'room_code', 'room_id', 'room_state', 'voter_count']
       .every(key => row[key] === null);
 }
 
@@ -241,7 +245,7 @@ test('@membership G02 room creation failures preserve configuration', async ({ d
                   if (!response.ok() || !row?.room_id || !row?.room_code) throw new Error('E2E_SAFE_FAILURE');
                   committed = committedRoomSnapshot({ id: row.room_id, code: row.room_code, state: 'waiting',
                     voter_count: Number(configurations[index].creatorIsVoter), required_voter_count: configurations[index].requiredVoterCount,
-                    filter_completed_count: 0 });
+                    filter_completed_count: 0, filter_resolution_status: 'pending' });
                 } finally { await response.dispose(); }
                 await route.abort('failed');
               } catch { interceptionFailed = true; await route.abort('failed').catch(() => {}); }
@@ -312,6 +316,7 @@ test('@membership G03 three voting members assemble through link and code', asyn
   test.setTimeout(90000);
   await safeBody(diagnostics, () => withParticipants(browser, { baseURL, viewport }, info, 2, async ([middle, last]) => {
     const group = [diagnostics, middle, last];
+    group.forEach(item => observeResolutionTraffic(item.page));
     const creatorTransport = await realtimeBarrier(diagnostics.page), middleTransport = await realtimeBarrier(middle.page);
     let stage = 'setup';
     try {
@@ -358,27 +363,33 @@ test('@membership G03 three voting members assemble through link and code', asyn
         await creatorTransport.wait('updates', 3 + index); await assertFilterProgress(diagnostics.page, room, index + 1);
         expect((await recoverOwnFilter(voter.page, api, room)).outcome === (index === 2 ? 'locked' : 'saved')).toBe(true);
       }
+      for(const d of group)await assertResolutionView(d.page,'incompatible');
+      expect((await assertStoredResolution(diagnostics.page,api,room,'incompatible')).filter_completed_count===3).toBe(true);
       const completedRoom = committedRoomSnapshot(room);
       expect(completedRoom.row.filter_completed_count === 3 && completedRoom.row.movie_candidate_id === null &&
         completedRoom.filters.length === 3 && JSON.stringify(completedRoom.members) === JSON.stringify(ready.members)).toBe(true);
       stage = 'ready-reloads';
       await reload(diagnostics, room, true, true, 3, creatorTransport); await reload(middle, room, false, true, 3, middleTransport);
       await assertFilterProgress(diagnostics.page, room, 3); await assertFilterProgress(middle.page, room, 3);
+      await assertResolutionView(diagnostics.page,'incompatible');await assertResolutionView(middle.page,'incompatible');
       stage = 'ready-reconnect';
       await reconnect(middle, middleTransport); await assertFilterProgress(middle.page, room, 3);
+      await assertResolutionView(middle.page,'incompatible');
       stage = 'reentry';
       for (let i = 0; i < group.length; i++) {
         await reenter(group[i], api, room, i === 0, true);
         expect(await ownParticipant(group[i].page) === ids[i]).toBe(true);
         expect((await recoverOwnFilter(group[i].page, api, room)).outcome === 'locked').toBe(true);
+        await assertResolutionView(group[i].page,'incompatible');
         expect(observeCandidateRpcZero(group[i].page).count()).toBe(0);
       }
       expect(committedRoomSnapshot(room).row.movie_candidate_id === null).toBe(true);
+      assertResolutionTrafficZero(group.map(item => item.page));
       expect(creatorTransport.stats.prematureReads === 0).toBe(true);
       expect(middleTransport.stats.prematureReads === 0).toBe(true);
       creatorTransport.assertHealthy(); middleTransport.assertHealthy();
       expect(group.reduce((n, d) => n + d.signupAttempts, 0) === membershipAnonymousBudget.G03).toBe(true);
-      await diagnostics.record({ scenario: 'G03', outcome: 'voting creator link/code assembly; Ready progress0/3->1/3->2/3->3/3; own saved then locked recovery; reload/socket/re-entry convergence; candidate requests/UI0; identities3' });
+      await diagnostics.record({ scenario: 'G03', outcome: 'voting creator link/code assembly; Ready progress0/3->1/3->2/3->3/3; stored incompatible status; own saved then locked recovery; reload/socket/re-entry convergence; candidate/TMDB requests/UI0; identities3' });
     } finally {
       try {
         const counts = (t: Transport) => `requests=${t.stats.readRequests},completed=${t.stats.reads},retired=${t.stats.retiredBodies},premature=${t.stats.prematureReads},readFailures=${t.stats.readFailures},frameFailures=${t.stats.frameFailures},bindings=${t.stats.readiness}`;
@@ -392,6 +403,7 @@ test('@membership G04 non-voting creator observes voter filter progress', async 
   test.setTimeout(90000);
   await safeBody(diagnostics, () => withParticipants(browser, { baseURL, viewport }, info, 3, async voters => {
     const group = [diagnostics, ...voters];
+    group.forEach(item => observeResolutionTraffic(item.page));
     const transport = await realtimeBarrier(diagnostics.page);
     try {
       const { api, room, invitation, participant } = await createWaiting(diagnostics.page, diagnostics, { requiredVoterCount: 3, creatorIsVoter: false });
@@ -423,17 +435,21 @@ test('@membership G04 non-voting creator observes voter filter progress', async 
         await expect(diagnostics.page.getByRole('heading', { name: 'Choose your filters', exact: true })).toHaveCount(0);
         expect((await recoverOwnFilter(diagnostics.page, api, room)).outcome === 'not_voter').toBe(true);
       }
+      for(const d of group)await assertResolutionView(d.page,'compatible');
+      expect((await assertStoredResolution(diagnostics.page,api,room,'compatible')).filter_completed_count===3).toBe(true);
       await reconnect(diagnostics, transport);
       for (let i = 0; i < group.length; i++) {
         await reenter(group[i], api, room, i === 0, i !== 0);
         expect(await ownParticipant(group[i].page) === ids[i]).toBe(true);
+        await assertResolutionView(group[i].page,'compatible');
         expect(observeCandidateRpcZero(group[i].page).count()).toBe(0);
       }
       const completed = committedRoomSnapshot(room);
       expect(completed.row.filter_completed_count === 3 && completed.row.movie_candidate_id === null && completed.filters.length === 3).toBe(true);
+      assertResolutionTrafficZero(group.map(item => item.page));
       transport.assertHealthy();
       expect(group.reduce((n, d) => n + d.signupAttempts, 0) === membershipAnonymousBudget.G04).toBe(true);
-      await diagnostics.record({ scenario: 'G04', outcome: 'non-voting creator observes aggregate-only0/3->1/3->2/3->3/3; own recovery/submit not_voter; no private form/details; reconnect/re-entry stable; candidate requests/UI0; identities4' });
+      await diagnostics.record({ scenario: 'G04', outcome: 'non-voting creator observes aggregate-only0/3->1/3->2/3->3/3; stored compatible status; own recovery/submit not_voter; no private form/details; reconnect/re-entry stable; candidate/TMDB requests/UI0; identities4' });
     } finally { await cleanup([transport]); }
   }));
 });
@@ -441,6 +457,8 @@ test('@membership G04 non-voting creator observes voter filter progress', async 
 test('@membership G05 decoded QR admission is idempotent', async ({ diagnostics, browser, baseURL, viewport }, info) => {
   test.setTimeout(90000);
   await safeBody(diagnostics, () => withParticipants(browser, { baseURL, viewport }, info, 1, async ([voter]) => {
+    const pages = [diagnostics.page, voter.page];
+    pages.forEach(observeResolutionTraffic);
     const { api, room, invitation, participant } = await createWaiting(diagnostics.page, diagnostics, { requiredVoterCount: 3, creatorIsVoter: true });
     const decoded = await assertQr(diagnostics, invitation); await startHost(voter.page, voter);
     const voterId = await ownParticipant(voter.page), second = await voter.context.newPage();
@@ -451,11 +469,13 @@ test('@membership G05 decoded QR admission is idempotent', async ({ diagnostics,
         calls.filter(call => call.row?.outcome === 'already_member').length === 1).toBe(true);
       const after = committedRoomSnapshot(room);
       expect(after.row.voter_count === 2 && after.row.state === 'waiting' && after.members.length === 2 &&
+        after.row.filter_resolution_status==='pending' &&
         after.members.some(member => member.user_id === participant) && after.members.some(member => member.user_id === voterId)).toBe(true);
       await occupancy(voter, 2); expect(await assertQr(voter, invitation) === decoded).toBe(true);
       expect((await navigationJoin(voter.page, invitation)).row?.outcome === 'already_member').toBe(true);
       for (const code of [room.code.toLowerCase(), ` ${room.code} `]) expect((await directJoin(voter.page, api, code)).row?.outcome === 'already_member').toBe(true);
-      stable(room, after);
+      stable(room, after);expect((await assertStoredResolution(voter.page,api,room,'pending')).voter_count===2).toBe(true);
+      assertResolutionTrafficZero(pages);
       expect(diagnostics.signupAttempts + voter.signupAttempts === membershipAnonymousBudget.G05).toBe(true);
       await diagnostics.record({ scenario: 'G05', outcome: 'actual independently decoded QR navigation; two held same-session page joins forwarded together; joined/already_member; one membership/increment; link/code re-entry stable; identities2' });
     } finally { await second.close(); }
@@ -542,6 +562,8 @@ test('@membership G07 final slot capacity competition', async ({ diagnostics, br
 test('@membership G08 authorization and room isolation', async ({ diagnostics, browser, baseURL, viewport }, info) => {
   test.setTimeout(90000);
   await safeBody(diagnostics, () => withParticipants(browser, { baseURL, viewport }, info, 3, async ([v1, v2, outsider]) => {
+    const pages = [diagnostics.page, v1.page, v2.page, outsider.page];
+    pages.forEach(observeResolutionTraffic);
     const { api, room, invitation } = await createWaiting(diagnostics.page, diagnostics, { requiredVoterCount: 3, creatorIsVoter: true });
     for (const d of [v1, v2]) await startHost(d.page, d);
     await directJoin(v1.page, api, room.code); await directJoin(v2.page, api, room.code); await assertReady(diagnostics.page, diagnostics, room);
@@ -551,10 +573,10 @@ test('@membership G08 authorization and room isolation', async ({ diagnostics, b
       const key = Object.keys(localStorage).find(name => /^sb-.+-auth-token$/.test(name)); const token = key ? JSON.parse(localStorage.getItem(key) ?? 'null')?.access_token : null;
       const headers = { apikey: api.publicKey, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
       const requests = [
-        fetch(`${api.origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count&id=eq.${room.id}`, { headers }),
-        fetch(`${api.origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count&code=eq.${room.code}`, { headers }),
-        fetch(`${api.origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count&id=eq.${own.id}`, { headers }),
-        fetch(`${api.origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count&code=eq.${own.code}`, { headers }),
+        fetch(`${api.origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status&id=eq.${room.id}`, { headers }),
+        fetch(`${api.origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status&code=eq.${room.code}`, { headers }),
+        fetch(`${api.origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status&id=eq.${own.id}`, { headers }),
+        fetch(`${api.origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status&code=eq.${own.code}`, { headers }),
         fetch(`${api.origin}/rest/v1/room_members?select=*`, { headers }), fetch(`${api.origin}/rest/v1/participant_filters?select=*`, { headers }),
         fetch(`${api.origin}/rest/v1/rooms?id=eq.${room.id}`, { method: 'PATCH', headers, body: JSON.stringify({ required_voter_count: 9, voter_count: 9, movie_candidate_id: 'fixture-clockwork-orchard' }) }),
         fetch(`${api.origin}/rest/v1/room_members`, { method: 'POST', headers, body: JSON.stringify({ room_id: room.id, user_id: own.id, is_voter: true }) }),
@@ -563,24 +585,31 @@ test('@membership G08 authorization and room isolation', async ({ diagnostics, b
         fetch(`${api.origin}/rest/v1/rpc/get_my_participant_filter`, { method: 'POST', headers, body: JSON.stringify({ p_room_id: room.id }) }),
         fetch(`${api.origin}/rest/v1/rpc/submit_my_participant_filter`, { method: 'POST', headers,
           body: JSON.stringify({ p_room_id: room.id, p_genres: ['action'], p_release_year_from: 1900, p_release_year_to: 2026 }) }),
+        fetch(`${api.origin}/rest/v1/rpc/resolve_common_filters`, { method: 'POST', headers,
+          body: JSON.stringify({ p_room_id: room.id }) }),
       ];
-      const [foreignId, foreignCode, ownId, ownCode, members, filters, roomMutation, memberMutation, filterMutation, recovery, submission] = await Promise.all(requests);
+      const [foreignId, foreignCode, ownId, ownCode, members, filters, roomMutation, memberMutation, filterMutation, recovery, submission, resolution] = await Promise.all(requests);
       return {
         foreignId: await foreignId.json(), foreignCode: await foreignCode.json(), ownId: await ownId.json(), ownCode: await ownCode.json(),
         membersOk: members.ok, filtersOk: filters.ok, roomMutationOk: roomMutation.ok,
         memberMutationOk: memberMutation.ok, filterMutationOk: filterMutation.ok,
         recoveryOk: recovery.ok, recovery: (await recovery.json())?.[0], submissionOk: submission.ok, submission: (await submission.json())?.[0],
+        resolutionOk:resolution.ok,resolution:(await resolution.json())?.[0],
       };
     }, { api, room, own: roomB.room });
     expect(Array.isArray(denied.foreignId) && denied.foreignId.length === 0 && Array.isArray(denied.foreignCode) && denied.foreignCode.length === 0 &&
       denied.ownId?.length === 1 && denied.ownCode?.length === 1 && !denied.membersOk && !denied.filtersOk &&
       !denied.roomMutationOk && !denied.memberMutationOk && !denied.filterMutationOk && denied.recoveryOk && denied.submissionOk &&
       denied.recovery?.outcome === 'not_found' && denied.submission?.outcome === 'not_found' &&
+      denied.resolutionOk&&denied.resolution?.outcome==='not_found'&&denied.resolution?.filter_resolution_status===null&&
       ['genres', 'release_year_from', 'release_year_to', 'filter_completed_count', 'required_voter_count', 'allowed_release_year_max']
         .every(key => denied.recovery[key] === null && denied.submission[key] === null)).toBe(true);
     expect(isStrictFull((await directJoin(outsider.page, api, room.code)).row)).toBe(true);
-    stable(room, roomA); expect(committedRoomSnapshot(roomB.room).row.voter_count === 0).toBe(true);
+    stable(room, roomA); expect(roomA.row.filter_resolution_status==='pending'&&
+      committedRoomSnapshot(roomB.room).row.voter_count === 0&&
+      committedRoomSnapshot(roomB.room).row.filter_resolution_status==='pending').toBe(true);
     expect(await outsider.page.evaluate(values => values.every(value => !document.body.innerText.includes(value)), roomA.members.map(m => m.user_id))).toBe(true);
+    assertResolutionTrafficZero(pages);
     expect([diagnostics, v1, v2, outsider].reduce((n, d) => n + d.signupAttempts, 0) === membershipAnonymousBudget.G08).toBe(true);
     await diagnostics.record({ scenario: 'G08', outcome: 'ordinary JWT own room access; foreign room/filter recovery/submit hidden; full join strict-null; roster/filter browse and room/member/filter mutation denied; owner snapshots stable; candidate requests/UI0; identities4' });
   }));

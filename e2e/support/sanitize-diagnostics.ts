@@ -99,5 +99,5 @@ export class DiagnosticBuffer {
 // Only reviewed test files and numeric locations may survive an error boundary.
 // Input/stack contents and arbitrary paths never become diagnostic labels.
 export function safeDiagnosticLocation(value: string): string | undefined {
-  return value.match(/e2e\/(?:diagnostics\/credential-safety\.spec|room-session\.spec|generalized-room-membership-qr\.spec|participant-filters\.spec|support\/(?:safe-diagnostics|room-harness|filter-harness|qr-harness))\.ts:\d{1,5}:\d{1,5}/)?.[0];
+  return value.match(/e2e\/(?:diagnostics\/credential-safety\.spec|room-session\.spec|generalized-room-membership-qr\.spec|participant-filters\.spec|common-filter-resolution\.spec|support\/(?:safe-diagnostics|room-harness|filter-harness|qr-harness|resolution-harness))\.ts:\d{1,5}:\d{1,5}/)?.[0];
 }

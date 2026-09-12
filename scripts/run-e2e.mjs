@@ -9,9 +9,10 @@ import { withPlaywrightRuntime, runtimeEnvironment, runtimeDiagnostic, signalExi
 const root = fileURLToPath(new URL('../', import.meta.url));
 const smokeSelection = 'G03|G04|G05|G08|H01';
 const smokeCases = new Set(['G03', 'G04', 'G05', 'G08', 'H01']);
+const resolutionCases = new Map([['I01', 3], ['I02', 4], ['I03', 2]]);
 const acceptanceSelections = new Set(['@membership', 'G01', 'G02', 'G03', 'G04', 'G05', 'G06', 'G07', 'G08', 'G09',
   '@filters', 'H01', 'H02', 'H03', '@auth', '@us1', '@us2-join', '@us2-realtime', '@us3', '@us4', '@capacity-smoke',
-  'E01', 'E02', 'E03', 'E04', 'E05', 'E06', 'E07', 'E08', 'E09', 'E10', 'E11', 'E12', smokeSelection]);
+  '@resolution', 'I01', 'I02', 'I03', 'E01', 'E02', 'E03', 'E04', 'E05', 'E06', 'E07', 'E08', 'E09', 'E10', 'E11', 'E12', smokeSelection]);
 
 export function parseInvocation(argv) {
   const [requestedMode, ...requestedOptions] = argv;
@@ -36,7 +37,9 @@ export function parseInvocation(argv) {
       (mode === 'security' && value !== '1') || (name === '--repeat-each' && Number(value) > 3)) throw new Error('UNSAFE_OVERRIDE_REJECTED');
     forwarded.push(name, value);
   }
-  return Object.freeze({ mode, profile, staticOnly: mode === 'security' && grep === '@diagnostics-static', forwarded });
+  const boundedProfile=mode==='acceptance'&&grep==='@resolution'?'resolution':
+    mode==='acceptance'&&grep==='H03'?'h03':profile;
+  return Object.freeze({ mode, profile:boundedProfile, staticOnly: mode === 'security' && grep === '@diagnostics-static', forwarded });
 }
 
 export function assessRun(mode, staticOnly, exitCode, results, scanOk) {
@@ -65,6 +68,14 @@ export function verifyProbeArtifacts(directory) {
 }
 
 export function verifyAcceptanceProfile(profile, results) {
+  if(profile==='resolution'){
+    if(!Array.isArray(results)||results.length!==resolutionCases.size)return false;
+    return [...resolutionCases].every(([browserCase,identities])=>results.some(result=>
+      result?.browserCase===browserCase&&result?.signups===identities&&result?.identities===identities))&&
+      results.reduce((sum,result)=>sum+result.identities,0)===9;
+  }
+  if(profile==='h03')return Array.isArray(results)&&results.length===1&&results[0]?.browserCase==='H03'&&
+    results[0]?.signups===3&&results[0]?.identities===3;
   if (profile !== 'smoke') return true;
   if (!Array.isArray(results) || results.length !== smokeCases.size) return false;
   const cases = new Set(results.map(result => result?.browserCase));
@@ -110,13 +121,13 @@ export async function executeInvocation(invocation, { artifactRoot = path.join(r
     process.stdout.write(JSON.stringify({ component: 'e2e-controller', selection: invocation.staticOnly ? 'synthetic-only' : invocation.profile,
       status: outcome === 0 ? 'passed' : 'failed', artifacts: scan.fileCount, findings: scan.findings,
       innerExit: exitCode, probeArtifactsComplete: completeProbe,
-      scenarios: results.map(result => ({ scenario: ['A', 'B', 'C', 'baseline', 'auth', 'filters', 'membership', 'us1', 'us2-join', 'us2-realtime', 'us3', 'us4', 'capacity-smoke'].includes(result.scenario) ? result.scenario : 'other', status: result.status === 'passed' ? 'passed' : 'failed',
-        browserCase: ['G01', 'G02', 'G03', 'G04', 'G05', 'G06', 'G07', 'G08', 'G09', 'H01', 'H02', 'H03', 'E01', 'E02', 'E03', 'E04', 'E05', 'E06', 'E07', 'E08', 'E09', 'E10', 'E11', 'E12-read', 'E12-subscription', 'E12-navigation', 'E12-mutation'].includes(result.browserCase) ? result.browserCase : 'none',
+      scenarios: results.map(result => ({ scenario: ['A', 'B', 'C', 'baseline', 'auth', 'filters', 'membership', 'resolution', 'us1', 'us2-join', 'us2-realtime', 'us3', 'us4', 'capacity-smoke'].includes(result.scenario) ? result.scenario : 'other', status: result.status === 'passed' ? 'passed' : 'failed',
+        browserCase: ['G01', 'G02', 'G03', 'G04', 'G05', 'G06', 'G07', 'G08', 'G09', 'H01', 'H02', 'H03', 'I01', 'I02', 'I03', 'E01', 'E02', 'E03', 'E04', 'E05', 'E06', 'E07', 'E08', 'E09', 'E10', 'E11', 'E12-read', 'E12-subscription', 'E12-navigation', 'E12-mutation'].includes(result.browserCase) ? result.browserCase : 'none',
         worker: Number.isInteger(result.worker) && result.worker >= 0 && result.worker < 4 ? result.worker : -1,
         repetition: Number.isInteger(result.repetition) && result.repetition >= 1 && result.repetition <= 3 ? result.repetition : 0,
         signups: Number.isInteger(result.signups) ? result.signups : 0, identities: Number.isInteger(result.identities) ? result.identities : 0 })),
     }) + '\n');
-    if (results.some(result => result.budgetFailure === true)) process.stderr.write(`AUTH_BUDGET_FAILURE HTTP 429: ${invocation.profile === 'smoke' ? 'smoke N=16' : 'acceptance N=82'}, local anonymous_users=150. Check configured limit and remaining hourly allowance; stop/start only after config change, never retry/reset/restart to evade quota.\n`);
+    if (results.some(result => result.budgetFailure === true)) process.stderr.write(`AUTH_BUDGET_FAILURE HTTP 429: ${invocation.profile === 'smoke' ? 'smoke N=16' : invocation.profile==='resolution'?'resolution N=9':invocation.profile==='h03'?'H03 N=3':'acceptance N=91'}, local anonymous_users=150. Check configured limit and remaining hourly allowance; stop/start only after config change, never retry/reset/restart to evade quota.\n`);
   } catch (error) { process.stderr.write(runtimeDiagnostic(error) + '\n'); outcome = signalExit(signal) ?? 1; }
   finally {
     try { await server?.close(); } catch { process.stderr.write('E2E_CLEANUP_FAILED\n'); outcome = 1; }

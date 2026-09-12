@@ -525,3 +525,90 @@ b9c9c11589bc285a0094544d98a1a7d28d408985a977d021498e0c74acb1f10d  src/candidates
   xmin/types and clean latest reset; the focused resolver pgTAP rerun passed
   1 file / 74 assertions. Historical migration, generator and C1 hashes remain
   the T001 values.
+
+### T038–T043 acceptance authoring and static gate — 2026-09-12
+
+- Added a status-only public resolution harness and exactly three owner cases:
+  I01/I02/I03 with fixed identity caps `3/4/2`. The harness exposes only the
+  two-field resolver result and seven-field owned-room projection, bounds route
+  failures and response loss, observes resolver/candidate/TMDB traffic in memory,
+  and uses existing owned contexts and cleanup.
+- Evolved only the affected G03/G04/G05/G08 and H01/H03 behavior. Permanent
+  smoke remains exactly G03/G04/G05/G08/H01=`16`; targeted H03 remains `3`;
+  H02 and non-smoke E/G behavior were not selected or broadened.
+- Registered exact safe titles, source locations and selectors. The runner
+  rejects future/arbitrary resolution selectors and verifies the owner and H03
+  profiles fail closed on any case/count mismatch. Default execution remains
+  workers `1`, retries `0`, repeatEach `1`, with capture disabled.
+- `npm run test:client -- __tests__/config/e2e-diagnostics.test.ts
+  __tests__/config/playwright-runtime.test.ts`: PASS, 2 suites / 58 tests.
+  Static AST/accounting proof found F=`9`, smoke=`16`, H03=`3`, normal=`29`,
+  repeatability=`54`, fresh=`17`, combined=`71` and full discovery `91`.
+- `npm run lint`: PASS. `npm run typecheck`: PASS after adding the new pending
+  status to one bounded Feature 004 loss-path room fixture required by the
+  evolved `RoomProjection` contract. No browser was started; R01 remains `1/1`
+  and R02 identities/attempts remain `0/0`.
+
+### T044 non-browser normal gate — 2026-09-12
+
+- Source was branch `main` at local G2 commit
+  `e47cca4a59325eb23925388cb3f69fa7ba023977`; the tracked working-tree patch
+  SHA-256 was
+  `fc542f34a758c37c19abf6a84856d3cfd905c1b1b55a5f6f198fd2ef9873e162`,
+  plus reviewed untracked owner-spec/harness hashes `b132a98c...e6376` and
+  `a5a60ea1...777f`. Scope was the acceptance harness/spec/config/static tests
+  and this evidence/task ledger only.
+- All three nonempty runners passed serially and cleaned their owned fixtures:
+  Feature 003→latest `3 rooms/5 synthetic SQL users`, Feature 003→004→latest
+  `4 rooms/8 members/0 filters/8 users`, and Feature 004→005→latest
+  `4 rooms/10 members/6 filters/4 fixture candidates/9 users`. Each reported
+  zero GoTrue signups, latest reset true, owned fixtures zero, candidate
+  suppression and unchanged generated types.
+- A separate clean `npm run db:reset` applied all eight migrations. Check-only
+  `npm run db:types:check` passed; before/after metadata stayed exactly
+  `7d9c800c...ed82d1 / 676005 / 12159 / 1789168582 / 1789168583`.
+- Full gates passed: lint; typecheck; client `35 suites / 687 tests`; database
+  `4 files / 793 assertions`; web export with four static routes; iOS and
+  Android native export; pinned Playwright `1.63.0` Docker runtime preparation;
+  config/artifact/scanner static coverage within the full client suite; and
+  `git diff --check`.
+- Historical migration, Feature 004 contract, generator and C1 hashes exactly
+  match T001. Scope search found no TMDB/provider, candidate RPC/card/hook,
+  ranking, swipe, progression or match reference in `src/resolution/` or the
+  room route. No browser was started; R01 remains `1/1`, and R02 remains
+  identities `0`, attempts `0`.
+
+### T045 G3 real-stack normal gate — 2026-09-12
+
+- Required safe-wrapper profiles are green on the release-candidate source with
+  workers `1`, retries `0`, repeatEach `1`, safe scanner findings `0`, and owned
+  context/runtime cleanup complete. The selected successful receipt is C1=`1`,
+  I01/I02/I03=`3/4/2`, G03/G04/G05/G08/H01=`3/4/2/4/3`, and H03=`3`: logical
+  normal-gate total `29`.
+- C1 `run-VFYqLc`: PASS by its required controlled failure; A/B passed, C used
+  exactly one signup/identity, capture verified in one attempt, all six bounded
+  artifacts were present, scanner zero and cleanup complete.
+- Owner `run-nstDPW`: PASS, I01/I02/I03 all green at exactly `3/4/2`; scanner
+  zero and cleanup complete. Permanent smoke `run-1su5ik`: PASS, all five exact
+  cases at `3/4/2/4/3`; scanner zero and cleanup complete. Targeted
+  `run-uQmH20`: PASS, H03 only at exactly `3`; scanner zero and cleanup complete.
+- Every unsuccessful/superseded full attempt is additionally charged. Initial
+  owner `run-7nmweX` (`9`) and barrier-confirmation owner `run-LerA2M` (`9`)
+  failed with all rooms safely pending. The browser evidence exposed a missing
+  same-room partial→N/N client transition; a new regression failed first, the
+  exact `inactive`→`resolving` transition was added, and 3 focused suites / 46
+  tests passed. The first corrected owner `run-gdOCM2` (`9`) passed, then a
+  start-of-journey traffic-observer review required the selected owner rerun.
+- Initial smoke `run-Eh9MOp` charged `16`: G03/G04/G05/H01 passed and G08 found
+  a stale rejected-join harness shape. Its exact tenth nullable status field was
+  added; lint/typecheck and 3 focused suites / 131 tests passed before the full
+  smoke rerun.
+- Post-fix affected evidence passed: full client `35 suites / 688 tests`, lint,
+  typecheck, four-route web export and iOS/Android exports. DB/migrations/types
+  were unaffected; generated-type/generator/C1 hashes remain unchanged and R01
+  stays `1/1`.
+- Actual charged accounting through G3 is `C1 1 + owner attempts 36 + smoke
+  attempts 32 + H03 3 = 72` identities/attempts. There was no 429, quota probe,
+  Auth retry, limit change, stack restart/reset for quota, storage sharing or
+  unwrapped browser/manual attempt. The successful logical normal receipt is
+  still the approved `29`; the additional `43` is retained honestly.

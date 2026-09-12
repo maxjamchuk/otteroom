@@ -51,6 +51,20 @@ it('shares one automatic flight through React Strict effect replay and adopts st
   expect(JSON.stringify(hook.result.current)).not.toMatch(/release_year|genre|clause|candidate/i);
 });
 
+it('starts one automatic flight when the same room advances from partial to exact N/N', async () => {
+  const flight = deferred<typeof compatible>(); mockResolve.mockReturnValue(flight.promise);
+  const partial = { ...pending, filterCompletedCount: 1, filtersComplete: false };
+  const hook = renderHook(({ room }: { room: AcceptedRoomState }) =>
+    useCommonFilterResolution(room), { initialProps: { room: partial } });
+  await act(async () => {});
+  expect(mockResolve).not.toHaveBeenCalled();
+  await act(async () => { hook.rerender({ room: pending }); });
+  expect(mockResolve.mock.calls).toEqual([[pending.id]]);
+  expect(hook.result.current.attempt).toBe('resolving');
+  await act(async () => { flight.resolve(compatible); });
+  expect(hook.result.current).toMatchObject({ status: 'compatible', attempt: 'inactive' });
+});
+
 it('treats pending as one retryable error without an automatic render loop', async () => {
   mockResolve.mockResolvedValue({ outcome: 'pending', filter_resolution_status: 'pending' });
   const observe = jest.fn();
