@@ -37,7 +37,7 @@ jest.mock('../../src/lib/supabase', () => ({ getSupabase: () => ({ channel: mock
 const host = { outcome: 'already_member', room_id: '11111111-1111-4111-8111-111111111111',
   room_code: 'ABCDEF0123', room_state: 'waiting', is_creator: true, is_voter: true,
   voter_count: 1, required_voter_count: 2, filter_completed_count: 0,
-  filter_resolution_status: 'pending' } as const;
+  filter_resolution_status: 'pending', candidate_acquisition_status: 'pending' } as const;
 const absent = { outcome: 'not_submitted', genres: null, release_year_from: null, release_year_to: null,
   filter_completed_count: 0, required_voter_count: 2, allowed_release_year_max: 2026 } as const;
 const saved = { outcome: 'saved', genres: ['action'], release_year_from: 1990, release_year_to: 2020,
@@ -49,10 +49,11 @@ beforeEach(() => {
   mockBootstrap.mockReset().mockResolvedValue({ user: { id: 'retained' } });
   mockRefetch.mockReset().mockResolvedValue({ id: host.room_id, code: host.room_code, state: 'ready',
     voter_count: 2, required_voter_count: 2, filter_completed_count: 0,
-    filter_resolution_status: 'pending' });
+    filter_resolution_status: 'pending', candidate_acquisition_status: 'pending' });
   mockRecover.mockReset().mockResolvedValue(absent);
   mockSubmit.mockReset().mockResolvedValue(saved);
-  mockEnsureCandidate.mockReset().mockResolvedValue({ outcome: 'available' });
+  mockEnsureCandidate.mockReset().mockResolvedValue({ outcome: 'available', candidate: {
+    tmdbMovieId: 7, title: 'TMDB Film', releaseYear: 2020, posterUrl: null } });
   mockResolve.mockReset().mockResolvedValue({ outcome: 'compatible', filter_resolution_status: 'compatible' });
   mockRemove.mockReset().mockImplementation(async (channel: TestChannel) => { channel.status('CLOSED'); return 'ok'; });
 });
@@ -155,9 +156,14 @@ it('renders N/N resolving immediately, freezes own values and invokes one status
   expect(screen.queryByRole('button', { name: 'Save filters' })).toBeNull();
   expect(mockResolve.mock.calls).toEqual([[host.room_id]]);
   await act(async () => { resolve({ outcome: 'compatible', filter_resolution_status: 'compatible' }); });
+  await act(async () => {});
   expect(screen.getByText('Filters are compatible.')).toBeVisible();
-  expect(screen.getByText('Movie candidate sourcing is the next step in a future feature.')).toBeVisible();
-  expectNoFutureSurface();
+  expect(screen.queryByText('Movie candidate sourcing is the next step in a future feature.')).toBeNull();
+  expect(mockEnsureCandidate.mock.calls).toEqual([[host.room_id]]);
+  expect(screen.getByTestId('candidate-card')).toBeVisible();
+  expect(screen.getByText('TMDB Film')).toBeVisible();
+  expect(screen.getByText('2020')).toBeVisible();
+  expect(screen.getByText('No poster available.')).toBeVisible();
 });
 
 it('keeps compatible status visible while own recovery fails and retries detail separately', async () => {
@@ -227,7 +233,8 @@ it('fails closed when the room channel observes conflicting terminal authorities
     filter_resolution_status:'compatible'}));
   mockRecover.mockResolvedValue({...saved,outcome:'locked',filter_completed_count:2});
   mockRefetch.mockResolvedValue({id:host.room_id,code:host.room_code,state:'ready',voter_count:2,
-    required_voter_count:2,filter_completed_count:2,filter_resolution_status:'incompatible'});
+    required_voter_count:2,filter_completed_count:2,filter_resolution_status:'incompatible',
+    candidate_acquisition_status:'pending'});
   await mount();
   expect(screen.getByText('Filters are compatible.')).toBeVisible();
   await act(async()=>{channels[0].system({extension:'postgres_changes',status:'ok'});});
@@ -263,7 +270,8 @@ it('only a fresh canonical room entry clears a terminal integrity overlay',async
   mockJoin.mockResolvedValueOnce(terminalA).mockResolvedValueOnce(roomB).mockResolvedValueOnce(terminalA);
   mockRecover.mockResolvedValue({...saved,outcome:'locked',filter_completed_count:2});
   mockRefetch.mockResolvedValue({id:host.room_id,code:host.room_code,state:'ready',voter_count:2,
-    required_voter_count:2,filter_completed_count:2,filter_resolution_status:'incompatible'});
+    required_voter_count:2,filter_completed_count:2,filter_resolution_status:'incompatible',
+    candidate_acquisition_status:'pending'});
   await mount('/room/ABCDEF0123',true);
   await act(async()=>{channels[0].system({extension:'postgres_changes',status:'ok'});});
   expect(screen.getByText('Common-filter status could not be verified.')).toBeVisible();
@@ -322,7 +330,7 @@ it.each([
 ])('keeps rejected %s projection private and opens no channel or filter request', async (outcome, message) => {
   mockJoin.mockResolvedValue({ outcome, room_id: null, room_code: null, room_state: null,
     is_creator: null, is_voter: null, voter_count: null, required_voter_count: null,
-    filter_completed_count: null, filter_resolution_status: null });
+    filter_completed_count: null, filter_resolution_status: null, candidate_acquisition_status: null });
   await mount();
   expect(screen.getByText(message)).toBeVisible();
   expect(mockChannel).not.toHaveBeenCalled(); expect(mockRecover).not.toHaveBeenCalled();

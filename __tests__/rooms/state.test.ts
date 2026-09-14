@@ -1,9 +1,9 @@
-import { acceptedRoomState, applyRoomFilterProgress, applyRoomRefetch, applyRoomResolutionStatus, createErrorState, joinRoomState, joinErrorState, malformedInvitationState } from '../../src/rooms/state';
+import { acceptedRoomState, applyRoomCandidateStatus, applyRoomFilterProgress, applyRoomRefetch, applyRoomResolutionStatus, createErrorState, joinRoomState, joinErrorState, malformedInvitationState } from '../../src/rooms/state';
 import { narrowCreateResult, narrowJoinResult } from '../../src/rooms/contracts';
 
 const row = { outcome: 'created', room_id: '11111111-1111-4111-8111-111111111111', room_code: 'ABCDEF0123',
   is_creator: true, is_voter: true, room_state: 'waiting', voter_count: 1, required_voter_count: 3,
-  filter_completed_count: 0, filter_resolution_status: 'pending' } as const;
+  filter_completed_count: 0, filter_resolution_status: 'pending', candidate_acquisition_status: 'pending' } as const;
 it.each([[true,true],[true,false],[false,true]] as const)('projects independent creator=%s/voter=%s with actual counts', (is_creator,is_voter) => {
   for(const voter_count of [is_voter?1:0,2,3]) {
     const room_state=voter_count===3?'ready':'waiting';
@@ -11,7 +11,7 @@ it.each([[true,true],[true,false],[false,true]] as const)('projects independent 
     expect(joinRoomState(result)).toEqual({kind:'accepted',id:row.room_id,code:row.room_code,
       isCreator:is_creator,isVoter:is_voter,state:room_state,title:room_state==='ready'?'Ready':'Waiting',voterCount:voter_count,requiredVoterCount:3,
       filterCompletedCount:0,filtersComplete:false,filterResolutionStatus:'pending',
-      resolutionIntegrityError:false});
+      resolutionIntegrityError:false,candidateAcquisitionStatus:'pending',candidateIntegrityError:false});
   }
 });
 it('create failure contains only generic retry presentation, never a room/invitation', () => {
@@ -22,7 +22,7 @@ it.each([
   ['not_found', 'not-found', 'Room not found. Check your invitation.'],
   ['full', 'full', 'Room Full. The voting group is already assembled.'],
 ])('maps %s with no room projection', (outcome, kind, message) => {
-  const result = narrowJoinResult([{ outcome, room_id: null, room_code: null, room_state: null, is_creator:null,is_voter:null,voter_count:null,required_voter_count:null,filter_completed_count:null,filter_resolution_status:null }]);
+  const result = narrowJoinResult([{ outcome, room_id: null, room_code: null, room_state: null, is_creator:null,is_voter:null,voter_count:null,required_voter_count:null,filter_completed_count:null,filter_resolution_status:null,candidate_acquisition_status:null }]);
   expect(joinRoomState(result)).toEqual({ kind, message });
 });
 it('distinguishes local malformed input from generic infrastructure failure', () => {
@@ -30,7 +30,7 @@ it('distinguishes local malformed input from generic infrastructure failure', ()
   expect(joinErrorState()).toEqual({ kind: 'error', message: 'Unable to open this room. Please try again.' });
 });
 const waiting=acceptedRoomState(narrowCreateResult([row]));
-const projection=(count:number)=>({id:row.room_id,code:row.room_code,state:count===3?'ready' as const:'waiting' as const,voter_count:count,required_voter_count:3,filter_completed_count:0,filter_resolution_status:'pending' as const});
+const projection=(count:number)=>({id:row.room_id,code:row.room_code,state:count===3?'ready' as const:'waiting' as const,voter_count:count,required_voter_count:3,filter_completed_count:0,filter_resolution_status:'pending' as const,candidate_acquisition_status:'pending' as const});
 it('advances intermediate Waiting monotonically, retaining immutable flags and target',()=>{
   const middle=applyRoomRefetch(waiting,projection(2));
   expect(middle).toEqual({...waiting,voterCount:2});
@@ -39,6 +39,21 @@ it('advances intermediate Waiting monotonically, retaining immutable flags and t
   const ready=applyRoomRefetch(middle,projection(3));
   expect(ready).toEqual({...middle,voterCount:3,state:'ready',title:'Ready'});
   expect(applyRoomRefetch(ready,projection(2))).toBe(ready);
+});
+
+describe('candidate terminal watermark',()=>{
+  const compatible={...waiting,state:'ready' as const,title:'Ready',voterCount:3,
+    filterCompletedCount:3,filtersComplete:true,filterResolutionStatus:'compatible' as const};
+  it.each(['assigned','no_candidates'] as const)('advances pending to %s and suppresses delayed pending',status=>{
+    const terminal=applyRoomCandidateStatus(compatible,status);
+    expect(terminal.candidateAcquisitionStatus).toBe(status);
+    expect(applyRoomCandidateStatus(terminal,status)).toBe(terminal);
+    expect(applyRoomCandidateStatus(terminal,'pending')).toBe(terminal);
+  });
+  it('fails closed when both incomparable terminals are observed',()=>{
+    const assigned=applyRoomCandidateStatus(compatible,'assigned');
+    expect(applyRoomCandidateStatus(assigned,'no_candidates')).toEqual({...assigned,candidateIntegrityError:true});
+  });
 });
 it.each([[true,true],[true,false],[false,true]] as const)('never regresses Ready for creator=%s/voter=%s', (isCreator,isVoter)=>{
   const ready={...waiting,state:'ready' as const,title:'Ready',voterCount:3,isCreator,isVoter};

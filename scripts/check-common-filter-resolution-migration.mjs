@@ -88,7 +88,7 @@ try{
     path.join(root,'supabase/tests/migration/common_filter_resolution.after.sql'),'utf8')}`,timeoutMs:45000});
   snapshot='';parsed.rooms.length=0;parsed.members.length=0;parsed.filters.length=0;parsed.candidates.length=0;
   if(digest(await fs.readFile(canonical))!==typesBefore)fail();
-  receipt('preserved-rooms=4 members=10 filters=6 xmin=true pending-default=true lazy-compatible=true lazy-incompatible=true candidate-suppressed=true types-unchanged=true');
+  receipt('preserved-rooms=4 members=10 filters=6 xmin=true pending-default=true candidate-pending=true tmdb-ids=0 mapping=19 server-rpcs=true lazy-compatible=true lazy-incompatible=true candidate-suppressed=true types-unchanged=true');
 }catch{
   receipt(`stage=${stage} result=FAIL`);
   process.exitCode=abort.signal.aborted?(abort.signal.reason==='SIGINT'?130:143):1;
@@ -100,8 +100,13 @@ try{
       and not exists(select 1 from public.participant_filters)
       and not exists(select 1 from private.room_filter_resolutions)
       and not exists(select 1 from private.room_filter_resolution_genre_clauses)
+      and (select count(*)=19 from private.tmdb_movie_genres)
+      and not exists(select 1 from public.rooms where candidate_acquisition_status<>'pending' or tmdb_movie_id is not null)
       and not exists(select 1 from auth.users)
-      and to_regprocedure('public.resolve_common_filters(uuid)') is not null;`});
+      and to_regprocedure('public.resolve_common_filters(uuid)') is not null
+      and to_regprocedure('public.prepare_room_tmdb_candidate(uuid,uuid)') is not null
+      and to_regprocedure('public.commit_room_tmdb_candidate(uuid,uuid,bigint,smallint,integer[],boolean)') is not null
+      and to_regprocedure('public.commit_room_tmdb_no_candidates(uuid,uuid)') is not null;`});
     if(empty.trim()!=='t')fail();receipt('latest-reset=true owned-fixtures=0');
   }catch{receipt('cleanup=FAIL');process.exitCode=1;}}
   if(locked){try{await fs.unlink(lock);}catch{receipt('lock-cleanup=FAIL');process.exitCode=1;}}

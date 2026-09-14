@@ -26,10 +26,10 @@ it('shows one explicit transient Retry without converting failure to incompatibi
   expect(retry).toHaveBeenCalledTimes(1);
 });
 
-it('renders compatible as future sourcing meaning only',()=>{
+it('renders compatible without stale future sourcing copy',()=>{
   render(<CommonFilterResolutionPanel model={{...base,status:'compatible',attempt:'inactive'}}/>);
   expect(screen.getByRole('header',{name:'Filters are compatible.'})).toBeVisible();
-  expect(screen.getByText('Movie candidate sourcing is the next step in a future feature.')).toBeVisible();
+  expect(screen.queryByText('Movie candidate sourcing is the next step in a future feature.')).toBeNull();
   expect(screen.queryByRole('button')).toBeNull();
   expect(visibleText()).not.toMatch(/release year|genre|clause|candidate_id|poster|title|swipe|match/i);
 });
@@ -51,4 +51,3 @@ it('fails closed on integrity error and hides both terminal meanings and actions
   expect(screen.queryByRole('button')).toBeNull();
   expect(screen.queryByRole('link',{name:'Create a new room'})).toBeNull();
 });
-

@@ -1,78 +1,76 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { AcceptedRoomState } from '../rooms/state';
 import type { CandidateResult } from './contracts';
-import { resolveCandidatePoster } from './posters';
 import { ensureRoomCandidate } from './service';
-import { candidateMessage, createCandidateState, failCandidate, finishPoster, receiveCandidate,
-  retryCandidate, sameCandidateImage, sameCandidateRequest, type CandidateImage, type CandidateRequest } from './state';
+import { candidateMessage, createCandidateState, failCandidate, finishPoster,
+  observeAuthoritativeStatus, receiveCandidate, retryCandidate, sameCandidateImage,
+  sameCandidateRequest, type CandidateImage, type CandidateRequest } from './state';
 
-// One accepted-room consumer owns these promises and generations. Realtime
-// supplies the existing room projection; this hook owns no channel or Auth client.
+function roomEligibility(room: AcceptedRoomState | null): boolean {
+  return !!room && room.state === 'ready' && room.filtersComplete &&
+    room.filterResolutionStatus === 'compatible' && !room.resolutionIntegrityError &&
+    !room.candidateIntegrityError;
+}
+
+// The existing rooms-only subscription owns canonical invalidation. This hook
+// owns one generation-scoped Edge flight and never creates another channel.
 export function useRoomCandidate(room: AcceptedRoomState | null) {
-  const id = room?.id ?? null, ready = room?.state === 'ready';
-  const [model, setModel] = useState(() => createCandidateState(id, ready));
+  const id = room?.id ?? null;
+  const eligible = roomEligibility(room);
+  const authority = room?.candidateAcquisitionStatus ?? 'pending';
+  const integrity = !!room?.candidateIntegrityError || !!room?.resolutionIntegrityError;
+  const [model, setModel] = useState(() => createCandidateState(id, eligible, authority));
   const flight = useRef<{ request: CandidateRequest; promise: Promise<CandidateResult> } | null>(null);
   const activeImage = useRef<CandidateImage | null>(null);
 
-  // Adjust local state during render so a changed room cannot expose one frame
-  // of retired metadata. A → B → A receives a new generation as well.
   let state = model;
-  if (model.roomId !== id || model.ready !== ready) {
-    state = createCandidateState(id, ready, model.generation + 1);
+  if (model.roomId !== id) {
+    state = createCandidateState(id, eligible, authority, model.generation + 1);
     setModel(state);
+  } else {
+    const observed = observeAuthoritativeStatus(model, eligible, authority, integrity);
+    if (observed !== model) { state = observed; setModel(observed); }
   }
-  const { roomId, generation, requestAttempt, posterAttempt } = state;
-  const image = useMemo(() => ({ roomId, generation, requestAttempt, posterAttempt }),
-    [roomId, generation, requestAttempt, posterAttempt]);
+
+  const { roomId, generation, requestAttempt, imageAttempt } = state;
+  const image = useMemo(() => ({ roomId, generation, requestAttempt, imageAttempt }),
+    [roomId, generation, requestAttempt, imageAttempt]);
   useLayoutEffect(() => {
     activeImage.current = image;
     return () => { if (activeImage.current === image) activeImage.current = null; };
   }, [image]);
 
-  const acquiring = state.status === 'loading' && !state.candidate && ready && roomId !== null;
+  const requesting = (state.attempt === 'acquiring' || state.attempt === 'loading-metadata') &&
+    eligible && roomId !== null;
   useEffect(() => {
-    if (!acquiring || roomId === null) return;
+    if (!requesting || roomId === null) return;
     const request = { roomId, generation, requestAttempt };
     let disposed = false;
-    if (!flight.current || !sameCandidateRequest(flight.current.request, request)) {
-      // Retain this exact promise across setup/cleanup replay. Async wrapping
-      // also turns a synchronous transport failure into the same safe state.
+    if (!flight.current || !sameCandidateRequest(flight.current.request, request))
       flight.current = { request, promise: (async () => ensureRoomCandidate(roomId))() };
-    }
     void flight.current.promise.then(result => {
       if (!disposed) setModel(previous => receiveCandidate(previous, request, result));
     }, () => {
       if (!disposed) setModel(previous => failCandidate(previous, request));
     });
     return () => { disposed = true; };
-  }, [acquiring, roomId, generation, requestAttempt]);
+  }, [requesting, roomId, generation, requestAttempt, eligible]);
 
-  const posterKey = state.candidate?.poster_key;
-  const poster = useMemo(() => {
-    let source: ReturnType<typeof resolveCandidatePoster> | null = null, failed = false;
-    if (posterKey) {
-      try { source = resolveCandidatePoster(posterKey); }
-      catch { failed = true; }
-    }
-    // This descriptor owns one image attempt, including its same-source retry.
-    return { source, failed, attempt: posterAttempt };
-  }, [posterKey, posterAttempt]);
-  const visible = poster.failed ? failCandidate(state, image) : state;
-
+  const posterUrl = state.candidate?.posterUrl;
+  const posterSource = useMemo(() => posterUrl ? { uri: posterUrl } : null, [posterUrl]);
   const retry = useCallback(() => {
     if (!activeImage.current || !sameCandidateImage(activeImage.current, image)) return;
-    setModel(previous => sameCandidateImage(previous, image)
-      ? retryCandidate(poster.failed ? failCandidate(previous, image) : previous) : previous);
-  }, [image, poster.failed]);
+    setModel(previous => sameCandidateImage(previous, image) ? retryCandidate(previous) : previous);
+  }, [image]);
   const onLoad = useCallback(() => {
-    if (poster.source === null || !activeImage.current || !sameCandidateImage(activeImage.current, image)) return;
+    if (!activeImage.current || !sameCandidateImage(activeImage.current, image)) return;
     setModel(previous => finishPoster(previous, image, true));
-  }, [image, poster.source]);
+  }, [image]);
   const onError = useCallback(() => {
     if (!activeImage.current || !sameCandidateImage(activeImage.current, image)) return;
     setModel(previous => finishPoster(previous, image, false));
   }, [image]);
 
-  return { ...visible, message: candidateMessage(visible), posterSource: poster.source,
-    imageKey: `${generation}:${requestAttempt}:${poster.attempt}`, retry, onLoad, onError };
+  return { ...state, status: state.attempt, message: candidateMessage(state), posterSource,
+    imageKey: `${generation}:${requestAttempt}:${imageAttempt}`, retry, onLoad, onError };
 }

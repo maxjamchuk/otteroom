@@ -16,7 +16,7 @@ it.each(['native', 'web'])('preserves all four exact static %s sources unchanged
     });
     for (const key of ['', 'unknown-poster', '__proto__', 'constructor', 'toString']) {
       expect(() => resolveCandidatePoster(key)).toThrow(CandidatePosterError);
-      expect(() => resolveCandidatePoster(key)).toThrow('Unable to load this movie. Please try again.');
+      expect(() => resolveCandidatePoster(key)).toThrow('Unable to find a movie right now. Please try again.');
     }
   });
 });

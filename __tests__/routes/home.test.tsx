@@ -17,7 +17,7 @@ jest.mock('../../src/lib/supabase', () => ({ getSupabase: () => ({ auth: {
   onAuthStateChange: () => ({ data: { subscription: { unsubscribe: mockUnsubscribe } } }),
   startAutoRefresh: jest.fn(), stopAutoRefresh: mockStopRefresh,
 } }) }));
-const row = { outcome: 'created', room_id: '11111111-1111-4111-8111-111111111111', room_code: 'ABCDEF0123', room_state: 'waiting', is_creator: true, is_voter: true, voter_count: 1, required_voter_count: 2 };
+const row = { outcome: 'created', room_id: '11111111-1111-4111-8111-111111111111', room_code: 'ABCDEF0123', room_state: 'waiting', is_creator: true, is_voter: true, voter_count: 1, required_voter_count: 2, filter_completed_count: 0, filter_resolution_status: 'pending', candidate_acquisition_status: 'pending' };
 const firstId = '22222222-2222-4222-8222-222222222222';
 const secondId = '33333333-3333-4333-8333-333333333333';
 beforeEach(() => {

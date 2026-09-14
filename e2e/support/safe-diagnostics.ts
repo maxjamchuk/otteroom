@@ -23,6 +23,23 @@ export function safeError(error?: unknown): Error {
   return result;
 }
 
+const candidateFailureCategories = new Set([
+  'authentication', 'request', 'preflight', 'search_incomplete', 'assignment', 'metadata', 'poster',
+]);
+
+export function candidateDiagnostic(category: unknown, counts: unknown): Readonly<Record<string, unknown>> {
+  if (typeof category !== 'string' || !candidateFailureCategories.has(category) || !counts ||
+      typeof counts !== 'object' || Array.isArray(counts) ||
+      Object.keys(counts).sort().join(',') !== 'attempts,pages,shards') throw safeError();
+  const values = counts as Record<string, unknown>;
+  if (![values.attempts, values.pages, values.shards].every(value =>
+      typeof value === 'number' && Number.isInteger(value) && value >= 0) ||
+      (values.attempts as number) > 100 || (values.pages as number) > 500 ||
+      (values.shards as number) > 100) throw safeError();
+  return Object.freeze({ component: 'room-candidate', category, attempts: values.attempts,
+    pages: values.pages, shards: values.shards });
+}
+
 export function inspectUiValues(values: string[], known: Iterable<string>): boolean {
   const credentials = [...known];
   return values.length <= 20000 && values.reduce((size, value) => size + Buffer.byteLength(value), 0) <= 1048576 &&

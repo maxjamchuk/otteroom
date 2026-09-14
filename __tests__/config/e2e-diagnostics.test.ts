@@ -24,6 +24,23 @@ const prelude = `
   const sentinel = () => 'synthetic-' + randomUUID();
 `;
 
+it('Feature 006 diagnostics accept only fixed failure categories and bounded aggregate counts', () => verify(prelude + `
+  const { candidateDiagnostic } = await import('./e2e/support/safe-diagnostics.ts');
+  for (const category of ['authentication','request','preflight','search_incomplete','assignment','metadata','poster']) {
+    const value = candidateDiagnostic(category,{attempts:3,pages:2,shards:1});
+    assert.deepEqual(value,{component:'room-candidate',category,attempts:3,pages:2,shards:1});
+  }
+  for (const bad of [
+    ['timeout',{attempts:1,pages:0,shards:0}],
+    ['metadata',{attempts:101,pages:0,shards:0}],
+    ['poster',{attempts:1,pages:0,shards:0,room_id:sentinel()}],
+    ['search_incomplete',{attempts:1,pages:0,shards:0,token:sentinel()}],
+  ]) assert.throws(()=>candidateDiagnostic(bad[0],bad[1]),/E2E_SAFE_FAILURE/);
+  const source=fs.readFileSync('e2e/support/safe-diagnostics.ts','utf8');
+  assert.equal(/Authorization|genre_clauses|release_year_from|tmdb_movie_id|upstream_payload/.test(
+    source.slice(source.indexOf('export function candidateDiagnostic'),source.indexOf('export function candidateDiagnostic')+1200)),false);
+`));
+
 describe('credential-safe diagnostics boundaries', () => {
   it('validates only the exact safe participant-filter RPC projection', () => verify(prelude + `
     const { validateOwnFilterResult } = await import('./e2e/support/filter-harness.ts');

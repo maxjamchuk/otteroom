@@ -1,53 +1,47 @@
+import fs from 'node:fs';
 import { CandidateContractError, narrowCandidateResult } from '../../src/candidates/contracts';
 
-const available = { outcome: 'available', candidate_id: 'fixture-cardboard-comet', title: 'The Cardboard Comet', release_year: 2020, poster_key: 'cardboard-comet' };
-const empty = { candidate_id: null, title: null, release_year: null, poster_key: null };
-const fields = ['candidate_id', 'title', 'release_year', 'poster_key'] as const;
+const transport = { outcome: 'available', candidate: { tmdb_movie_id: 7, title: 'TMDB Film',
+  release_year: 2020, poster_url: 'https://image.tmdb.org/t/p/w500/a.jpg' } };
+const parsed = { outcome: 'available', candidate: { tmdbMovieId: 7, title: 'TMDB Film',
+  releaseYear: 2020, posterUrl: 'https://image.tmdb.org/t/p/w500/a.jpg' } };
 
-it.each([available, { outcome: 'not_ready', ...empty }, { outcome: 'not_found', ...empty }])('accepts the exact logical outcome %# without coercion', row => {
-  expect(narrowCandidateResult([row])).toEqual(row);
+it('accepts the exact available response and maps transport names once', () => {
+  expect(narrowCandidateResult(transport)).toEqual(parsed);
+  expect(Object.isFrozen(narrowCandidateResult(transport))).toBe(true);
+  expect(Object.isFrozen((narrowCandidateResult(transport) as typeof parsed).candidate)).toBe(true);
 });
-it.each([1888, 9999])('accepts the inclusive catalog year boundary %i', release_year => {
-  expect(narrowCandidateResult([{ ...available, release_year }])).toEqual({ ...available, release_year });
+
+it.each(['not_found','not_ready','no_candidates','metadata_unavailable'] as const)(
+  'accepts exact field-free %s business outcome', outcome => {
+    expect(narrowCandidateResult({ outcome })).toEqual({ outcome });
+  });
+
+it.each([null, undefined, [], [transport], {}, { ...transport, private: true },
+  { outcome: 'no_candidates', candidate: null },
+  { ...transport, candidate: { ...transport.candidate, constraint: [[28]] } }])(
+  'rejects malformed or extra/private transport %#', value => {
+    expect(() => narrowCandidateResult(value)).toThrow(CandidateContractError);
+  });
+
+it.each([
+  { tmdb_movie_id: 0 }, { tmdb_movie_id: -1 }, { tmdb_movie_id: 1.5 },
+  { title: '' }, { title: ' padded ' }, { title: 4 },
+  { release_year: 1887 }, { release_year: 10000 }, { release_year: 2020.5 },
+  { poster_url: 'http://image.tmdb.org/a.jpg' }, { poster_url: 'https://u:p@example.test/a' },
+  { poster_url: 4 },
+])('rejects invalid candidate field %#', patch => {
+  expect(() => narrowCandidateResult({ ...transport, candidate: { ...transport.candidate, ...patch } }))
+    .toThrow(CandidateContractError);
 });
-it.each([null, undefined, {}, available, [], [available, available], [null], [[]], [true], [42], ['private']])('rejects malformed cardinality/row shape %#', data => {
-  expect(() => narrowCandidateResult(data)).toThrow(CandidateContractError);
+
+it('accepts confirmed no-poster and exposes only a fixed safe error', () => {
+  expect(narrowCandidateResult({ ...transport, candidate: { ...transport.candidate, poster_url: null } }))
+    .toEqual({ ...parsed, candidate: { ...parsed.candidate, posterUrl: null } });
+  expect(new CandidateContractError().message).toBe('Unable to find a movie right now. Please try again.');
 });
-it.each(['outcome', ...fields])('requires the own field %s', field => {
-  const row: Record<string, unknown> = { ...available };
-  delete row[field];
-  expect(() => narrowCandidateResult([row])).toThrow(CandidateContractError);
-  Object.setPrototypeOf(row, { [field]: available[field as keyof typeof available] });
-  expect(() => narrowCandidateResult([row])).toThrow(CandidateContractError);
-});
-it('rejects extra fields and unknown outcomes without echoing input', () => {
-  for (const row of [{ ...available, private: 'private backend detail' }, { ...available, outcome: 'private backend detail' }]) {
-    expect(() => narrowCandidateResult([row])).toThrow(new CandidateContractError());
-  }
-  expect(new CandidateContractError().message).toBe('Unable to load this movie. Please try again.');
-});
-it.each(fields)('rejects NULL/undefined in available.%s', field => {
-  for (const value of [null, undefined]) expect(() => narrowCandidateResult([{ ...available, [field]: value }])).toThrow(CandidateContractError);
-});
-it.each(['not_ready', 'not_found'])('requires four actual NULLs for %s', outcome => {
-  for (const field of fields) {
-    for (const value of [available[field], undefined, false, '']) {
-      expect(() => narrowCandidateResult([{ outcome, ...empty, [field]: value }])).toThrow(CandidateContractError);
-    }
-  }
-});
-it.each(['candidate_id', 'poster_key'])('requires a lowercase slug for %s', field => {
-  for (const value of ['', ' ', '-slug', 'slug-', 'two--parts', 'Upper', 'two_parts', 'a/b', 'slug\n', 'slug\r', 1, true, {}, []]) {
-    expect(() => narrowCandidateResult([{ ...available, [field]: value }])).toThrow(CandidateContractError);
-  }
-});
-it('requires a trimmed nonempty title', () => {
-  for (const title of ['', ' ', ' leading', 'trailing ', '\nTitle', 42, true, {}, []]) {
-    expect(() => narrowCandidateResult([{ ...available, title }])).toThrow(CandidateContractError);
-  }
-});
-it('requires an integral in-range numeric year', () => {
-  for (const release_year of [1887, 10000, 2020.5, NaN, Infinity, -Infinity, '2020', true, {}, []]) {
-    expect(() => narrowCandidateResult([{ ...available, release_year }])).toThrow(CandidateContractError);
-  }
+
+it('contains no fixture catalog or direct TMDB API transport', () => {
+  const source = fs.readFileSync('src/candidates/contracts.ts','utf8');
+  expect(source).not.toMatch(/fixture-|poster_key|candidate_id|api\.themoviedb\.org|genre_clauses|release_year_from/i);
 });

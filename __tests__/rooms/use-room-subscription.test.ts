@@ -16,9 +16,9 @@ const mockClient = { channel: mockChannel, removeChannel: mockRemove };
 jest.mock('../../src/lib/supabase', () => ({ getSupabase: () => mockClient }));
 jest.mock('../../src/auth/anonymous-session', () => ({ bootstrapAnonymousSession: () => mockBootstrap() }));
 jest.mock('../../src/rooms/service', () => ({ refetchRoom: (id: string) => mockRefetch(id) }));
-const room: AcceptedRoomState = { kind: 'accepted', id: '11111111-1111-4111-8111-111111111111', code: 'ABCDEF0123', isCreator: true, isVoter: true, state: 'waiting', title: 'Waiting', voterCount: 1, requiredVoterCount: 2, filterCompletedCount: 0, filtersComplete: false, filterResolutionStatus: 'pending', resolutionIntegrityError: false };
+const room: AcceptedRoomState = { kind: 'accepted', id: '11111111-1111-4111-8111-111111111111', code: 'ABCDEF0123', isCreator: true, isVoter: true, state: 'waiting', title: 'Waiting', voterCount: 1, requiredVoterCount: 2, filterCompletedCount: 0, filtersComplete: false, filterResolutionStatus: 'pending', resolutionIntegrityError: false, candidateAcquisitionStatus: 'pending', candidateIntegrityError: false };
 const other: AcceptedRoomState = { ...room, id: '22222222-2222-4222-8222-222222222222', code: '012345ABCD' };
-const ready = (value = room) => ({ id: value.id, code: value.code, state: 'ready', voter_count: value.requiredVoterCount, required_voter_count: value.requiredVoterCount, filter_completed_count: value.filterCompletedCount, filter_resolution_status: value.filterResolutionStatus });
+const ready = (value = room) => ({ id: value.id, code: value.code, state: 'ready', voter_count: value.requiredVoterCount, required_voter_count: value.requiredVoterCount, filter_completed_count: value.filterCompletedCount, filter_resolution_status: value.filterResolutionStatus, candidate_acquisition_status: value.candidateAcquisitionStatus });
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (error: unknown) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 async function mount(value: AcceptedRoomState | null = room) {
   const hook = renderHook(({ accepted }: { accepted: AcceptedRoomState | null }) => useRoomSubscription(accepted), { initialProps: { accepted: value } });
@@ -48,7 +48,7 @@ it('first system-ok recovers a completely missed initial UPDATE', async () => {
   expect(mockRefetch).toHaveBeenCalledWith(room.id); expect(h.result.current.room?.state).toBe('ready'); expect(h.result.current.error).toBe(false);
 });
 it('UPDATE is only invalidation, never payload state', async () => {
-  mockRefetch.mockResolvedValue({ id: room.id, code: room.code, state: 'waiting', voter_count: 1, required_voter_count: 2, filter_completed_count: 0, filter_resolution_status: 'pending' });
+  mockRefetch.mockResolvedValue({ id: room.id, code: room.code, state: 'waiting', voter_count: 1, required_voter_count: 2, filter_completed_count: 0, filter_resolution_status: 'pending', candidate_acquisition_status: 'pending' });
   const h = await mount(); await act(async () => { channels[0].status('SUBSCRIBED'); channels[0].system({ extension: 'postgres_changes', status: 'ok' }); });
   await act(async () => { channels[0].update({ new: { id: room.id, state: 'ready', code: other.code } }); });
   expect(mockRefetch).toHaveBeenCalledTimes(2); expect(h.result.current.room).toEqual(room);
@@ -276,7 +276,7 @@ it('refetches intermediate Waiting counts, preserves zero-slot creator and ignor
   const accepted={...room,isVoter:false,voterCount:0,requiredVoterCount:3};
   const h=await mount(accepted);
   for(const count of [0,1,2,1,3]) {
-    mockRefetch.mockResolvedValue({id:room.id,code:room.code,state:count===3?'ready':'waiting',voter_count:count,required_voter_count:3,filter_completed_count:0,filter_resolution_status:'pending'});
+    mockRefetch.mockResolvedValue({id:room.id,code:room.code,state:count===3?'ready':'waiting',voter_count:count,required_voter_count:3,filter_completed_count:0,filter_resolution_status:'pending',candidate_acquisition_status:'pending'});
     await act(async()=>{channels[0].system({extension:'postgres_changes',status:'ok'});});
     expect(h.result.current.room?.voterCount).toBe(count===1 && mockRefetch.mock.calls.length===4?2:count);
     expect(h.result.current.room?.isCreator).toBe(true);expect(h.result.current.room?.isVoter).toBe(false);
@@ -347,4 +347,27 @@ describe('terminal resolution convergence on the existing room channel',()=>{
     expect(h.result.current.room?.id).toBe(other.id);
     expect(h.result.current.room?.filterResolutionStatus).toBe('pending');
   });
+});
+
+it('uses the one ID-only rooms channel to merge candidate terminal state and fail closed on conflict',async()=>{
+  const compatible:AcceptedRoomState={...room,state:'ready',title:'Ready',voterCount:2,
+    filterCompletedCount:2,filtersComplete:true,filterResolutionStatus:'compatible',
+    candidateAcquisitionStatus:'pending'};
+  mockRefetch.mockResolvedValue({...ready(compatible),filter_completed_count:2,
+    filter_resolution_status:'compatible',candidate_acquisition_status:'assigned'});
+  const h=await mount(compatible);
+  expect(mockChannel).toHaveBeenCalledWith(`room:${room.id}`);
+  expect(channels[0].on.mock.calls.filter(call=>call[0]==='postgres_changes')[0][1]).toEqual({
+    event:'UPDATE',schema:'public',table:'rooms',filter:`id=eq.${room.id}`,select:['id']});
+  await act(async()=>channels[0].system({extension:'postgres_changes',status:'ok'}));
+  expect(h.result.current.room?.candidateAcquisitionStatus).toBe('assigned');
+  mockRefetch.mockResolvedValue({...ready(compatible),filter_completed_count:2,
+    filter_resolution_status:'compatible',candidate_acquisition_status:'pending'});
+  await act(async()=>channels[0].update());
+  expect(h.result.current.room?.candidateAcquisitionStatus).toBe('assigned');
+  mockRefetch.mockResolvedValue({...ready(compatible),filter_completed_count:2,
+    filter_resolution_status:'compatible',candidate_acquisition_status:'no_candidates'});
+  await act(async()=>channels[0].update());
+  expect(h.result.current.room?.candidateIntegrityError).toBe(true);
+  expect(mockChannel).toHaveBeenCalledTimes(1);
 });

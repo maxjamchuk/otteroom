@@ -32,11 +32,13 @@ it.each([
     .toThrow(ResolutionContractError);
 });
 
-it('keeps the resolution boundary status-only with no candidate or second-channel path',()=>{
+it('keeps resolution status-only while the route composes the Feature 006 consumer',()=>{
   const root=join(process.cwd(),'src','resolution');
   const source=['contracts.ts','service.ts','state.ts','use-common-filter-resolution.ts']
     .map(file=>readFileSync(join(root,file),'utf8')).join('\n');
   expect(source).not.toMatch(/p_genres|release_year_from|release_year_to|clause_ordinal|room_members|participant_filters|ensure_room_candidate|ensureRoomCandidate|useRoomCandidate|CandidateCard|tmdb|fetch\(|\.channel\(/i);
   const route=readFileSync(join(process.cwd(),'app','room','[code].tsx'),'utf8');
-  expect(route).not.toMatch(/src\/candidates|ensureRoomCandidate|useRoomCandidate|CandidateCard|tmdb/i);
+  expect(route.match(/useRoomCandidate/g)).toHaveLength(2);
+  expect(route.match(/CandidateCard/g)).toHaveLength(2);
+  expect(route).not.toMatch(/ensureRoomCandidate|api\.themoviedb\.org|ensure_room_candidate|tmdb_movie_id/i);
 });

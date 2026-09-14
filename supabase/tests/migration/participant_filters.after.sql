@@ -21,8 +21,8 @@ $f$;
 select pg_temp.require((select count(*)=4 from expected_room) and (select count(*)=8 from expected_member));
 select pg_temp.require(not exists(
   select 1 from expected_room e join public.rooms r on r.id=(e.row->>'id')::uuid
-  where (to_jsonb(r)-array['filter_completed_count','filter_resolution_status'])<>e.row
-    or r.filter_completed_count<>0 or r.filter_resolution_status<>'pending'));
+  where (to_jsonb(r)-array['filter_completed_count','filter_resolution_status','candidate_acquisition_status','tmdb_movie_id'])<>e.row
+    or r.filter_completed_count<>0 or r.filter_resolution_status<>'pending' or r.candidate_acquisition_status<>'pending' or r.tmdb_movie_id is not null));
 select pg_temp.require(not exists(
   select 1 from expected_member e join public.room_members m on m.id=(e.row->>'id')::uuid
   where to_jsonb(m)<>e.row));
@@ -41,7 +41,7 @@ select pg_temp.require(to_regclass('private.room_filter_resolutions') is not nul
   and to_regclass('private.room_filter_resolution_genre_clauses') is not null
   and not exists(select 1 from private.room_filter_resolutions)
   and not exists(select 1 from private.room_filter_resolution_genre_clauses));
-select pg_temp.require((select count(*)=7 from pg_attribute a cross join lateral aclexplode(a.attacl) x
+select pg_temp.require((select count(*)=8 from pg_attribute a cross join lateral aclexplode(a.attacl) x
   where a.attrelid='public.rooms'::regclass and x.grantee='authenticated'::regrole::oid
     and x.privilege_type='SELECT'));
 

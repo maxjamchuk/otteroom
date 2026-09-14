@@ -13,6 +13,7 @@ const pending: AcceptedRoomState = {
   isCreator: true, isVoter: true, state: 'ready', title: 'Ready', voterCount: 2,
   requiredVoterCount: 2, filterCompletedCount: 2, filtersComplete: true,
   filterResolutionStatus: 'pending', resolutionIntegrityError: false,
+  candidateAcquisitionStatus: 'pending', candidateIntegrityError: false,
 };
 const compatible = { outcome: 'compatible', filter_resolution_status: 'compatible' } as const;
 function deferred<T>() {

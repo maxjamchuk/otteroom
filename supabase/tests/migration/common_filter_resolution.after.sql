@@ -42,8 +42,8 @@ select pg_temp.require((select count(*)=4 from expected_room)
   and (select count(*)=4 from expected_candidate));
 select pg_temp.require(not exists(
   select 1 from expected_room e join public.rooms r on r.id=(e.row->>'id')::uuid
-  where ((to_jsonb(r)-'filter_resolution_status')||jsonb_build_object('row_xmin',r.xmin::text))<>e.row
-    or r.filter_resolution_status<>'pending'));
+  where ((to_jsonb(r)-'filter_resolution_status'-'candidate_acquisition_status'-'tmdb_movie_id')||jsonb_build_object('row_xmin',r.xmin::text))<>e.row
+    or r.filter_resolution_status<>'pending' or r.candidate_acquisition_status<>'pending' or r.tmdb_movie_id is not null));
 select pg_temp.require(not exists(
   select 1 from expected_member e join public.room_members m on m.id=(e.row->>'id')::uuid
   where (to_jsonb(m)||jsonb_build_object('row_xmin',m.xmin::text))<>e.row));
@@ -75,7 +75,7 @@ select pg_temp.require(to_regprocedure('public.resolve_common_filters(uuid)') is
   and not has_function_privilege('anon','public.resolve_common_filters(uuid)'::regprocedure,'EXECUTE')
   and pg_get_userbyid((select proowner from pg_proc where oid='public.resolve_common_filters(uuid)'::regprocedure))='postgres'
   and (select proconfig=array['search_path=""'] from pg_proc where oid='public.resolve_common_filters(uuid)'::regprocedure));
-select pg_temp.require((select count(*)=7 from pg_attribute a cross join lateral aclexplode(a.attacl)x
+select pg_temp.require((select count(*)=8 from pg_attribute a cross join lateral aclexplode(a.attacl)x
   where a.attrelid='public.rooms'::regclass and x.grantee='authenticated'::regrole::oid
     and x.privilege_type='SELECT'));
 select pg_temp.require((select count(*)=1 from pg_publication_tables
@@ -122,17 +122,17 @@ begin
     $$select * from public.join_room('F510000003')$$);
   perform pg_temp.require(result->>'outcome'='already_member'
     and result->>'filter_resolution_status'='compatible'
-    and (select count(*) from jsonb_object_keys(result))=10);
+    and (select count(*) from jsonb_object_keys(result))=11);
   result:=pg_temp.rpc('f5000000-0000-4000-8000-000000000008',
     $$select * from public.join_room('F510000004')$$);
   perform pg_temp.require(result->>'outcome'='already_member'
     and result->>'filter_resolution_status'='incompatible'
-    and (select count(*) from jsonb_object_keys(result))=10);
+    and (select count(*) from jsonb_object_keys(result))=11);
   result:=pg_temp.rpc('f5000000-0000-4000-8000-000000000001',
     $$select * from public.create_room('f5200000-0000-4000-8000-000000000099',2,true)$$);
   perform pg_temp.require(result->>'outcome'='created'
     and result->>'filter_resolution_status'='pending'
-    and (select count(*) from jsonb_object_keys(result))=10);
+    and (select count(*) from jsonb_object_keys(result))=11);
 
   result:=pg_temp.rpc('f5000000-0000-4000-8000-000000000006',
     $$select * from public.get_my_participant_filter('f5100000-0000-4000-8000-000000000003')$$);

@@ -2,13 +2,24 @@ import { expect, type Request, type Response, type Route, type WebSocket } from 
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import { parseEnv } from 'node:util';
-import { narrowCandidateResult, type CandidateResult } from '../../src/candidates/contracts.ts';
 import { type SafeDiagnostics, safeError } from './safe-diagnostics.ts';
 import { committedRoomSnapshot, type PublicApi, type RoomProjection } from './room-harness.ts';
 
 // Acceptance expectation only; selection remains entirely in the real RPC.
 export const firstCandidate = Object.freeze({ outcome: 'available' as const,
   candidate_id: 'fixture-cardboard-comet', title: 'The Cardboard Comet', release_year: 2020, poster_key: 'cardboard-comet' });
+type CandidateResult = typeof firstCandidate | Readonly<{ outcome: 'not_ready' | 'not_found';
+  candidate_id: null; title: null; release_year: null; poster_key: null }>;
+function narrowCandidateResult(value: unknown): CandidateResult {
+  if (!Array.isArray(value) || value.length !== 1 || !value[0] || typeof value[0] !== 'object') throw safeError();
+  const row = value[0] as Record<string, unknown>;
+  if (Object.keys(row).sort().join(',') !== 'candidate_id,outcome,poster_key,release_year,title') throw safeError();
+  if (row.outcome === 'available' && typeof row.candidate_id === 'string' && typeof row.title === 'string' &&
+      typeof row.release_year === 'number' && typeof row.poster_key === 'string') return row as CandidateResult;
+  if ((row.outcome === 'not_ready' || row.outcome === 'not_found') && row.candidate_id === null &&
+      row.title === null && row.release_year === null && row.poster_key === null) return row as CandidateResult;
+  throw safeError();
+}
 // Expo's installed Metro serves development assets via this path parameter;
 // exported assets use ordinary hash-bearing PNG pathnames.
 const assetPath = (url: URL) => url.searchParams.get('unstable_path') ?? url.pathname;

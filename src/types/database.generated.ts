@@ -96,6 +96,7 @@ export type Database = {
       }
       rooms: {
         Row: {
+          candidate_acquisition_status: Database["public"]["Enums"]["candidate_acquisition_status"]
           code: string
           created_at: string
           creation_request_id: string
@@ -106,10 +107,12 @@ export type Database = {
           movie_candidate_id: string | null
           required_voter_count: number
           state: string
+          tmdb_movie_id: number | null
           updated_at: string
           voter_count: number
         }
         Insert: {
+          candidate_acquisition_status?: Database["public"]["Enums"]["candidate_acquisition_status"]
           code: string
           created_at?: string
           creation_request_id: string
@@ -120,10 +123,12 @@ export type Database = {
           movie_candidate_id?: string | null
           required_voter_count?: number
           state?: string
+          tmdb_movie_id?: number | null
           updated_at?: string
           voter_count?: number
         }
         Update: {
+          candidate_acquisition_status?: Database["public"]["Enums"]["candidate_acquisition_status"]
           code?: string
           created_at?: string
           creation_request_id?: string
@@ -134,6 +139,7 @@ export type Database = {
           movie_candidate_id?: string | null
           required_voter_count?: number
           state?: string
+          tmdb_movie_id?: number | null
           updated_at?: string
           voter_count?: number
         }
@@ -152,6 +158,27 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      commit_room_tmdb_candidate: {
+        Args: {
+          p_actor_user_id: string
+          p_adult: boolean
+          p_release_year: number
+          p_room_id: string
+          p_tmdb_genre_ids: number[]
+          p_tmdb_movie_id: number
+        }
+        Returns: {
+          outcome: string
+          tmdb_movie_id: number
+        }[]
+      }
+      commit_room_tmdb_no_candidates: {
+        Args: { p_actor_user_id: string; p_room_id: string }
+        Returns: {
+          outcome: string
+          tmdb_movie_id: number
+        }[]
+      }
       create_room: {
         Args: {
           p_creation_request_id: string
@@ -159,6 +186,7 @@ export type Database = {
           p_required_voter_count: number
         }
         Returns: {
+          candidate_acquisition_status: Database["public"]["Enums"]["candidate_acquisition_status"]
           filter_completed_count: number
           filter_resolution_status: Database["public"]["Enums"]["filter_resolution_status"]
           is_creator: boolean
@@ -196,6 +224,7 @@ export type Database = {
       join_room: {
         Args: { p_room_code: string }
         Returns: {
+          candidate_acquisition_status: Database["public"]["Enums"]["candidate_acquisition_status"]
           filter_completed_count: number
           filter_resolution_status: Database["public"]["Enums"]["filter_resolution_status"]
           is_creator: boolean
@@ -206,6 +235,16 @@ export type Database = {
           room_id: string
           room_state: string
           voter_count: number
+        }[]
+      }
+      prepare_room_tmdb_candidate: {
+        Args: { p_actor_user_id: string; p_room_id: string }
+        Returns: {
+          genre_clauses_tmdb_ids: Json
+          outcome: string
+          release_year_from: number
+          release_year_to: number
+          tmdb_movie_id: number
         }[]
       }
       resolve_common_filters: {
@@ -234,6 +273,7 @@ export type Database = {
       }
     }
     Enums: {
+      candidate_acquisition_status: "pending" | "assigned" | "no_candidates"
       filter_resolution_status: "pending" | "compatible" | "incompatible"
       participant_genre:
         | "action"
@@ -382,6 +422,7 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
+      candidate_acquisition_status: ["pending", "assigned", "no_candidates"],
       filter_resolution_status: ["pending", "compatible", "incompatible"],
       participant_genre: [
         "action",

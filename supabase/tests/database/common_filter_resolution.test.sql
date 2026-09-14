@@ -79,11 +79,11 @@ select results_eq(
       where table_schema='public' and table_name='rooms' and grantee='authenticated'
         and privilege_type='SELECT' order by array_position(array[
           'id','code','state','voter_count','required_voter_count',
-          'filter_completed_count','filter_resolution_status'],column_name::text)$$,
+          'filter_completed_count','filter_resolution_status','candidate_acquisition_status'],column_name::text)$$,
   $$values ('id'::text),('code'::text),('state'::text),('voter_count'::text),
             ('required_voter_count'::text),('filter_completed_count'::text),
-            ('filter_resolution_status'::text)$$,
-  'authenticated room projection grant is exactly seven safe columns');
+            ('filter_resolution_status'::text),('candidate_acquisition_status'::text)$$,
+  'authenticated room projection grant is exactly eight safe columns');
 select ok(not exists(select 1 from information_schema.columns where table_schema='private'
     and table_name in('room_filter_resolutions','room_filter_resolution_genre_clauses')
     and (column_name like '%member%' or column_name like '%user%' or column_name like '%filter_id%'

@@ -5,6 +5,8 @@ import { ParticipantFilterForm } from '../../src/filters/participant-filter-form
 import { useParticipantFilter } from '../../src/filters/use-participant-filter';
 import { CommonFilterResolutionPanel } from '../../src/resolution/common-filter-resolution-panel';
 import { useCommonFilterResolution } from '../../src/resolution/use-common-filter-resolution';
+import { CandidateCard } from '../../src/candidates/candidate-card';
+import { useRoomCandidate } from '../../src/candidates/use-room-candidate';
 import { invitationLink, parseRoomSegment } from '../../src/rooms/code';
 import { InvitationQr } from '../../src/rooms/invitation-qr';
 import { joinRoom } from '../../src/rooms/service';
@@ -83,6 +85,7 @@ function AcceptedRoom({ initial }: { initial: AcceptedRoomState & { invitation?:
   const state = room ?? initial;
   const filters = useParticipantFilter(state, error, observeFilterProgress);
   const resolution = useCommonFilterResolution(state, observeResolutionStatus);
+  const candidate = useRoomCandidate(state);
   const invitation = state.isCreator || state.state === 'waiting' ? initial.invitation : undefined;
   return <>
     <Text accessibilityRole="header" style={styles.title}>{state.title}</Text>
@@ -110,6 +113,7 @@ function AcceptedRoom({ initial }: { initial: AcceptedRoomState & { invitation?:
         {!state.filtersComplete && <Text>Waiting for voters to finish their filters.</Text>}
       </>}
       {state.filtersComplete && <CommonFilterResolutionPanel model={resolution} />}
+      <CandidateCard model={candidate} />
     </>}
   </>;
 }

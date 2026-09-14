@@ -1,5 +1,5 @@
 import { randomUUID } from 'expo-crypto';
-import { router } from 'expo-router';
+import { Link, router } from 'expo-router';
 import { useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, ScrollView } from 'react-native';
 import { parseRoomSegment } from '../src/rooms/code';
@@ -91,6 +91,7 @@ export default function HomeScreen() {
       {state === 'joining' && <Text accessibilityLiveRegion="polite">Opening your room…</Text>}
       {state === 'malformed' && <Text accessibilityLiveRegion="polite">{malformedInvitationState().message}</Text>}
       {state === 'join-error' && <Text accessibilityLiveRegion="polite">{joinErrorState().message}</Text>}
+      <Link href="/about" accessibilityLabel="About and credits" style={styles.link}>About and credits</Link>
     </ScrollView>
   );
 }
@@ -101,4 +102,5 @@ const styles = StyleSheet.create({
   button: { padding: 16, borderWidth: 1, borderColor: '#2457A7', borderRadius: 8, alignSelf: 'flex-start' },
   selected: { backgroundColor: '#DCE9FF' },
   input: { borderWidth: 1, borderColor: '#555', borderRadius: 8, padding: 12, maxWidth: 360 },
+  link: { color: '#2457A7', fontSize: 18, paddingVertical: 12 },
 });

@@ -184,5 +184,18 @@ delete from auth.users where id::text like '04200000-0000-4000-a000-00000000000%
 select ok(not exists(select 1 from public.rooms where code like 'F40000000%'),
   'owned suppression fixtures cleaned through room/member/filter cascade');
 
+-- Feature 006 deliberately preserves fixtures only as denied historical infrastructure.
+select has_column('public','rooms','candidate_acquisition_status','Feature 006 status is additive');
+select has_column('public','rooms','tmdb_movie_id','Feature 006 identity is separate');
+select ok(not has_column_privilege('authenticated','public.rooms','movie_candidate_id','select')
+  and not has_column_privilege('authenticated','public.rooms','tmdb_movie_id','select'),
+  'neither fixture nor TMDB identity is directly projected');
+select results_eq($$select count(*) from public.movie_candidates$$,$$values (4::bigint)$$,
+  'all four fixture rows remain historical infrastructure');
+select ok(not has_function_privilege('authenticated','public.ensure_room_candidate(uuid)'::regprocedure,'execute'),
+  'legacy fixture RPC remains revoked');
+select ok(not exists(select 1 from public.rooms where tmdb_movie_id is not null
+  and movie_candidate_id is not null and tmdb_movie_id::text=movie_candidate_id),
+  'fixture identities are never migrated to TMDB IDs');
 select * from finish();
 rollback;

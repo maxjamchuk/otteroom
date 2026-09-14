@@ -1,5 +1,5 @@
-import type { AcceptedRoomResult, JoinResult, RoomResolutionStatus } from './contracts';
-import { RoomContractError, validFilterCount, validResolutionStatus, validVoterCounts } from './contracts';
+import type { AcceptedRoomResult, CandidateAcquisitionStatus, JoinResult, RoomResolutionStatus } from './contracts';
+import { RoomContractError, validCandidateStatus, validFilterCount, validResolutionStatus, validVoterCounts } from './contracts';
 import type { RoomProjection } from './service';
 
 export function acceptedRoomState(result: AcceptedRoomResult) {
@@ -17,6 +17,8 @@ export function acceptedRoomState(result: AcceptedRoomResult) {
     filtersComplete:result.filter_completed_count===result.required_voter_count,
     filterResolutionStatus:result.filter_resolution_status,
     resolutionIntegrityError:false,
+    candidateAcquisitionStatus:result.candidate_acquisition_status,
+    candidateIntegrityError:false,
   };
 }
 export type AcceptedRoomState = ReturnType<typeof acceptedRoomState>;
@@ -42,12 +44,25 @@ export function applyRoomResolutionStatus(current: AcceptedRoomState,
   return { ...current, filterResolutionStatus: status };
 }
 
+export function applyRoomCandidateStatus(current: AcceptedRoomState,
+  status: CandidateAcquisitionStatus): AcceptedRoomState {
+  if (!validCandidateStatus(status, current.filterResolutionStatus, current.filterCompletedCount,
+      current.requiredVoterCount, current.state)) throw new RoomContractError();
+  if (current.candidateIntegrityError || status === 'pending' ||
+      status === current.candidateAcquisitionStatus) return current;
+  if (current.candidateAcquisitionStatus !== 'pending')
+    return { ...current, candidateIntegrityError: true };
+  return { ...current, candidateAcquisitionStatus: status };
+}
+
 export function applyRoomRefetch(current: AcceptedRoomState, row: RoomProjection): AcceptedRoomState {
   if (current.id !== row.id || current.code !== row.code || current.requiredVoterCount !== row.required_voter_count ||
     !validVoterCounts(row.voter_count, row.required_voter_count, row.state) ||
     !validFilterCount(row.filter_completed_count, row.required_voter_count, row.state) ||
     !validResolutionStatus(row.filter_resolution_status,row.filter_completed_count,
       row.required_voter_count,row.state) ||
+    !validCandidateStatus(row.candidate_acquisition_status,row.filter_resolution_status,
+      row.filter_completed_count,row.required_voter_count,row.state) ||
     current.isVoter && row.voter_count === 0) throw new RoomContractError();
   // Membership is fixed: delayed authoritative reads cannot undo observed admissions.
   const voterCount=Math.max(current.voterCount,row.voter_count);
@@ -55,16 +70,24 @@ export function applyRoomRefetch(current: AcceptedRoomState, row: RoomProjection
   const state=voterCount===current.requiredVoterCount?'ready' as const:'waiting' as const;
   let filterResolutionStatus=current.filterResolutionStatus;
   let resolutionIntegrityError=current.resolutionIntegrityError;
+  let candidateAcquisitionStatus=current.candidateAcquisitionStatus;
+  let candidateIntegrityError=current.candidateIntegrityError;
   if(!resolutionIntegrityError&&row.filter_resolution_status!=='pending'){
     if(filterResolutionStatus==='pending')filterResolutionStatus=row.filter_resolution_status;
     else if(filterResolutionStatus!==row.filter_resolution_status)resolutionIntegrityError=true;
   }
+  if(!candidateIntegrityError&&row.candidate_acquisition_status!=='pending'){
+    if(candidateAcquisitionStatus==='pending')candidateAcquisitionStatus=row.candidate_acquisition_status;
+    else if(candidateAcquisitionStatus!==row.candidate_acquisition_status)candidateIntegrityError=true;
+  }
   if(voterCount===current.voterCount&&filterCompletedCount===current.filterCompletedCount
     &&filterResolutionStatus===current.filterResolutionStatus
-    &&resolutionIntegrityError===current.resolutionIntegrityError)return current;
+    &&resolutionIntegrityError===current.resolutionIntegrityError
+    &&candidateAcquisitionStatus===current.candidateAcquisitionStatus
+    &&candidateIntegrityError===current.candidateIntegrityError)return current;
   return { ...current,state,title:state==='ready'?'Ready':'Waiting',voterCount,filterCompletedCount,
     filtersComplete:filterCompletedCount===current.requiredVoterCount,filterResolutionStatus,
-    resolutionIntegrityError };
+    resolutionIntegrityError,candidateAcquisitionStatus,candidateIntegrityError };
 }
 export function createErrorState() {
   return { kind: 'error' as const, message: 'Unable to create your room. Please try again.' };

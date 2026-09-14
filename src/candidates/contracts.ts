@@ -1,36 +1,53 @@
-import type { Database } from '../types/database.generated';
+export type Candidate = Readonly<{
+  tmdbMovieId: number;
+  title: string;
+  releaseYear: number;
+  posterUrl: string | null;
+}>;
 
-type GeneratedRow = Database['public']['Functions']['ensure_room_candidate']['Returns'][number];
-export type Candidate = Readonly<Omit<GeneratedRow, 'outcome'>>;
 export type CandidateResult =
-  | Candidate & { readonly outcome: 'available' }
-  | { readonly outcome: 'not_ready' | 'not_found' } & { readonly [K in keyof Candidate]: null };
+  | Readonly<{ outcome: 'available'; candidate: Candidate }>
+  | Readonly<{ outcome: 'not_ready' | 'not_found' | 'no_candidates' | 'metadata_unavailable' }>;
 
-export const candidateFailureMessage = 'Unable to load this movie. Please try again.';
+export const candidateFailureMessage = 'Unable to find a movie right now. Please try again.';
+export const metadataFailureMessage = 'Unable to load movie details. Please try again.';
+export const posterFailureMessage = 'Unable to load this poster. Please try again.';
+
 export class CandidateContractError extends Error {
   constructor() { super(candidateFailureMessage); this.name = 'CandidateContractError'; }
 }
 
-const fields = ['outcome', 'candidate_id', 'title', 'release_year', 'poster_key'] as const satisfies readonly (keyof GeneratedRow)[];
-const slug = (value: unknown): value is string => typeof value === 'string' && /^[a-z0-9]+(-[a-z0-9]+)*$/.test(value);
+const exact = (value: unknown, fields: readonly string[]): value is Record<string, unknown> =>
+  !!value && typeof value === 'object' && !Array.isArray(value) &&
+  Object.keys(value).length === fields.length && fields.every(field => Object.hasOwn(value, field));
+const positive = (value: unknown): value is number => typeof value === 'number' &&
+  Number.isSafeInteger(value) && value > 0;
 
-// Generated RETURNS TABLE types omit logical NULLs; narrow unknown transport data.
+function httpsUrl(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password; }
+  catch { return false; }
+}
+
 export function narrowCandidateResult(data: unknown): CandidateResult {
-  if (!Array.isArray(data) || data.length !== 1) throw new CandidateContractError();
-  const value: unknown = data[0];
-  if (!value || typeof value !== 'object' || Array.isArray(value) ||
-      Object.keys(value).length !== fields.length || !fields.every(key => Object.hasOwn(value, key))) {
-    throw new CandidateContractError();
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw new CandidateContractError();
+  const value = data as Record<string, unknown>;
+  if (value.outcome === 'available') {
+    if (!exact(value, ['outcome','candidate']) || !exact(value.candidate,
+      ['tmdb_movie_id','title','release_year','poster_url'])) throw new CandidateContractError();
+    const candidate = value.candidate;
+    if (!positive(candidate.tmdb_movie_id) || typeof candidate.title !== 'string' ||
+        !candidate.title || candidate.title.trim() !== candidate.title ||
+        typeof candidate.release_year !== 'number' || !Number.isInteger(candidate.release_year) ||
+        candidate.release_year < 1888 || candidate.release_year > 9999 ||
+        !(candidate.poster_url === null || httpsUrl(candidate.poster_url))) throw new CandidateContractError();
+    return Object.freeze({ outcome: 'available', candidate: Object.freeze({
+      tmdbMovieId: candidate.tmdb_movie_id, title: candidate.title,
+      releaseYear: candidate.release_year, posterUrl: candidate.poster_url,
+    }) });
   }
-  const row = value as Record<keyof GeneratedRow, unknown>;
-  if (row.outcome === 'available') {
-    if (!slug(row.candidate_id) || !slug(row.poster_key) || typeof row.title !== 'string' ||
-        !row.title || row.title.trim() !== row.title || typeof row.release_year !== 'number' ||
-        !Number.isInteger(row.release_year) || row.release_year < 1888 || row.release_year > 9999) {
-      throw new CandidateContractError();
-    }
-  } else if (row.outcome === 'not_ready' || row.outcome === 'not_found') {
-    if (!fields.filter(key => key !== 'outcome').every(key => row[key] === null)) throw new CandidateContractError();
-  } else throw new CandidateContractError();
-  return Object.freeze({ ...row }) as CandidateResult;
+  if ((value.outcome === 'not_ready' || value.outcome === 'not_found' ||
+      value.outcome === 'no_candidates' || value.outcome === 'metadata_unavailable') &&
+      exact(value, ['outcome'])) return Object.freeze({ outcome: value.outcome });
+  throw new CandidateContractError();
 }

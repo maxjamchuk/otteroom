@@ -9,7 +9,6 @@ export function CommonFilterResolutionPanel({ model }: { model: CommonFilterReso
   </View>;
   if (model.status === 'compatible') return <View style={styles.section}>
     <Text accessibilityRole="header" accessibilityLiveRegion="polite">Filters are compatible.</Text>
-    <Text>Movie candidate sourcing is the next step in a future feature.</Text>
   </View>;
   if (model.status === 'incompatible') return <View style={styles.section}>
     <Text accessibilityRole="header" accessibilityLiveRegion="polite">Filters are incompatible.</Text>
@@ -35,4 +34,3 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: '#767676', borderRadius: 8 },
   link: { color: '#2457A7', fontSize: 18, paddingVertical: 12 },
 });
-
