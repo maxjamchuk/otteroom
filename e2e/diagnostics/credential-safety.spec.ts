@@ -145,6 +145,12 @@ test('@diagnostics-static B synthetic safety and finalized artifacts', async ({ 
         expect(scanArtifacts(directory, { registry }).ok).toBe(false);
         fs.unlinkSync(path.join(directory, name));
       }
+      for (const value of ['tmdb_movie_id', 'movie_candidate_id', 'genre_clauses_tmdb_ids',
+        'release_year_from', 'p_actor_user_id', 'upstream_payload', 'request_body', 'response_headers']) {
+        fs.writeFileSync(path.join(directory, 'feature006-private.json'), JSON.stringify({ message: value }));
+        expect(scanArtifacts(directory, { registry }).ok).toBe(false);
+        fs.unlinkSync(path.join(directory, 'feature006-private.json'));
+      }
       // A finalized late write is included, not skipped behind an earlier scan.
       await fs.promises.writeFile(path.join(directory, 'late.txt'), secret);
       expect(scanArtifacts(directory, { registry }).ok).toBe(false);

@@ -66,7 +66,7 @@ export async function assertResolutionView(page:Page,status:ResolutionStatus|'re
     await expect(page.getByText('Filters are incompatible.',{exact:true})).toHaveCount(0);
   }else if(status==='compatible'){
     await expect(page.getByRole('heading',{name:'Filters are compatible.',exact:true})).toBeVisible();
-    await expect(page.getByText('Movie candidate sourcing is the next step in a future feature.',{exact:true})).toBeVisible();
+    await expect(page.getByText('Movie candidate sourcing is the next step in a future feature.',{exact:true})).toHaveCount(0);
     await expect(page.getByRole('button',{name:'Retry common-filter resolution',exact:true})).toHaveCount(0);
   }else if(status==='incompatible'){
     await expect(page.getByRole('heading',{name:'Filters are incompatible.',exact:true})).toBeVisible();
@@ -78,8 +78,10 @@ export async function assertResolutionView(page:Page,status:ResolutionStatus|'re
     await expect(page.getByText('Filters are incompatible.',{exact:true})).toHaveCount(0);
     await expect(page.getByRole('link',{name:'Create a new room',exact:true})).toHaveCount(0);
   }
-  await expect(page.getByTestId('candidate-card')).toHaveCount(0);
-  expect(observeCandidateRpcZero(page).count()).toBe(0);
+  if(status!=='compatible'){
+    await expect(page.getByTestId('candidate-card')).toHaveCount(0);
+    expect(observeCandidateRpcZero(page).count()).toBe(0);
+  }
   expect(observeResolutionTraffic(page).tmdb()).toBe(0);
 }
 

@@ -171,17 +171,18 @@ describe('repository-owned Playwright runtime', () => {
   `));
 });
 
-it('Feature 005 discovery retains serial default acceptance and bounded runtime invocation options', () => verify(prelude + `
+it('Feature 006 discovery retains serial default acceptance and bounded runtime invocation options', () => verify(prelude + `
   const { default: config } = await import('./playwright.config.ts');
   const { parseInvocation } = await import('./scripts/run-e2e.mjs');
   assert.deepEqual(config.projects.find(p => p.name === 'acceptance').testMatch,
-    ['room-session.spec.ts', 'generalized-room-membership-qr.spec.ts', 'participant-filters.spec.ts', 'common-filter-resolution.spec.ts']);
+    ['room-session.spec.ts', 'generalized-room-membership-qr.spec.ts', 'participant-filters.spec.ts', 'common-filter-resolution.spec.ts',
+      'tmdb-candidate-source.spec.ts']);
   assert.equal(config.workers, 1); assert.equal(config.repeatEach, 1); assert.equal(config.retries, 0);
   assert.equal(config.reporter[0][0], './e2e/support/safe-reporter.ts');
   for (const field of ['trace', 'video', 'screenshot']) assert.equal(config.use[field], 'off');
   assert.equal(config.globalTimeout, 600000);
   for (const selector of ['@membership', 'G01', 'G02', 'G03', 'G04', 'G05', 'G06', 'G07', 'G08', 'G09',
-    '@filters', 'H01', 'H02', 'H03', '@resolution', 'I01', 'I02', 'I03'])
+    '@filters', 'H01', 'H02', 'H03', '@resolution', 'I01', 'I02', 'I03', '@feature006', 'J01', 'J02', 'J03'])
     assert.deepEqual(parseInvocation(['acceptance', '--grep', selector]).forwarded, ['--grep', selector]);
   assert.equal(parseInvocation(['acceptance', '--grep', '@resolution']).profile, 'resolution');
   assert.equal(parseInvocation(['acceptance', '--grep', 'H03']).profile, 'h03');
@@ -191,7 +192,7 @@ it('Feature 005 discovery retains serial default acceptance and bounded runtime 
     ['--workers', '2', '--repeat-each', '2']);
   for (const args of [['acceptance', 'first-movie-candidate.spec.ts'], ['acceptance', '--workers=5'],
     ['acceptance', '--repeat-each=4'], ['acceptance', '--retries=1'], ['security', '--grep', 'H01'], ['acceptance', '--grep', 'F01'],
-    ['acceptance', '--grep', 'I04'], ['acceptance', '--grep', '@resolution arbitrary'],
+    ['acceptance', '--grep', 'I04'], ['acceptance', '--grep', 'J04'], ['acceptance', '--grep', '@resolution arbitrary'],
     ['smoke', '--workers=2'], ['smoke', '--grep', 'H01']])
     assert.throws(() => parseInvocation(args));
 `));
@@ -247,7 +248,7 @@ it('discovers exactly three filter cases and the approved 9-identity allocation 
 `));
 
 
-it('discovers E/G/H/I with 91 identities and the 39-case final inventory', () => verify(prelude + `
+it('discovers E/G/H/I/J with 100 identities and the 42-case final inventory', () => verify(prelude + `
   import fs from 'node:fs';
   import ts from 'typescript';
   const source = fs.readFileSync('e2e/generalized-room-membership-qr.spec.ts', 'utf8');
@@ -300,12 +301,25 @@ it('discovers E/G/H/I with 91 identities and the 39-case final inventory', () =>
   assert.deepEqual(resolutionBudgets, { I01:3,I02:4,I03:2 });
   assert.deepEqual(resolutionTimeouts, [120000,120000,120000]);
   assert.equal(Object.values(resolutionBudgets).reduce((sum, value) => sum + value, 0), 9);
-  assert.equal(47 + 9 + Object.values(budgets).reduce((a, b) => a + b, 0) + 9, 91);
-  assert.equal(24 + 3 + titles.length + resolutionTitles.length, 39);
-  const C1 = 1, smoke = 16, owner = 9, H03 = 3;
-  assert.deepEqual({ normal: C1 + smoke + owner + H03,
-    repeatability: C1 + 2 * (smoke + owner) + H03,
+  const candidate = fs.readFileSync('e2e/tmdb-candidate-source.spec.ts', 'utf8');
+  const candidateAst = ts.createSourceFile('candidate.ts', candidate, ts.ScriptTarget.Latest, true);
+  const candidateTitles = [], candidateBudgets = {};
+  function candidateWalk(node) {
+    if (ts.isCallExpression(node) && node.expression.getText(candidateAst) === 'test' && ts.isStringLiteral(node.arguments[0]))
+      candidateTitles.push(node.arguments[0].text);
+    if (ts.isPropertyAssignment(node) && /^J0[1-3]$/.test(node.name.getText(candidateAst)))
+      candidateBudgets[node.name.getText(candidateAst)] = Number(node.initializer.getText(candidateAst));
+    ts.forEachChild(node, candidateWalk);
+  }
+  candidateWalk(candidateAst);
+  assert.deepEqual(candidateTitles.map(title => title.split(' ')[1]), ['J01','J02','J03']);
+  assert.deepEqual(candidateBudgets, { J01:3,J02:4,J03:2 });
+  assert.equal(47 + 9 + Object.values(budgets).reduce((a, b) => a + b, 0) + 9 + 9, 100);
+  assert.equal(24 + 3 + titles.length + resolutionTitles.length + candidateTitles.length, 42);
+  const C1 = 1, smoke = 16, owner = 9;
+  assert.deepEqual({ normal: C1 + smoke + owner,
+    repeatability: C1 + 2 * (smoke + owner),
     fresh: C1 + smoke,
-    total: C1 + 2 * (smoke + owner) + H03 + C1 + smoke },
-  { normal: 29, repeatability: 54, fresh: 17, total: 71 });
+    total: C1 + 2 * (smoke + owner) + C1 + smoke },
+  { normal: 26, repeatability: 51, fresh: 17, total: 68 });
 `));

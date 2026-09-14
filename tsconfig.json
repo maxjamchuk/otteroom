@@ -22,5 +22,5 @@
     ".expo/types/**/*.ts",
     "expo-env.d.ts"
   ],
-  "exclude": ["supabase/functions"]
+  "exclude": ["supabase/functions", "e2e/first-movie-candidate.spec.ts"]
 }

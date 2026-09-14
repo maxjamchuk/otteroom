@@ -25,7 +25,8 @@ export default defineConfig({
     serviceWorkers: 'block',
   },
   projects: [
-    { name: 'acceptance', testMatch: ['room-session.spec.ts', 'generalized-room-membership-qr.spec.ts', 'participant-filters.spec.ts', 'common-filter-resolution.spec.ts'], fullyParallel: true },
+    { name: 'acceptance', testMatch: ['room-session.spec.ts', 'generalized-room-membership-qr.spec.ts',
+      'participant-filters.spec.ts', 'common-filter-resolution.spec.ts', 'tmdb-candidate-source.spec.ts'], fullyParallel: true },
     {
       name: 'credential-safety',
       testMatch: 'diagnostics/credential-safety.spec.ts',

@@ -32,12 +32,18 @@ const resolutionCases=new Map([
   ['@resolution I02 converges a non-voting creator and three voters on terminal incompatibility','I02'],
   ['@resolution I03 recovers pre-commit failure and committed-response loss with two reused identities','I03'],
 ]);
+const candidateCases=new Map([
+  ['@feature006 J01 exact compatible acquisition and lifecycle convergence','J01'],
+  ['@feature006 J02 non-voting parity private traffic and completed empty','J02'],
+  ['@feature006 J03 failure recovery response loss and same identity degradation','J03'],
+]);
 
 function scenarioFor(title: unknown): string {
   if (typeof title !== 'string') return 'unclassified';
   if (membershipCases.has(title)) return 'membership';
   if (filterCases.has(title)) return 'filters';
   if(resolutionCases.has(title))return 'resolution';
+  if(candidateCases.has(title))return 'candidate';
   if (title.startsWith('@baseline ')) return 'baseline';
   if (title.startsWith('@auth ')) return 'auth';
   if (title.startsWith('@us1 E01 ')) return 'us1';
@@ -63,6 +69,7 @@ function browserCaseFor(title: unknown): string {
   if (scenario === 'membership') return membershipCases.get(title)!;
   if (scenario === 'filters') return filterCases.get(title)!;
   if(scenario==='resolution')return resolutionCases.get(title)!;
+  if(scenario==='candidate')return candidateCases.get(title)!;
   if (['us1', 'us2-join', 'us2-realtime', 'us4'].includes(scenario)) {
     return title.match(/^@[^ ]+ (E(?:0[1-9]|1[0-2])) /)?.[1] ?? 'none';
   }

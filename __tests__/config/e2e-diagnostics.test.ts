@@ -368,7 +368,8 @@ describe('credential-safe diagnostics boundaries', () => {
       assert.equal(liveRegistry.size, 0);
       assert.equal(fs.existsSync(path.dirname(endpoint)), false);
       const failure = await executeInvocation(parseInvocation(['acceptance']), {
-        artifactRoot: root, runtime: run => run({ kind: 'native' }), launch: async ({ socket, registry }) => { endpoint = socket; liveRegistry = registry; throw Error('fixture failure'); },
+        artifactRoot: root, runtime: run => run({ kind: 'native' }), provider: async () => async () => {},
+        launch: async ({ socket, registry }) => { endpoint = socket; liveRegistry = registry; throw Error('fixture failure'); },
       });
       assert.equal(failure, 1);
       assert.equal(liveRegistry.size, 0);
@@ -407,12 +408,13 @@ it('ordinary safeBody final check inspects image-bearing text, fails credentials
   assert.equal(closed, 5); assert.equal(registry.size, 0);
 `));
 
-it('explicitly discovers H01–H03 and I01–I03 with fixed safe labels while excluding candidate and arbitrary labels', () => verify(prelude + `
+it('explicitly discovers H01–H03, I01–I03 and J01–J03 with fixed safe labels', () => verify(prelude + `
   const { default: config } = await import('./playwright.config.ts');
   const { safeResult } = await import('./e2e/support/safe-reporter.ts');
   const { safeDiagnosticLocation } = await import('./e2e/support/sanitize-diagnostics.ts');
   assert.deepEqual(config.projects.find(p => p.name === 'acceptance').testMatch,
-    ['room-session.spec.ts', 'generalized-room-membership-qr.spec.ts', 'participant-filters.spec.ts', 'common-filter-resolution.spec.ts']);
+    ['room-session.spec.ts', 'generalized-room-membership-qr.spec.ts', 'participant-filters.spec.ts', 'common-filter-resolution.spec.ts',
+      'tmdb-candidate-source.spec.ts']);
   const titles = ['@filters H01 validates private owned filters and editable saved state',
     '@filters H02 recovers filters through failures and lost acknowledgements',
     '@filters H03 serializes final completion and freezes every filter'];
@@ -431,17 +433,26 @@ it('explicitly discovers H01–H03 and I01–I03 with fixed safe labels while ex
     assert.equal(result.scenario, 'resolution'); assert.equal(result.browserCase, title.split(' ')[1]);
     assert.equal(result.location, 'e2e/common-filter-resolution.spec.ts:12:3');
   }
+  const candidateTitles = ['@feature006 J01 exact compatible acquisition and lifecycle convergence',
+    '@feature006 J02 non-voting parity private traffic and completed empty',
+    '@feature006 J03 failure recovery response loss and same identity degradation'];
+  for (const title of candidateTitles) {
+    const result = safeResult({ title, repeatEachIndex: 0 }, { status: 'passed',
+      error: { message: 'E2E_SAFE_FAILURE at e2e/tmdb-candidate-source.spec.ts:12:3' } });
+    assert.equal(result.scenario, 'candidate'); assert.equal(result.browserCase, title.split(' ')[1]);
+    assert.equal(result.location, 'e2e/tmdb-candidate-source.spec.ts:12:3');
+  }
   for (const file of ['participant-filters.spec', 'common-filter-resolution.spec', 'support/filter-harness', 'support/room-harness', 'support/resolution-harness'])
     assert.equal(safeDiagnosticLocation('E2E_SAFE_FAILURE at e2e/' + file + '.ts:12:3'), 'e2e/' + file + '.ts:12:3');
   for (const title of ['@filters H00 future', '@filters H04 future', '@resolution I00 future', '@resolution I04 future',
-    '@candidate F01 retired', '@filters ' + sentinel(), '@resolution ' + sentinel()]) {
+    '@candidate F01 retired', '@feature006 J04 future', '@filters ' + sentinel(), '@resolution ' + sentinel()]) {
     const result = safeResult({ title }, { status: 'failed' });
     assert.equal(result.scenario, 'unclassified'); assert.equal(result.browserCase, 'none');
   }
   assert.equal(safeDiagnosticLocation('e2e/arbitrary.ts:12:3'), undefined);
   for (const file of ['scripts/run-e2e.mjs', 'e2e/support/safe-diagnostics.ts']) {
     const source = fs.readFileSync(file, 'utf8');
-    assert.equal(/acceptance[ -]N=91/.test(source), true);
+    assert.equal(/acceptance[ -]N=100/.test(source), true);
     assert.equal(source.includes('N=47'), false);
   }
   const runner = fs.readFileSync('scripts/run-e2e.mjs', 'utf8');
@@ -450,150 +461,8 @@ it('explicitly discovers H01–H03 and I01–I03 with fixed safe labels while ex
   for (const label of ["'@resolution'", "'resolution'", "'I01'", "'I02'", "'I03'"])
     assert.equal(runner.includes(label), true);
   assert.equal(runner.includes("'F01'"), false);
-  assert.equal(runner.includes("'candidate'"), false);
-`));
-
-const candidatePrelude = prelude + `
-  import { EventEmitter } from 'node:events';
-  import { candidateHarness } from './e2e/support/candidate-harness.ts';
-  process.env.EXPO_PUBLIC_SUPABASE_URL = 'http://127.0.0.1:55321';
-  const api = { origin: process.env.EXPO_PUBLIC_SUPABASE_URL, publicKey: 'synthetic-public' };
-  const room = { id: '11111111-1111-4111-8111-111111111111', code: 'ABCDEF0123', state: 'ready', voter_count: 2, required_voter_count: 2, filter_completed_count: 0, filter_resolution_status: 'pending' };
-  const ids = [randomUUID(), randomUUID()];
-  const pages = ids.map(() => Object.assign(new EventEmitter(), {
-    routes: [], addInitScript: async () => {},
-    async route(match, handler) { this.routes.push({ match, handler }); },
-    async unroute(match, handler) { this.routes = this.routes.filter(r => r.match !== match || r.handler !== handler); },
-  }));
-  const h = await candidateHarness(pages.map(page => ({ page })), 'http://127.0.0.1:8081');
-  h.bind(room, ids, api);
-  const request = (index, suffix = '', probe = false) => {
-    const headers = { authorization: 'Bearer synthetic.' + Buffer.from(JSON.stringify({ sub: ids[index] })).toString('base64url') + '.synthetic',
-      'x-client-info': probe ? 'otteroom-f01-contract-probe' : 'synthetic-sdk' };
-    return { url: () => api.origin + '/rest/v1/rpc/ensure_room_candidate' + suffix,
-      method: () => 'POST', resourceType: () => 'fetch', postDataJSON: () => ({ p_room_id: room.id }),
-      headers: () => headers, allHeaders: async () => headers, headerValue: async name => headers[name] };
-  };
-  const turn = () => new Promise(resolve => setImmediate(resolve));
-`;
-
-it('candidate observer counts query-bearing and late RPCs independently of routing and contract probes', () => verify(candidatePrelude + `
-  try {
-    const match = pages[0].routes[0].match;
-    assert.equal(typeof match, 'function');
-    for (const suffix of ['', '?select=*', '?other=1&select=title'])
-      assert.equal(match(new URL(request(0, suffix).url())), true);
-    for (const path of ['/rest/v1/rpc/join_room', '/rest/v1/rpc/ensure_room_candidate_extra'])
-      assert.equal(match(new URL(api.origin + path)), false);
-    pages[0].emit('request', request(0));
-    assert.equal(h.stats[0].automatic, 1);
-    pages[0].emit('request', request(0, '?select=*', true));
-    assert.equal(h.stats[0].automatic, 1); assert.equal(h.stats[0].probes, 1);
-    pages[0].emit('request', { ...request(0), url: () => api.origin + '/rest/v1/rpc/join_room' });
-    assert.equal(h.stats[0].automatic, 1);
-    pages[0].emit('request', request(0, '?select=*'));
-    assert.equal(h.stats[0].automatic, 2);
-    await assert.rejects(h.assertHealthy());
-  } finally { await h.close(); }
-`));
-
-it('candidate cleanup releases a held caller when its peer never arrives and removes every observer', () => verify(candidatePrelude + `
-  let forwarded = 0, aborted = 0;
-  const req = request(0, '?select=*'); pages[0].emit('request', req);
-  const active = pages[0].routes[0].handler({ request: () => req,
-    continue: async () => { forwarded++; }, abort: async () => { aborted++; } });
-  try {
-    await turn(); assert.equal(h.stats[0].held, 1); assert.equal(h.stats[1].held, 0);
-    assert.throws(() => h.release());
-  } finally { await h.close(); await active; }
-  assert.equal(forwarded, 0); assert.equal(aborted, 1);
-  for (const page of pages) { assert.equal(page.routes.length, 0); assert.equal(page.eventNames().length, 0); }
-  await h.close();
-`));
-
-it('candidate cleanup does not await an unfinished response body before its owner can close the context', () => verify(candidatePrelude + `
-  let finish, entered = false, closed = false;
-  const bytes = new Promise(resolve => { finish = resolve; });
-  pages[0].emit('response', { request: () => ({ ...request(0), resourceType: () => 'image',
-    url: () => 'http://127.0.0.1:8081/assets/local.png' }),
-    url: () => 'http://127.0.0.1:8081/assets/local.png', ok: () => true,
-    body: () => { entered = true; return bytes; } });
-  assert.equal(entered, true);
-  const closing = h.close().then(() => { closed = true; });
-  try {
-    await turn(); assert.equal(closed, true);
-    for (const page of pages) { assert.equal(page.routes.length, 0); assert.equal(page.eventNames().length, 0); }
-  } finally { finish(Buffer.alloc(0)); await closing; }
-  await turn(); await h.close();
-`));
-
-it('candidate health inspection has a bounded deadline even when a response body never finishes', () => verify(candidatePrelude + `
-  const { mock } = await import('node:test');
-  mock.timers.enable({ apis: ['setTimeout'] });
-  let finish;
-  const bytes = new Promise(resolve => { finish = resolve; });
-  pages[0].emit('response', { request: () => request(0), ok: () => true, body: () => bytes });
-  try {
-    const rejected = assert.rejects(h.assertHealthy(), /E2E_SAFE_FAILURE/);
-    mock.timers.tick(15001); await rejected;
-    await h.close();
-  } finally { finish(Buffer.alloc(0)); mock.timers.reset(); await h.close(); }
-`));
-
-it('pre-forward faults never fetch or continue; a fresh barrier gates both explicit retries', () => verify(candidatePrelude + `
-  h.configureInitial(['abort', 'abort']); h.limitAutomatic([2, 2]);
-  let forwarded = 0, fetched = 0, aborted = 0;
-  const send = index => {
-    const req = request(index); pages[index].emit('request', req);
-    return pages[index].routes[0].handler({ request: () => req,
-      continue: async () => { forwarded++; }, fetch: async () => { fetched++; throw Error(); }, abort: async () => { aborted++; } });
-  };
-  try {
-    const first = [send(0), send(1)]; await h.held(); h.release(); await Promise.all(first);
-    assert.equal(forwarded, 0); assert.equal(fetched, 0); assert.equal(aborted, 2);
-    h.arm(['continue', 'continue']);
-    const a = send(0); await turn(); assert.equal(forwarded, 0); assert.throws(() => h.release());
-    const b = send(1); await h.held(); h.release(); await Promise.all([a, b]);
-    assert.equal(forwarded, 2); assert.equal(fetched, 0); assert.equal(aborted, 2);
-  } finally { await h.close(); }
-`));
-
-it.each(['valid', 'missing-commit', 'upstream-failure'])('commit-loss ordering fails closed for %s', trial => verify(candidatePrelude + `
-  import cp from 'node:child_process';
-  import { syncBuiltinESMExports } from 'node:module';
-  const trial = '${trial}', events = [], row = { ...room, creator_user_id: ids[0],
-    movie_candidate_id: null, creation_request_id: randomUUID(), created_at: 'fixed', updated_at: 'fixed' };
-  const members = ids.map(user_id => ({ id: randomUUID(), room_id: room.id, user_id, is_voter: true, joined_at: 'fixed' }));
-  const before = { row, members, filters: [], xmin: '10' };
-  cp.spawnSync = () => {
-    events.push('snapshot');
-    return { status: 0, stdout: JSON.stringify([{ row: { ...row, movie_candidate_id: trial === 'missing-commit' ? null : 'fixture-cardboard-comet' }, members, filters: [], xmin: '11' }]) };
-  }; syncBuiltinESMExports();
-  h.configureInitial(['commit-loss', 'commit-loss']);
-  const send = index => {
-    const req = request(index); pages[index].emit('request', req);
-    return pages[index].routes[0].handler({ request: () => req,
-      continue: async () => { throw Error('unexpected delivery'); },
-      fetch: async options => {
-        assert.deepEqual(options, { maxRetries: 0, maxRedirects: 0, timeout: 15000 }); events.push('fetch');
-        return { ok: () => trial !== 'upstream-failure', body: async () => Buffer.from(JSON.stringify([{ outcome: 'available',
-          candidate_id: 'fixture-cardboard-comet', title: 'The Cardboard Comet', release_year: 2020, poster_key: 'cardboard-comet' }])),
-          dispose: async () => { events.push('dispose'); } };
-      }, abort: async () => { events.push('abort'); } });
-  };
-  const calls = [send(0), send(1)];
-  try {
-    await h.held(); h.release(); await turn();
-    if (trial === 'valid') {
-      assert.equal(events.includes('abort'), false);
-      await h.loseCommittedResponses(before); await Promise.all(calls);
-      assert.equal(events.filter(e => e === 'snapshot').length, 1);
-      assert.equal(events.indexOf('snapshot') > events.lastIndexOf('fetch'), true);
-      assert.equal(events.indexOf('abort') > events.indexOf('snapshot'), true);
-      assert.equal(events.filter(e => e === 'dispose').length, 2);
-    } else await assert.rejects(h.loseCommittedResponses(before));
-  } finally { await h.close(); await Promise.all(calls); }
-  assert.equal(events.filter(e => e === 'dispose').length, 2);
+  for (const label of ["'@feature006'", "'candidate'", "'J01'", "'J02'", "'J03'"])
+    assert.equal(runner.includes(label), true);
 `));
 
 it('second-room selection accepts two owned rooms but rejects reused requests or incorrect returned IDs', () => verify(prelude + `
@@ -607,37 +476,6 @@ it('second-room selection accepts two owned rooms but rejects reused requests or
     [[{ ...result[0], room_id: old.id }], [old, fresh], request], [result, [fresh, fresh], request]])
     assert.throws(() => selectCreatedTrial(rows, rooms, id, priorRequest, old.id));
 `));
-
-it.each(['path', 'metro'])('poster fault matches exact resolved %s asset identity with queries and fails once', form => verify(candidatePrelude + `
-  try {
-    const source = '${form}' === 'path' ? 'http://127.0.0.1:8081/assets/candidates/cardboard-comet.png?hash=first' :
-      'http://127.0.0.1:8081/assets/?unstable_path=.%2Fassets%2Fcandidates/cardboard-comet.png&hash=first';
-    const fault = await h.failPosterOnce(0, source), route = pages[0].routes.at(-1);
-    assert.equal(route.match(new URL(source.replace('hash=first', 'platform=web&hash=second'))), true);
-    for (const url of [source.replace('cardboard-comet', 'clockwork-orchard'), 'http://remote.invalid/assets/candidates/cardboard-comet.png',
-      'http://127.0.0.1:8081/assets/candidates/clockwork-orchard.png']) assert.equal(route.match(new URL(url)), false);
-    let aborted = 0, forwarded = 0;
-    const send = () => route.handler({ request: () => ({ resourceType: () => 'image' }),
-      abort: async () => { aborted++; }, continue: async () => { forwarded++; } });
-    await send(); await send();
-    assert.equal(aborted, 1); assert.equal(forwarded, 1); assert.equal(fault.failed, 1); assert.equal(fault.retried, 1);
-    assert.equal(h.stats.every(v => v.automatic === 0 && v.auth === 0), true);
-    await assert.rejects(h.failPosterOnce(0, 'data:image/png;base64,AAAA'));
-  } finally { await h.close(); }
-  assert.equal(pages.every(page => page.routes.length === 0), true);
-`));
-
-it('candidate traffic guards ignore unrelated runtime resources while rejecting external candidate data and posters', () => verify(candidatePrelude + `
-  try {
-    for (const [path, type] of [['/runtime.js', 'script'], ['/runtime-ping', 'fetch'], ['/font.woff', 'font']])
-      pages[0].emit('request', { ...request(0), url: () => 'https://runtime.invalid' + path, resourceType: () => type });
-    assert.equal(h.stats[0].external, 0);
-    pages[0].emit('request', { ...request(0), url: () => 'https://provider.invalid/rest/v1/rpc/ensure_room_candidate' });
-    pages[0].emit('request', { ...request(0), url: () => 'https://provider.invalid/posters/cardboard-comet.png', resourceType: () => 'image' });
-    assert.equal(h.stats[0].external, 2); await assert.rejects(h.assertHealthy());
-  } finally { await h.close(); }
-`));
-
 
 it('registers only the nine reviewed membership titles and their exact safe source locations', () => verify(prelude + `
   const { safeResult } = await import('./e2e/support/safe-reporter.ts');
@@ -662,39 +500,6 @@ it('registers only the nine reviewed membership titles and their exact safe sour
   for (const label of ["'membership'", ...Array.from({ length: 9 }, (_, i) => "'G0" + (i + 1) + "'")]) assert.equal(runner.includes(label), true);
 `));
 
-it.each([2, 3, 4])('candidate barriers require all %i independent callers and cleanup every held route', count => verify(prelude + `
-  import { EventEmitter } from 'node:events';
-  import { candidateHarness } from './e2e/support/candidate-harness.ts';
-  process.env.EXPO_PUBLIC_SUPABASE_URL = 'http://127.0.0.1:55321';
-  const pages = Array.from({ length: ${count} }, () => Object.assign(new EventEmitter(), {
-    routes: [], addInitScript: async () => {},
-    async route(match, handler) { this.routes.push({ match, handler }); },
-    async unroute(match, handler) { this.routes = this.routes.filter(r => r.match !== match || r.handler !== handler); },
-  }));
-  const participants = pages.map(page => ({ page }));
-  for (const invalid of [participants.slice(0, 1), [...participants, ...participants, ...participants], [participants[0], participants[0]]])
-    await assert.rejects(candidateHarness(invalid, 'http://127.0.0.1:8081'));
-  const h = await candidateHarness(participants, 'http://127.0.0.1:8081');
-  let forwarded = 0, aborted = 0;
-  const ids = pages.map(() => randomUUID()), room = { id: randomUUID(), code: 'ABCDEF0123', state: 'ready', voter_count: 3, required_voter_count: 3, filter_completed_count: 0, filter_resolution_status: 'pending' };
-  const api = { origin: process.env.EXPO_PUBLIC_SUPABASE_URL, publicKey: 'synthetic-public' };
-  try {
-    assert.throws(() => h.bind(room, ids.slice(1), api)); h.bind(room, ids, api);
-    assert.throws(() => h.limitAutomatic([1])); assert.throws(() => h.configureInitial([null]));
-    const calls = pages.map((page, index) => {
-      const req = { url: () => api.origin + '/rest/v1/rpc/ensure_room_candidate', method: () => 'POST',
-        postDataJSON: () => ({ p_room_id: room.id }), resourceType: () => 'fetch',
-        allHeaders: async () => ({ authorization: 'Bearer synthetic.' + Buffer.from(JSON.stringify({ sub: ids[index] })).toString('base64url') + '.synthetic' }) };
-      return page.routes[0].handler({ request: () => req, continue: async () => { forwarded++; }, abort: async () => { aborted++; } });
-    });
-    await h.held(); assert.equal(forwarded, 0); h.release(); await Promise.all(calls);
-    assert.equal(forwarded, ${count}); assert.equal(aborted, 0);
-    h.arm(pages.map(() => 'continue')); assert.throws(() => h.release());
-  } finally { await h.close(); }
-  assert.equal(pages.every(page => page.routes.length === 0 && page.eventNames().length === 0), true);
-`));
-
-
 it('Realtime dispatch accounting distinguishes a late prior response from a new refetch', () => verify(prelude + `
   import { EventEmitter } from 'node:events';
   import { realtimeBarrier } from './e2e/support/room-harness.ts';
@@ -707,13 +512,14 @@ it('Realtime dispatch accounting distinguishes a late prior response from a new 
     await connect(browser);
     serverMessage(JSON.stringify([null, null, 'realtime:room:' + id, 'system',
       { extension: 'postgres_changes', status: 'ok', message: 'Subscribed to PostgreSQL' }]));
-    const url = 'http://127.0.0.1:55321/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status&id=eq.' + id;
+    const url = 'http://127.0.0.1:55321/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status&id=eq.' + id;
     const request = { url: () => url }; page.emit('request', request);
     const delayed = new Promise(resolve => { finish = resolve; });
     page.emit('response', { request: () => request, url: () => url, ok: () => true, body: async () => Buffer.from(JSON.stringify(await delayed)) });
     assert.equal(transport.stats.readRequests, 1); assert.equal(transport.stats.reads, 0);
     const before = { ...transport.stats };
-    finish([{ id, code: 'ABCDEF0123', state: 'waiting', voter_count: 2, required_voter_count: 3, filter_completed_count: 0, filter_resolution_status: 'pending' }]);
+    finish([{ id, code: 'ABCDEF0123', state: 'waiting', voter_count: 2, required_voter_count: 3, filter_completed_count: 0,
+      filter_resolution_status: 'pending', candidate_acquisition_status: 'pending' }]);
     await transport.wait('reads', 1);
     assert.equal(transport.stats.readRequests, before.readRequests);
     assert.notEqual(transport.stats.reads, before.reads);
@@ -736,7 +542,7 @@ const realtimePrelude = prelude + `
   const system = JSON.stringify([null, null, 'realtime:room:' + id, 'system',
     { extension: 'postgres_changes', status: 'ok', message: 'Subscribed to PostgreSQL' }]);
   serverMessage(system);
-  const url = 'http://127.0.0.1:55321/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status&id=eq.' + id;
+  const url = 'http://127.0.0.1:55321/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status&id=eq.' + id;
   const request = { url: () => url };
   const turn = () => new Promise(resolve => setImmediate(resolve));
 `;
@@ -781,7 +587,8 @@ it.each(['retired-body', 'active-body', 'retired-malformed', 'retired-valid'])('
     if ('${trial}'.startsWith('retired')) page.emit('framenavigated', { parentFrame: () => null });
     if ('${trial}'.endsWith('body')) reject(Error('synthetic unavailable body'));
     else finish(Buffer.from('${trial}' === 'retired-malformed' ? '{}' : JSON.stringify([
-      { id, code: 'ABCDEF0123', state: 'waiting', voter_count: 2, required_voter_count: 3, filter_completed_count: 0, filter_resolution_status: 'pending' }])));
+      { id, code: 'ABCDEF0123', state: 'waiting', voter_count: 2, required_voter_count: 3, filter_completed_count: 0,
+        filter_resolution_status: 'pending', candidate_acquisition_status: 'pending' }])));
     await turn();
     if (['active-body', 'retired-malformed'].includes('${trial}')) assert.throws(() => transport.assertHealthy());
     else {

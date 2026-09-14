@@ -7,6 +7,7 @@ import { containsCredential, sanitizeDiagnostic } from '../e2e/support/sanitize-
 const MAX_TEXT = 1024 * 1024;
 const forbidden = /(?:^|[-_.])(?:trace|har|storage[-_.]?state|cookies?|sessions?|network|requests?|responses?|websocket)(?:[-_.]|$)/i;
 const textTypes = new Set(['.txt', '.json', '.md']);
+const feature006Private = /(?:tmdb_movie_id|movie_candidate_id|genre_clauses_tmdb_ids|release_year_(?:from|to)|p_actor_user_id|tmdb_api_read_access_token|supabase_service_role_key|upstream_(?:payload|request|response)|(?:request|response)_(?:body|headers?))/i;
 
 function crc32(bytes) {
   let crc = 0xffffffff;
@@ -59,6 +60,7 @@ export function scanArtifacts(directory, { registry } = {}) {
   function inspectText(text, file, depth = 0) {
     if (depth > 12) { fail(file, 'incomplete-scan'); return; }
     if (containsCredential(text, known())) fail(file, 'credential-content');
+    if (feature006Private.test(text)) fail(file, 'feature006-private-content');
   }
   function inspectJson(value, file, depth = 0) {
     if (depth > 12) { fail(file, 'incomplete-scan'); return; }

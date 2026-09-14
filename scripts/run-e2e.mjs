@@ -1,26 +1,41 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { parseEnv } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CredentialRegistry, startRegistryServer } from '../e2e/support/credential-registry.ts';
 import { scanArtifacts } from './check-e2e-artifacts.mjs';
 import { localExecutable, runManagedProcess } from './safe-process.mjs';
 import { withPlaywrightRuntime, runtimeEnvironment, runtimeDiagnostic, signalExit } from './playwright-runtime.mjs';
+import { startTmdbStub } from '../e2e/support/tmdb-stub.ts';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const smokeSelection = 'G03|G04|G05|G08|H01';
 const smokeCases = new Set(['G03', 'G04', 'G05', 'G08', 'H01']);
 const resolutionCases = new Map([['I01', 3], ['I02', 4], ['I03', 2]]);
+const feature006Cases = new Map([['J01', 3], ['J02', 4], ['J03', 2]]);
 const acceptanceSelections = new Set(['@membership', 'G01', 'G02', 'G03', 'G04', 'G05', 'G06', 'G07', 'G08', 'G09',
   '@filters', 'H01', 'H02', 'H03', '@auth', '@us1', '@us2-join', '@us2-realtime', '@us3', '@us4', '@capacity-smoke',
-  '@resolution', 'I01', 'I02', 'I03', 'E01', 'E02', 'E03', 'E04', 'E05', 'E06', 'E07', 'E08', 'E09', 'E10', 'E11', 'E12', smokeSelection]);
+  '@resolution', 'I01', 'I02', 'I03', '@feature006', 'J01', 'J02', 'J03',
+  'E01', 'E02', 'E03', 'E04', 'E05', 'E06', 'E07', 'E08', 'E09', 'E10', 'E11', 'E12', smokeSelection]);
+
+const forbiddenEnvironmentOverrides = ['OTTEROOM_TMDB_STUB_CONTROL_URL','OTTEROOM_E2E_IDENTITY',
+  'TMDB_API_BASE_URL','TMDB_API_READ_ACCESS_TOKEN','SUPABASE_SERVICE_ROLE_KEY'];
+export function validateInvocationEnvironment(environment = process.env) {
+  if (forbiddenEnvironmentOverrides.some(name => Object.hasOwn(environment, name)))
+    throw new Error('UNSAFE_OVERRIDE_REJECTED');
+}
 
 export function parseInvocation(argv) {
   const [requestedMode, ...requestedOptions] = argv;
-  if (!['acceptance', 'smoke', 'security'].includes(requestedMode)) throw new Error('SAFE_INVOCATION_REQUIRED');
-  if (requestedMode === 'smoke' && requestedOptions.length > 0) throw new Error('UNSAFE_OVERRIDE_REJECTED');
-  const mode = requestedMode === 'smoke' ? 'acceptance' : requestedMode;
-  const profile = requestedMode === 'smoke' ? 'smoke' : mode === 'security' ? 'security' : 'acceptance';
-  const options = requestedMode === 'smoke' ? ['--grep', smokeSelection] : requestedOptions;
+  if (!['acceptance', 'smoke', 'security', 'feature006'].includes(requestedMode)) throw new Error('SAFE_INVOCATION_REQUIRED');
+  if ((requestedMode === 'smoke' || requestedMode === 'feature006') && requestedOptions.length > 0) throw new Error('UNSAFE_OVERRIDE_REJECTED');
+  const mode = requestedMode === 'smoke' || requestedMode === 'feature006' ? 'acceptance' : requestedMode;
+  const profile = requestedMode === 'smoke' ? 'smoke' : requestedMode === 'feature006' ? 'feature006' :
+    mode === 'security' ? 'security' : 'acceptance';
+  const options = requestedMode === 'smoke' ? ['--grep', smokeSelection] :
+    requestedMode === 'feature006' ? ['--grep', '@feature006'] : requestedOptions;
   const forwarded = [], seen = new Set();
   let grep;
   for (let i = 0; i < options.length; i++) {
@@ -37,6 +52,8 @@ export function parseInvocation(argv) {
       (mode === 'security' && value !== '1') || (name === '--repeat-each' && Number(value) > 3)) throw new Error('UNSAFE_OVERRIDE_REJECTED');
     forwarded.push(name, value);
   }
+  if (grep === '@feature006' && forwarded.some((value, index) => index % 2 === 0 && value !== '--grep'))
+    throw new Error('UNSAFE_OVERRIDE_REJECTED');
   const boundedProfile=mode==='acceptance'&&grep==='@resolution'?'resolution':
     mode==='acceptance'&&grep==='H03'?'h03':profile;
   return Object.freeze({ mode, profile:boundedProfile, staticOnly: mode === 'security' && grep === '@diagnostics-static', forwarded });
@@ -68,6 +85,13 @@ export function verifyProbeArtifacts(directory) {
 }
 
 export function verifyAcceptanceProfile(profile, results) {
+  if(profile==='feature006'){
+    if(!Array.isArray(results)||results.length!==feature006Cases.size)return false;
+    return [...feature006Cases].every(([browserCase,identities])=>results.some(result=>
+      result?.browserCase===browserCase&&result?.signups===identities&&result?.identities===identities&&
+      result?.status==='passed'&&result?.cleanup===true&&result?.authSuccess===true&&result?.budgetFailure!==true))&&
+      results.reduce((sum,result)=>sum+result.identities,0)===9;
+  }
   if(profile==='resolution'){
     if(!Array.isArray(results)||results.length!==resolutionCases.size)return false;
     return [...resolutionCases].every(([browserCase,identities])=>results.some(result=>
@@ -89,6 +113,8 @@ async function launchPlaywright({ invocation, directory, socket, signal, runtime
     CI: '1', PLAYWRIGHT_NO_COPY_PROMPT: '1',
     OTTEROOM_E2E_ARTIFACT_DIR: directory, OTTEROOM_CREDENTIAL_SOCKET: socket,
     OTTEROOM_E2E_MODE: invocation.mode, OTTEROOM_E2E_STATIC: invocation.staticOnly ? '1' : '0',
+    ...(process.env.OTTEROOM_TMDB_STUB_CONTROL_URL ?
+      { OTTEROOM_TMDB_STUB_CONTROL_URL: process.env.OTTEROOM_TMDB_STUB_CONTROL_URL } : {}),
   };
   return await runManagedProcess({
     command: localExecutable('playwright'),
@@ -98,16 +124,58 @@ async function launchPlaywright({ invocation, directory, socket, signal, runtime
   });
 }
 
+async function waitForFunctionReady(signal) {
+  const local = parseEnv(fs.readFileSync(path.join(root, '.env.local'), 'utf8'));
+  const endpoint = `${new URL(local.EXPO_PUBLIC_SUPABASE_URL).origin}/functions/v1/room-candidate`;
+  for (let attempt = 0; attempt < 80; attempt++) {
+    if (signal?.aborted) throw new Error('INTERRUPTED');
+    try { if ((await fetch(endpoint, { method: 'OPTIONS' })).status === 204) return; } catch { /* bounded readiness */ }
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  throw new Error('FUNCTION_RUNTIME_NOT_READY');
+}
+
+async function startControlledProvider(registry, signal) {
+  const envFile = path.join(root, 'supabase/functions/.env');
+  if (fs.existsSync(envFile)) throw new Error('OWNED_ENV_CONFLICT');
+  const stub = await startTmdbStub();
+  const token = `controlled-${randomBytes(32).toString('hex')}`;
+  registry.register('controlled-tmdb', [token]);
+  fs.writeFileSync(envFile, `TMDB_API_READ_ACCESS_TOKEN=${token}\nTMDB_API_BASE_URL=${stub.edgeBaseUrl}\n`,
+    { flag: 'wx', mode: 0o600 });
+  const command = localExecutable('supabase');
+  const child = spawn(command, ['functions','serve','room-candidate','--env-file',envFile,'--log-level','error'], {
+    cwd: root, detached: process.platform !== 'win32', stdio: ['ignore','pipe','pipe'], env: {
+      ...process.env, XDG_CONFIG_HOME: '/tmp/otteroom-supabase-config', SUPABASE_TELEMETRY_DISABLED: '1',
+    },
+  });
+  child.stdout.resume(); child.stderr.resume();
+  const stop = () => { try { if (child.pid && process.platform !== 'win32') process.kill(-child.pid, 'SIGTERM'); else child.kill('SIGTERM'); } catch {} };
+  signal?.addEventListener('abort', stop, { once: true });
+  try { await waitForFunctionReady(signal); }
+  catch (error) { stop(); await stub.close().catch(() => {}); fs.rmSync(envFile, { force: true }); throw error; }
+  process.env.OTTEROOM_TMDB_STUB_CONTROL_URL = stub.controlUrl;
+  return async () => {
+    delete process.env.OTTEROOM_TMDB_STUB_CONTROL_URL; signal?.removeEventListener('abort', stop); stop();
+    await new Promise(resolve => { const timer=setTimeout(resolve,3000); child.once('close',()=>{clearTimeout(timer);resolve();}); });
+    try { if (child.pid && process.platform !== 'win32') process.kill(-child.pid, 'SIGKILL'); else child.kill('SIGKILL'); } catch {}
+    await stub.close(); fs.rmSync(envFile, { force: true });
+  };
+}
+
 // Dependency injection is restricted to in-process synthetic tests, never CLI flags.
-export async function executeInvocation(invocation, { artifactRoot = path.join(root, 'test-results'), launch = launchPlaywright, runtime = withPlaywrightRuntime, signal } = {}) {
+export async function executeInvocation(invocation, { artifactRoot = path.join(root, 'test-results'), launch = launchPlaywright,
+  runtime = withPlaywrightRuntime, provider = startControlledProvider, signal } = {}) {
   const registry = new CredentialRegistry();
-  let server, outcome = 1;
+  let server, closeProvider, outcome = 1;
   try {
+    validateInvocationEnvironment();
     if (signal?.aborted) throw new Error('INTERRUPTED');
     fs.mkdirSync(artifactRoot, { recursive: true, mode: 0o700 });
     if (fs.realpathSync(artifactRoot) !== path.resolve(artifactRoot)) throw new Error('UNSAFE_ARTIFACT_ROOT');
     const directory = fs.mkdtempSync(path.join(artifactRoot, 'run-'));
     server = await startRegistryServer(registry);
+    if (invocation.mode === 'acceptance') closeProvider = await provider(registry, signal);
     const exitCode = await runtime(selected => launch({ invocation, directory, registry, socket: server.endpoint, signal, runtime: selected }), { signal });
     // Child close includes reporter/web-server teardown; scan even when tests failed.
     fs.writeFileSync(path.join(directory, 'safe-process.txt'), `playwright exit=${exitCode}; managed web and browser runtime finalized\n`, { flag: 'wx', mode: 0o600 });
@@ -121,15 +189,16 @@ export async function executeInvocation(invocation, { artifactRoot = path.join(r
     process.stdout.write(JSON.stringify({ component: 'e2e-controller', selection: invocation.staticOnly ? 'synthetic-only' : invocation.profile,
       status: outcome === 0 ? 'passed' : 'failed', artifacts: scan.fileCount, findings: scan.findings,
       innerExit: exitCode, probeArtifactsComplete: completeProbe,
-      scenarios: results.map(result => ({ scenario: ['A', 'B', 'C', 'baseline', 'auth', 'filters', 'membership', 'resolution', 'us1', 'us2-join', 'us2-realtime', 'us3', 'us4', 'capacity-smoke'].includes(result.scenario) ? result.scenario : 'other', status: result.status === 'passed' ? 'passed' : 'failed',
-        browserCase: ['G01', 'G02', 'G03', 'G04', 'G05', 'G06', 'G07', 'G08', 'G09', 'H01', 'H02', 'H03', 'I01', 'I02', 'I03', 'E01', 'E02', 'E03', 'E04', 'E05', 'E06', 'E07', 'E08', 'E09', 'E10', 'E11', 'E12-read', 'E12-subscription', 'E12-navigation', 'E12-mutation'].includes(result.browserCase) ? result.browserCase : 'none',
+      scenarios: results.map(result => ({ scenario: ['A', 'B', 'C', 'baseline', 'auth', 'filters', 'membership', 'resolution', 'candidate', 'us1', 'us2-join', 'us2-realtime', 'us3', 'us4', 'capacity-smoke'].includes(result.scenario) ? result.scenario : 'other', status: result.status === 'passed' ? 'passed' : 'failed',
+        browserCase: ['G01', 'G02', 'G03', 'G04', 'G05', 'G06', 'G07', 'G08', 'G09', 'H01', 'H02', 'H03', 'I01', 'I02', 'I03', 'J01', 'J02', 'J03', 'E01', 'E02', 'E03', 'E04', 'E05', 'E06', 'E07', 'E08', 'E09', 'E10', 'E11', 'E12-read', 'E12-subscription', 'E12-navigation', 'E12-mutation'].includes(result.browserCase) ? result.browserCase : 'none',
         worker: Number.isInteger(result.worker) && result.worker >= 0 && result.worker < 4 ? result.worker : -1,
         repetition: Number.isInteger(result.repetition) && result.repetition >= 1 && result.repetition <= 3 ? result.repetition : 0,
         signups: Number.isInteger(result.signups) ? result.signups : 0, identities: Number.isInteger(result.identities) ? result.identities : 0 })),
     }) + '\n');
-    if (results.some(result => result.budgetFailure === true)) process.stderr.write(`AUTH_BUDGET_FAILURE HTTP 429: ${invocation.profile === 'smoke' ? 'smoke N=16' : invocation.profile==='resolution'?'resolution N=9':invocation.profile==='h03'?'H03 N=3':'acceptance N=91'}, local anonymous_users=150. Check configured limit and remaining hourly allowance; stop/start only after config change, never retry/reset/restart to evade quota.\n`);
+    if (results.some(result => result.budgetFailure === true)) process.stderr.write(`AUTH_BUDGET_FAILURE HTTP 429: ${invocation.profile === 'smoke' ? 'smoke N=16' : invocation.profile==='feature006'?'feature006 N=9':invocation.profile==='resolution'?'resolution N=9':invocation.profile==='h03'?'H03 N=3':'acceptance N=100'}, local anonymous_users=150. Check configured limit and remaining hourly allowance; stop/start only after config change, never retry/reset/restart to evade quota.\n`);
   } catch (error) { process.stderr.write(runtimeDiagnostic(error) + '\n'); outcome = signalExit(signal) ?? 1; }
   finally {
+    try { await closeProvider?.(); } catch { process.stderr.write('TMDB_STUB_CLEANUP_FAILED\n'); outcome = 1; }
     try { await server?.close(); } catch { process.stderr.write('E2E_CLEANUP_FAILED\n'); outcome = 1; }
     registry.clear();
   }

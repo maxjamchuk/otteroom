@@ -1,371 +1,170 @@
-import { expect, type Request, type Response, type Route, type WebSocket } from '@playwright/test';
-import { createHash } from 'node:crypto';
+import { expect, type Page, type Request, type Response, type Route } from '@playwright/test';
 import fs from 'node:fs';
 import { parseEnv } from 'node:util';
 import { type SafeDiagnostics, safeError } from './safe-diagnostics.ts';
-import { committedRoomSnapshot, type PublicApi, type RoomProjection } from './room-harness.ts';
+import type { PublicApi, RoomProjection } from './room-harness.ts';
+import type { TmdbStubScenario } from './tmdb-stub.ts';
 
-// Acceptance expectation only; selection remains entirely in the real RPC.
-export const firstCandidate = Object.freeze({ outcome: 'available' as const,
-  candidate_id: 'fixture-cardboard-comet', title: 'The Cardboard Comet', release_year: 2020, poster_key: 'cardboard-comet' });
-type CandidateResult = typeof firstCandidate | Readonly<{ outcome: 'not_ready' | 'not_found';
-  candidate_id: null; title: null; release_year: null; poster_key: null }>;
-function narrowCandidateResult(value: unknown): CandidateResult {
-  if (!Array.isArray(value) || value.length !== 1 || !value[0] || typeof value[0] !== 'object') throw safeError();
-  const row = value[0] as Record<string, unknown>;
-  if (Object.keys(row).sort().join(',') !== 'candidate_id,outcome,poster_key,release_year,title') throw safeError();
-  if (row.outcome === 'available' && typeof row.candidate_id === 'string' && typeof row.title === 'string' &&
-      typeof row.release_year === 'number' && typeof row.poster_key === 'string') return row as CandidateResult;
-  if ((row.outcome === 'not_ready' || row.outcome === 'not_found') && row.candidate_id === null &&
-      row.title === null && row.release_year === null && row.poster_key === null) return row as CandidateResult;
-  throw safeError();
-}
-// Expo's installed Metro serves development assets via this path parameter;
-// exported assets use ordinary hash-bearing PNG pathnames.
-const assetPath = (url: URL) => url.searchParams.get('unstable_path') ?? url.pathname;
-const endpoint = (url: URL) => url.pathname === '/rest/v1/rpc/ensure_room_candidate';
-type Action = 'continue' | 'abort' | 'commit-loss' | null;
-type Snapshot = ReturnType<typeof committedRoomSnapshot>;
-const probeLabel = 'otteroom-f01-contract-probe';
-const sameResult = (a: CandidateResult, b: CandidateResult) =>
-  (['outcome', 'candidate_id', 'title', 'release_year', 'poster_key'] as const).every(key => a[key] === b[key]);
+export const controlledCandidate = Object.freeze({ tmdbMovieId: 6006,
+  title: 'Controlled Constellation', releaseYear: 2005 });
+const posterPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+const endpoint = (value: string) => new URL(value).pathname === '/functions/v1/room-candidate';
 
-function httpOrigin(value: string): string {
-  const url = new URL(value);
-  if (url.protocol === 'ws:') url.protocol = 'http:';
-  if (url.protocol === 'wss:') url.protocol = 'https:';
-  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw safeError();
-  return url.origin;
+type StubSnapshot = Readonly<{ scenario: TmdbStubScenario; calls: Readonly<{
+  discover: number; details: number; configuration: number; poster: number }>; held: number;
+  released: boolean; invalid: number }>;
+
+function controlUrl(): string {
+  const value = process.env.OTTEROOM_TMDB_STUB_CONTROL_URL;
+  if (!value || new URL(value).hostname !== '127.0.0.1') throw safeError();
+  return value;
 }
 
-// Observe from before navigation. No global blocking or provider allowlist, no
-// raw request/response data in diagnostics. Only the configured local origins.
+async function control(body: Record<string, unknown>) {
+  const response = await fetch(controlUrl(), { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body) });
+  if (!response.ok || JSON.stringify(await response.json()) !== '{"ok":true}') throw safeError();
+}
+
+export async function configureTmdb(scenario: TmdbStubScenario, hold = false) {
+  await control({ scenario, hold });
+}
+export async function releaseTmdb() { await control({ release: true }); }
+export async function tmdbSnapshot(): Promise<StubSnapshot> {
+  const response = await fetch(controlUrl()); const value = await response.json();
+  if (!response.ok || !value || typeof value !== 'object' || !value.calls ||
+      !['discover','details','configuration','poster'].every(key => Number.isInteger(value.calls[key])) ||
+      !Number.isInteger(value.held) || !Number.isInteger(value.invalid)) throw safeError();
+  return value as StubSnapshot;
+}
+export async function waitTmdbHeld(count: number) {
+  await expect.poll(async () => (await tmdbSnapshot()).held, { timeout: 15000 }).toBe(count);
+}
+
+function strictAvailable(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      Object.keys(value).sort().join(',') !== 'candidate,outcome') return false;
+  const row = value as Record<string, any>;
+  return row.outcome === 'available' && row.candidate && !Array.isArray(row.candidate) &&
+    Object.keys(row.candidate).sort().join(',') === 'poster_url,release_year,title,tmdb_movie_id' &&
+    row.candidate.tmdb_movie_id === controlledCandidate.tmdbMovieId &&
+    row.candidate.title === controlledCandidate.title && row.candidate.release_year === controlledCandidate.releaseYear &&
+    (row.candidate.poster_url === null || /^https:\/\/image\.tmdb\.org\/t\/p\/w\d+\/controlled\.png$/.test(row.candidate.poster_url));
+}
+
 export async function candidateHarness(participants: SafeDiagnostics[], baseURL: string) {
   if (participants.length < 2 || participants.length > 4 || new Set(participants).size !== participants.length) throw safeError();
-  const vector = <T>(value: T[]) => { if (value.length !== participants.length) throw safeError(); return [...value]; };
-  const indexInRange = (index: number) => { if (!Number.isInteger(index) || index < 0 || index >= participants.length) throw safeError(); };
-  const actionsInRange = (actions: Action[]) => { if (actions.some(action => ![null, 'continue', 'abort', 'commit-loss'].includes(action))) throw safeError(); return vector(actions); };
-  const appOrigin = httpOrigin(baseURL);
-  const env = process.env.EXPO_PUBLIC_SUPABASE_URL ? process.env : parseEnv(fs.readFileSync('.env.local', 'utf8'));
-  const apiOrigin = httpOrigin(env.EXPO_PUBLIC_SUPABASE_URL ?? '');
-  expect([appOrigin, apiOrigin].every(value => ['127.0.0.1', 'localhost', '[::1]'].includes(new URL(value).hostname))).toBe(true);
-  const expectedHash = createHash('sha256').update(fs.readFileSync('assets/candidates/cardboard-comet.png')).digest('hex');
-  let binding: { room: RoomProjection; ids: string[]; api: PublicApi } | undefined;
+  const local = process.env.EXPO_PUBLIC_SUPABASE_URL ? process.env : parseEnv(fs.readFileSync('.env.local','utf8'));
+  const apiOrigin = new URL(local.EXPO_PUBLIC_SUPABASE_URL ?? '').origin;
+  const appOrigin = new URL(baseURL).origin;
+  if (![apiOrigin,appOrigin].every(origin => ['127.0.0.1','localhost','[::1]'].includes(new URL(origin).hostname))) throw safeError();
+  let binding: { room: RoomProjection; ids: string[]; api: PublicApi } | null = null;
   let failed = false, disposed = false;
-  let limits = participants.map(() => 1);
-  const roundFor = (actions: Action[]) => {
-    return { actions: actionsInRange(actions), arrived: participants.map(() => false), released: false, finished: participants.map(() => false),
-      rows: participants.map(() => null) as (CandidateResult | null)[], proof: false,
-      // Waiting is event-driven through waitFor/notify; no timing guess.
-    };
-  };
-  let round = roundFor(participants.map(() => 'continue'));
-  const rounds = [round];
-  const posterRoutes: { index: number; match: (url: URL) => boolean; route: (route: Route) => Promise<void> }[] = [];
-  const waiting = new Set<() => void>(), pending = new Set<Promise<void>>();
-  const stats = participants.map(() => ({ automatic: 0, probes: 0, held: 0, forwarded: 0, fetched: 0, aborted: 0, auth: 0, http: 0, sockets: 0, external: 0 }));
-  const automaticResults: CandidateResult[][] = participants.map(() => []), probeResults: CandidateResult[][] = participants.map(() => []);
-  const images = participants.map(() => new Map<string, { ok: boolean; hash: string }>());
-  const notify = () => { for (const callback of waiting) callback(); };
-  const waitFor = (condition: () => boolean) => new Promise<void>((resolve, reject) => {
-    const done = () => {
-      if (!failed && !disposed && !condition()) return;
-      clearTimeout(deadline); waiting.delete(done);
-      if (failed || disposed) reject(safeError()); else resolve();
-    };
-    const deadline = setTimeout(() => { waiting.delete(done); reject(safeError()); }, 15000);
-    waiting.add(done); done();
-  });
-  const track = (work: Promise<void>) => {
-    const guarded = work.catch(() => { if (!disposed) failed = true; }).finally(() => { pending.delete(guarded); notify(); });
-    pending.add(guarded);
-  };
-  const isCandidate = (request: Request) => endpoint(new URL(request.url())) && request.method() === 'POST';
-  const observers = participants.map((participant, index) => {
-    const traffic = (url: string, socket = false) => {
-      try {
-        httpOrigin(url);
-        stats[index][socket ? 'sockets' : 'http']++;
-        // Candidate data/image resources are classified in request(), separately
-        // from unrelated document, runtime-script and socket traffic.
-        if (stats[index].http > 1000 || stats[index].sockets > 20) failed = true;
-      } catch { failed = true; }
-    };
-    const request = (value: Request) => {
+  const stats = participants.map(() => ({ requests: 0, responses: 0, errors: 0, posters: 0,
+    directTmdbApi: 0, fixture: 0, invalid: 0 }));
+  const pending = new Set<Promise<void>>();
+  const listeners = participants.map((participant,index) => {
+    const onRequest = (request: Request) => {
       if (disposed) return;
-      traffic(value.url());
-      const url = new URL(value.url());
-      if (url.pathname.startsWith('/auth/v1/')) stats[index].auth++;
-      const poster = value.resourceType() === 'image' &&
-        /(?:cardboard-comet|pebble-bay-lanterns|cloud-tram-four|clockwork-orchard)(?:[./?]|$)/.test(assetPath(url));
-      const catalog = url.pathname === '/rest/v1/movie_candidates';
-      if ((isCandidate(value) || catalog) && httpOrigin(value.url()) !== apiOrigin ||
-        poster && httpOrigin(value.url()) !== appOrigin) stats[index].external++;
-      // Other runtime data/scripts/fonts/sockets are merely observed. The
-      // actual displayed poster is independently checked against appOrigin and
-      // original fixture bytes, including any URL not recognizable by filename.
-      // Count observations independently of routing, including late calls and
-      // query strings; unrelated Data API reads cannot affect these counters.
-      if (isCandidate(value)) {
-        const probe = value.headers()['x-client-info'] === probeLabel;
-        stats[index][probe ? 'probes' : 'automatic']++;
-        if (httpOrigin(value.url()) !== apiOrigin || (probe ? stats[index].probes > 40 : stats[index].automatic > limits[index])) failed = true;
-        notify();
-      }
-    };
-    const socket = (value: WebSocket) => traffic(value.url(), true);
-    const response = (value: Response) => track((async () => {
-      if (disposed) return;
-      if (isCandidate(value.request())) {
-        const probe = await value.request().headerValue('x-client-info') === probeLabel;
-        if (!value.ok()) throw safeError();
-        const bytes = await value.body();
-        if (disposed) return;
-        if (bytes.length > 4096) throw safeError();
-        const row = narrowCandidateResult(JSON.parse(bytes.toString('utf8')));
-        (probe ? probeResults : automaticResults)[index].push(row);
-        if (!probe && !sameResult(row, firstCandidate)) throw safeError();
-      } else if (value.request().resourceType() === 'image') {
-        if (images[index].size >= 32) throw safeError();
-        const bytes = await value.body();
-        if (disposed) return;
-        images[index].set(value.url(), { ok: value.ok() && bytes.length <= 65536,
-          hash: bytes.length <= 65536 ? createHash('sha256').update(bytes).digest('hex') : '' });
-      }
-    })());
-    const route = async (value: Route) => {
-      const current = round;
-      let response: Awaited<ReturnType<Route['fetch']>> | undefined;
+      const url = new URL(request.url());
+      if (url.hostname === 'api.themoviedb.org') stats[index].directTmdbApi++;
+      if (/cardboard-comet|pebble-bay-lanterns|cloud-tram-four|clockwork-orchard|movie_candidates|ensure_room_candidate/i.test(request.url())) stats[index].fixture++;
+      if (!endpoint(request.url())) return;
+      stats[index].requests++;
       try {
-        if (!isCandidate(value.request())) { await value.continue(); return; }
-        if (!binding || httpOrigin(value.request().url()) !== apiOrigin) throw safeError();
-        const body = value.request().postDataJSON(), headers = await value.request().allHeaders();
-        const probe = headers['x-client-info'] === probeLabel;
-        if (!body || Object.keys(body).join(',') !== 'p_room_id' ||
-          (!probe && body.p_room_id !== binding.room.id) || !/^[0-9a-f-]{36}$/.test(body.p_room_id)) throw safeError();
-        const bearer = headers.authorization?.match(/^Bearer (.+)$/)?.[1];
-        // Memory only; the real server verifies the JWT signature.
-        if (!bearer || JSON.parse(Buffer.from(bearer.split('.')[1], 'base64url').toString('utf8')).sub !== binding.ids[index]) throw safeError();
-        if (failed || disposed) throw safeError();
-        if (probe) { await value.continue(); return; }
-        const action = current.actions[index];
-        if (action !== null && !current.released) {
-          if (current.arrived[index]) throw safeError();
-          current.arrived[index] = true; stats[index].held++; notify();
-          await waitFor(() => current.released);
-          if (action === 'abort') { stats[index].aborted++; await value.abort(); return; }
-          stats[index].forwarded++;
-          if (action === 'commit-loss') {
-            stats[index].fetched++;
-            response = await value.fetch({ maxRetries: 0, maxRedirects: 0, timeout: 15000 });
-            if (disposed || failed || !response.ok()) throw safeError();
-            const bytes = await response.body();
-            try {
-              if (disposed || failed || bytes.length > 4096) throw safeError();
-              const row = narrowCandidateResult(JSON.parse(bytes.toString('utf8')));
-              if (!sameResult(row, firstCandidate)) throw safeError();
-              current.rows[index] = row; notify();
-            } finally { bytes.fill(0); }
-            await waitFor(() => current.proof);
-            stats[index].aborted++; await value.abort(); return;
-          }
-        } else stats[index].forwarded++;
-        await value.continue();
-      } catch { if (!disposed) failed = true; notify(); await value.abort().catch(() => {}); }
-      finally {
-        try { await response?.dispose(); } catch { if (!disposed) failed = true; }
-        finally { current.finished[index] = true; notify(); }
-      }
+        if (!binding || url.origin !== apiOrigin || request.method() !== 'POST' ||
+            Object.keys(request.postDataJSON() ?? {}).join(',') !== 'room_id' ||
+            request.postDataJSON().room_id !== binding.room.id) throw safeError();
+        const bearer = request.headers().authorization?.match(/^Bearer (.+)$/)?.[1];
+        const subject = bearer ? JSON.parse(Buffer.from(bearer.split('.')[1], 'base64url').toString()).sub : null;
+        if (subject !== binding.ids[index]) throw safeError();
+      } catch { stats[index].invalid++; failed = true; }
     };
-    participant.page.on('request', request); participant.page.on('websocket', socket); participant.page.on('response', response);
-    return { participant, request, socket, response, route };
+    const onResponse = (response: Response) => {
+      if (!endpoint(response.url())) return;
+      const work = (async () => {
+        try {
+          const bytes = await response.body();
+          if (bytes.length > 4096) throw safeError();
+          const value = JSON.parse(bytes.toString('utf8'));
+          if (response.ok()) {
+            if (!(strictAvailable(value) || value?.outcome === 'no_candidates' && Object.keys(value).length === 1 ||
+                value?.outcome === 'metadata_unavailable' && Object.keys(value).length === 1 ||
+                value?.outcome === 'not_ready' && Object.keys(value).length === 1)) throw safeError();
+          } else if (!(response.status() === 503 && JSON.stringify(value) === '{"error":"candidate_acquisition_unavailable"}')) throw safeError();
+          stats[index][response.ok() ? 'responses' : 'errors']++;
+        } catch { if (!disposed) { stats[index].invalid++; failed = true; } }
+      })().finally(() => pending.delete(work));
+      pending.add(work);
+    };
+    const posterRoute = async (route: Route) => {
+      stats[index].posters++;
+      await route.fulfill({ status: 200, contentType: 'image/png', body: posterPng });
+    };
+    participant.page.on('request',onRequest); participant.page.on('response',onResponse);
+    return { participant, onRequest, onResponse, posterRoute };
   });
-  try {
-    for (const { participant, route } of observers) {
-      await participant.page.route(endpoint, route);
-      await participant.page.addInitScript(expected => {
-        const view = window as typeof window & { __candidateObservation?: { seen: boolean; conflict: boolean } };
-        const state = { seen: false, conflict: false }; view.__candidateObservation = state;
-        new MutationObserver(() => {
-          const card = document.querySelector('[data-testid="candidate-card"]');
-          const title = card?.querySelector('[data-testid="candidate-title"]')?.textContent;
-          const year = card?.querySelector('[data-testid="candidate-year"]')?.textContent;
-          if (title !== undefined && title !== null && year !== undefined && year !== null) {
-            state.conflict ||= title !== expected.title || year !== String(expected.release_year);
-            state.conflict ||= document.body.innerText.includes(expected.candidate_id);
-            if (!card?.querySelector('[data-testid="candidate-status"]') && card?.getAttribute('aria-busy') !== 'true') state.seen = true;
-          }
-        }).observe(document, { subtree: true, childList: true, characterData: true, attributes: true });
-      }, firstCandidate);
-    }
-  } catch { await close(); throw safeError(); }
-
-  async function close() {
-    if (disposed) return;
-    disposed = true; notify();
-    const results = await Promise.allSettled(observers.map(async ({ participant, route, request, socket, response }) => {
-      participant.page.removeListener('request', request); participant.page.removeListener('websocket', socket); participant.page.removeListener('response', response);
-      await participant.page.unroute(endpoint, route);
-    }));
-    await Promise.all(posterRoutes.map(({ index, match, route }) => participants[index].page.unroute(match, route)));
-    // Response.body() has no cancellation API. Do not wait on a stalled body
-    // before the owning SafeDiagnostics finally can close its browser context.
-    // Late completions are disposed-guarded and already rejection-observed.
-    pending.clear();
-    images.forEach(map => map.clear()); automaticResults.forEach(rows => { rows.length = 0; }); probeResults.forEach(rows => { rows.length = 0; }); binding = undefined;
-    if (results.some(result => result.status === 'rejected')) throw safeError();
-  }
-
+  for (const item of listeners) await item.participant.page.route('https://image.tmdb.org/**', item.posterRoute);
   return {
     stats,
     bind(room: RoomProjection, ids: string[], api: PublicApi) {
-      expect(!binding && ids.length === participants.length && new Set(ids).size === participants.length && api.origin === apiOrigin).toBe(true);
-      binding = { room, ids: vector(ids), api };
+      if (binding || ids.length !== participants.length || new Set(ids).size !== ids.length || api.origin !== apiOrigin) throw safeError();
+      binding = { room, ids: [...ids], api };
     },
-    // Configuration is bounded and must precede the first automatic request.
-    limitAutomatic(value: number[]) {
-      expect(stats.every(v => v.automatic === 0) && value.every(n => Number.isInteger(n) && n >= 1 && n <= 4)).toBe(true);
-      limits = vector(value);
-    },
-    configureInitial(actions: Action[]) {
-      expect(stats.every(v => v.automatic === 0)).toBe(true); round.actions = actionsInRange(actions);
-    },
-    arm(actions: Action[]) {
-      expect(!failed && !disposed && round.actions.every((action, i) => action === null || round.finished[i])).toBe(true);
-      round = roundFor(actions); rounds.push(round);
-      expect(rounds.length <= 4).toBe(true);
-    },
-    rebind(room: RoomProjection) {
-      expect(!!binding && room.id !== binding!.room.id && round.finished.every(Boolean)).toBe(true);
-      binding = { ...binding!, room };
-    },
-    async held() {
-      await waitFor(() => round.actions.every((action, i) => action === null || round.arrived[i]));
-      expect(!round.released).toBe(true);
-    },
-    release() {
-      expect(!round.released && !failed && round.actions.every((action, i) => action === null || round.arrived[i])).toBe(true);
-      round.released = true; notify();
-    },
-    async available(counts: number[] = participants.map(() => 1)) {
-      vector(counts);
-      await waitFor(() => automaticResults.every((rows, i) => rows.length === counts[i]));
-      expect(automaticResults.every(rows => rows.every(row => sameResult(row, firstCandidate)))).toBe(true);
-    },
-    async upstreamsHeld() {
-      await waitFor(() => round.rows.every(Boolean));
-      expect(!round.proof && stats.every(value => value.aborted === 0) && automaticResults.every(rows => rows.length === 0)).toBe(true);
-    },
-    async loseCommittedResponses(before: Snapshot) {
-      expect(round.actions.every(action => action === 'commit-loss') && round.released && !round.proof && !!binding).toBe(true);
-      await waitFor(() => round.rows.every(Boolean));
-      // The independent committed read happens while BOTH browser routes remain
-      // paused. Upstream success alone is insufficient evidence of this ordering.
-      const snapshot = committedRoomSnapshot(binding!.room);
-      expect(snapshot.row.state === 'ready' && before.row.movie_candidate_id === null &&
-        snapshot.xmin !== before.xmin && round.rows.every(row => row?.candidate_id === snapshot.row.movie_candidate_id)).toBe(true);
-      const unchanged = ({ movie_candidate_id: _candidate, updated_at: _updated, ...rest }: Snapshot['row']) => rest;
-      expect(JSON.stringify(unchanged(snapshot.row)) === JSON.stringify(unchanged(before.row)) &&
-        JSON.stringify(snapshot.members) === JSON.stringify(before.members)).toBe(true);
-      round.proof = true; notify();
-      await waitFor(() => round.finished.every(Boolean));
-      return snapshot;
-    },
-    async failPosterOnce(index: number, source: string, reload = false) {
-      indexInRange(index);
-      if (reload) images[index].delete(source);
-      const url = new URL(source);
-      expect(url.origin === appOrigin && url.protocol === 'http:' && assetPath(url).endsWith('.png') && url.searchParams.getAll('unstable_path').length <= 1 && !images[index].has(source)).toBe(true);
-      const evidence = { failed: 0, retried: 0, source };
-      // Resolve from the other participant's actual bundled image, then compare
-      // exact origin/path AND Metro asset-path parameter. Cache/platform query
-      // changes cannot evade the fault or make it target another image.
-      const match = (value: URL) => value.origin === url.origin && value.pathname === url.pathname &&
-        value.searchParams.getAll('unstable_path').length <= 1 && value.searchParams.get('unstable_path') === url.searchParams.get('unstable_path');
-      const route = async (value: Route) => {
-        if (disposed) { await value.abort().catch(() => {}); return; }
-        if (value.request().resourceType() !== 'image') { await value.continue(); return; }
-        if (evidence.failed === 0) { evidence.failed++; await value.abort(); }
-        else { evidence.retried++; await value.continue(); }
-      };
-      posterRoutes.push({ index, match, route });
-      await participants[index].page.route(match, route);
-      return evidence;
-    },
-    // Intentional contract probes are explicitly marked and separately counted.
-    // Own credentials stay inside their originating context; no new Auth call.
-    async probe(index: number, outcome: 'not_ready' | 'available' | 'not_found', overlap = false, targetId?: string) {
-      indexInRange(index);
-      if (!binding) throw safeError();
-      const before = stats[index].probes, count = overlap ? 2 : 1;
-      const valid = await participants[index].page.evaluate(async ({ api, room, expected, label, overlap }) => {
-        const key = Object.keys(localStorage).find(name => /^sb-.+-auth-token$/.test(name));
-        const session = key ? JSON.parse(localStorage.getItem(key) ?? 'null') : null;
-        if (!session?.access_token) return false;
-        const send = () => fetch(`${api.origin}/rest/v1/rpc/ensure_room_candidate`, {
-          method: 'POST', headers: { apikey: api.publicKey, Authorization: `Bearer ${session.access_token}`,
-            'Content-Type': 'application/json', 'x-client-info': label }, body: JSON.stringify({ p_room_id: room.id }),
-        });
-        const responses = await Promise.all(overlap ? [send(), send()] : [send()]);
-        return (await Promise.all(responses.map(async response => {
-          const rows = await response.json();
-          return response.ok && Array.isArray(rows) && rows.length === 1 && rows[0] &&
-            Object.keys(rows[0]).sort().join(',') === 'candidate_id,outcome,poster_key,release_year,title' &&
-            Object.entries(expected).every(([key, value]) => rows[0][key] === value);
-        }))).every(Boolean);
-      }, { ...binding, room: targetId ? { ...binding.room, id: targetId } : binding.room, label: probeLabel, overlap, expected: outcome === 'available' ? firstCandidate :
-        { outcome, candidate_id: null, title: null, release_year: null, poster_key: null } });
-      expect(valid && stats[index].probes === before + count).toBe(true);
-      await waitFor(() => probeResults[index].length === stats[index].probes);
-    },
-    async assertDisplay(index: number) {
-      indexInRange(index);
-      const page = participants[index].page;
-      await expect(page.getByTestId('candidate-title')).toHaveText(firstCandidate.title);
-      await expect(page.getByTestId('candidate-year')).toHaveText(String(firstCandidate.release_year));
-      await expect(page.getByTestId('candidate-title')).toBeVisible();
-      await expect(page.getByTestId('candidate-year')).toBeVisible();
-      await expect(page.getByTestId('candidate-status')).toHaveCount(0);
-      await expect(page.getByRole('button', { name: 'Retry candidate', exact: true })).toHaveCount(0);
-      const poster = page.getByTestId('candidate-poster');
-      await poster.scrollIntoViewIfNeeded(); await expect(poster).toBeVisible();
-      const rendered = await poster.evaluate(async element => {
-        const bounds = element.getBoundingClientRect();
-        const painted = [element, ...element.querySelectorAll('*')].find(node => getComputedStyle(node).backgroundImage !== 'none');
-        const source = painted && getComputedStyle(painted).backgroundImage.match(/^url\(["']?(.*?)["']?\)$/)?.[1];
-        const image = element.querySelector('img');
-        if (!source || !image || !image.complete || image.naturalWidth <= 0 || image.naturalHeight <= 0) return { valid: false, source: '' };
-        await image.decode();
-        const paintBounds = painted!.getBoundingClientRect();
-        return { source: new URL(source, location.href).href,
-          valid: bounds.width > 0 && bounds.height > 0 && bounds.top < innerHeight && bounds.bottom > 0 &&
-            bounds.left < innerWidth && bounds.right > 0 && paintBounds.width > 0 && paintBounds.height > 0 &&
-            painted!.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) &&
-            image.naturalWidth === 240 && image.naturalHeight === 360 && image.currentSrc === new URL(source, location.href).href };
-      });
-      expect(rendered.valid && httpOrigin(rendered.source) === appOrigin).toBe(true);
-      await waitFor(() => images[index].has(rendered.source));
-      const loaded = images[index].get(rendered.source)!;
-      expect(loaded.ok && loaded.hash === expectedHash).toBe(true);
-      expect(await page.getByTestId('candidate-card').getAttribute('aria-busy') !== 'true').toBe(true);
-      expect(await page.evaluate(id => !document.body.innerText.includes(id), firstCandidate.candidate_id)).toBe(true);
-      await participants[index].assertNoCredentialTextUi();
-      return rendered.source;
-    },
-    async assertHealthy(expected: number[] = participants.map(() => 1)) {
-      vector(expected);
-      await waitFor(() => pending.size === 0);
-      expect(!failed && !disposed && stats.every(value => value.external === 0 && value.http > 0 && value.sockets > 0)).toBe(true);
-      expect(stats.every((value, index) => value.automatic === expected[index] && automaticResults[index].length + value.aborted === value.automatic &&
-        probeResults[index].length === value.probes)).toBe(true);
-      for (const participant of participants) {
-        expect(await participant.page.evaluate(() => {
-          const state = (window as typeof window & { __candidateObservation?: { seen: boolean; conflict: boolean } }).__candidateObservation;
-          return state?.seen === true && state.conflict === false;
-        })).toBe(true);
-        await participant.assertAuthAccounting(1, 1);
+    rebind(room: RoomProjection) { if (!binding || binding.room.id === room.id) throw safeError(); binding = { ...binding, room }; },
+    async available(pages: Page[] = participants.map(item => item.page)) {
+      for (const page of pages) {
+        await expect(page.getByRole('heading',{name:controlledCandidate.title,exact:true}))
+          .toBeVisible({timeout:30000});
+        await expect(page.getByTestId('candidate-year')).toHaveText(String(controlledCandidate.releaseYear));
+        const poster=page.getByTestId('candidate-poster');
+        await expect(poster).toBeVisible();
+        await expect(poster).toHaveAttribute('aria-label',`Poster for ${controlledCandidate.title}`);
+        expect(await page.evaluate(id => !document.body.innerText.includes(String(id)) &&
+          !/Cardboard Comet|Pebble Bay Lanterns|Cloud Tram Four|Clockwork Orchard/.test(document.body.innerText),
+          controlledCandidate.tmdbMovieId)).toBe(true);
       }
     },
-    close,
+    async noCandidates(pages: Page[] = participants.map(item => item.page)) {
+      for (const page of pages) {
+        await expect(page.getByText('No eligible movie was observed during the completed search.',{exact:true})).toBeVisible();
+        await expect(page.getByRole('link',{name:'Create a new room',exact:true})).toHaveAttribute('href','/');
+        await expect(page.getByRole('button',{name:/Retry finding a movie/})).toHaveCount(0);
+      }
+    },
+    async acquisitionError(page: Page) {
+      await expect(page.getByText('Unable to find a movie right now. Please try again.',{exact:true}))
+        .toBeVisible({timeout:30000});
+      await expect(page.getByRole('button',{name:'Retry finding a movie',exact:true})).toBeVisible();
+    },
+    async metadataError(page: Page) {
+      await expect(page.getByText('Unable to load movie details. Please try again.',{exact:true})).toBeVisible();
+      await expect(page.getByRole('button',{name:'Retry movie details',exact:true})).toBeVisible();
+    },
+    async failPosterOnce(index: number) {
+      let calls=0;
+      const route=async(value:Route)=>{calls++;if(calls===1)await value.abort('failed');else await value.fulfill({status:200,contentType:'image/png',body:posterPng});};
+      await participants[index].page.route('https://image.tmdb.org/**',route);
+      return { calls:()=>calls, close:()=>participants[index].page.unroute('https://image.tmdb.org/**',route) };
+    },
+    async discardNextResponse(index: number) {
+      let committed=false,calls=0,settled=false;
+      const route=async(value:Route)=>{calls++;try{const response=await value.fetch({maxRetries:0,maxRedirects:0,timeout:30000});
+        try{const bytes=await response.body();committed=response.ok()&&strictAvailable(JSON.parse(bytes.toString('utf8')));}
+        finally{await response.dispose();}await value.abort('failed');}finally{settled=true;}};
+      await participants[index].page.route('**/functions/v1/room-candidate',route,{times:1});
+      return { calls:()=>calls, committed:()=>committed, settled:()=>settled,
+        close:()=>participants[index].page.unroute('**/functions/v1/room-candidate',route) };
+    },
+    assertHealthy() {
+      if (failed || disposed || !binding || stats.some(value => value.invalid || value.directTmdbApi || value.fixture)) throw safeError();
+    },
+    async close() {
+      if (disposed) return; disposed=true;
+      for(const item of listeners){item.participant.page.removeListener('request',item.onRequest);
+        item.participant.page.removeListener('response',item.onResponse);
+        await item.participant.page.unroute('https://image.tmdb.org/**',item.posterRoute);}
+      pending.clear(); binding=null;
+    },
   };
 }
