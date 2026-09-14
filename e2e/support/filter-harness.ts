@@ -87,8 +87,10 @@ export function boundedFilterSnapshot(room: RoomProjection) {
 
 export async function assertFilterProgress(page: Page, room: RoomProjection, count: number) {
   await expect(page.getByText(`${count} of ${room.required_voter_count} filters collected`, { exact: true })).toBeVisible();
-  expect(observeCandidateRpcZero(page).count()).toBe(0);
-  await expect(page.getByTestId('candidate-card')).toHaveCount(0);
+  if (count < room.required_voter_count) {
+    expect(observeCandidateRpcZero(page).count()).toBe(0);
+    await expect(page.getByTestId('candidate-card')).toHaveCount(0);
+  }
 }
 
 export async function installPreCommitFailure(page: Page) {
