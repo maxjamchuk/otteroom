@@ -4,6 +4,7 @@ import type { useRoomCandidate } from './use-room-candidate';
 
 export function CandidateCard({ model }: { model: ReturnType<typeof useRoomCandidate> }) {
   if (model.attempt === 'inactive') return null;
+  const candidate = model.attempt === 'integrity-error' ? null : model.candidate;
   const retryLabel = model.attempt === 'acquisition-error' ? 'Retry finding a movie' :
     model.attempt === 'metadata-error' ? 'Retry movie details' :
     model.attempt === 'poster-error' ? 'Retry poster' : null;
@@ -12,15 +13,15 @@ export function CandidateCard({ model }: { model: ReturnType<typeof useRoomCandi
     <View testID="candidate-card" style={styles.card} accessibilityState={{
       busy: model.attempt === 'acquiring' || model.attempt === 'loading-metadata' ||
         model.attempt === 'loading-poster' }}>
-      {model.candidate && <>
-        <Text testID="candidate-title" accessibilityRole="header" style={styles.title}>{model.candidate.title}</Text>
-        <Text testID="candidate-year">{model.candidate.releaseYear}</Text>
+      {candidate && <>
+        <Text testID="candidate-title" accessibilityRole="header" style={styles.title}>{candidate.title}</Text>
+        <Text testID="candidate-year">{candidate.releaseYear}</Text>
         {model.posterSource !== null
           ? <Image key={model.imageKey} testID="candidate-poster" source={model.posterSource}
-              accessible accessibilityRole="image" accessibilityLabel={`Poster for ${model.candidate.title}`}
+              accessible accessibilityRole="image" accessibilityLabel={`Poster for ${candidate.title}`}
               style={styles.poster} resizeMode="contain" onLoad={model.onLoad} onError={model.onError} />
           : model.attempt === 'no-poster' && <View testID="candidate-poster-fallback" style={[styles.poster, styles.fallback]}
-              accessible accessibilityRole="image" accessibilityLabel={`No poster available for ${model.candidate.title}`}>
+              accessible accessibilityRole="image" accessibilityLabel={`No poster available for ${candidate.title}`}>
               <Text>No poster available.</Text>
             </View>}
       </>}

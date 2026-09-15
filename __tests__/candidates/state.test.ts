@@ -56,7 +56,25 @@ it('anchors immutable ID while allowing same-ID metadata refresh', () => {
     releaseYear: 2021, posterUrl: null });
   const conflict = receiveCandidate(refreshed, refreshed, { outcome: 'available', candidate: {
     ...candidate, tmdbMovieId: 8 } });
-  expect(conflict.attempt).toBe('integrity-error'); expect(conflict.candidate).toBe(refreshed.candidate);
+  expect(conflict.attempt).toBe('integrity-error'); expect(conflict.candidate).toBeNull();
+});
+
+it('suppresses a displayed candidate on every authoritative integrity transition', () => {
+  const displayed = finishPoster(metadata(), metadata(), true);
+  const terminalConflict = observeAuthoritativeStatus(displayed, true, 'no_candidates');
+  expect(terminalConflict).toMatchObject({ attempt: 'integrity-error', candidate: null });
+
+  const explicitRoomConflict = observeAuthoritativeStatus(displayed, true, 'assigned', true);
+  expect(explicitRoomConflict).toMatchObject({ attempt: 'integrity-error', candidate: null });
+  expect(retryCandidate(explicitRoomConflict)).toBe(explicitRoomConflict);
+});
+
+it('does not let a stale poster callback restore success after integrity failure', () => {
+  const loadingPoster = metadata();
+  const integrity = observeAuthoritativeStatus(loadingPoster, true, 'assigned', true);
+  expect(integrity.candidate).toBeNull();
+  expect(finishPoster(integrity, loadingPoster, true)).toBe(integrity);
+  expect(integrity.attempt).toBe('integrity-error');
 });
 
 it('ignores every stale request/image callback', () => {
@@ -70,5 +88,7 @@ it('merges terminal room status monotonically and fails closed on conflict', () 
   const start = acquiring(), assigned = observeAuthoritativeStatus(start, true, 'assigned');
   expect(assigned).toMatchObject({ authoritativeStatus: 'assigned', attempt: 'loading-metadata' });
   expect(observeAuthoritativeStatus(assigned, true, 'pending')).toBe(assigned);
-  expect(observeAuthoritativeStatus(assigned, true, 'no_candidates').attempt).toBe('integrity-error');
+  expect(observeAuthoritativeStatus(assigned, true, 'no_candidates')).toMatchObject({
+    attempt: 'integrity-error', candidate: null,
+  });
 });

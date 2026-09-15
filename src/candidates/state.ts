@@ -32,14 +32,19 @@ export function sameCandidateImage(current: CandidateImage, incoming: CandidateI
   return sameCandidateRequest(current, incoming) && current.imageAttempt === incoming.imageAttempt;
 }
 
+function enterIntegrityError(state: CandidateState): CandidateState {
+  return state.attempt === 'integrity-error' && state.candidate === null ? state :
+    { ...state, attempt: 'integrity-error', candidate: null };
+}
+
 export function observeAuthoritativeStatus(state: CandidateState, eligible: boolean,
   status: CandidateAcquisitionStatus, integrityError = false): CandidateState {
   if (integrityError || state.attempt === 'integrity-error')
-    return state.attempt === 'integrity-error' ? state : { ...state, attempt: 'integrity-error' };
+    return enterIntegrityError(state);
   if (!eligible) return state.attempt === 'inactive' && !state.eligible ? state :
     { ...state, eligible: false, attempt: 'inactive', candidate: null };
   if (state.authoritativeStatus !== 'pending' && status !== 'pending' &&
-      state.authoritativeStatus !== status) return { ...state, attempt: 'integrity-error' };
+      state.authoritativeStatus !== status) return enterIntegrityError(state);
   const authoritativeStatus = state.authoritativeStatus === 'pending' ? status : state.authoritativeStatus;
   if (authoritativeStatus === state.authoritativeStatus && state.eligible) return state;
   if (!state.eligible && authoritativeStatus === 'pending') return { ...state, eligible: true,
@@ -72,7 +77,7 @@ export function receiveCandidate(state: CandidateState, request: CandidateReques
   if (result.outcome !== 'available') return failCandidate(state, request);
   const incoming = result.candidate;
   if (state.candidate && state.candidate.tmdbMovieId !== incoming.tmdbMovieId)
-    return { ...state, attempt: 'integrity-error' };
+    return enterIntegrityError(state);
   const candidate = state.candidate && state.candidate.tmdbMovieId === incoming.tmdbMovieId &&
     state.candidate.title === incoming.title && state.candidate.releaseYear === incoming.releaseYear &&
     state.candidate.posterUrl === incoming.posterUrl ? state.candidate : Object.freeze({ ...incoming });

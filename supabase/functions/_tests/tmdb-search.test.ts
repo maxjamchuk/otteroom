@@ -26,7 +26,9 @@ Deno.test('search traverses pages ascending and short-circuits on first exact ma
 
 Deno.test('search deduplicates movie evaluation without changing traversal', async () => {
   let validations = 0;
-  const fetch: FetchLike = (input) => response(page(Number(new URL(String(input)).searchParams.get('page')), 2, [eligible]));
+  const fetch: FetchLike = (input) => response({
+    ...page(Number(new URL(String(input)).searchParams.get('page')), 2, [eligible]), total_results: 2,
+  });
   const result = await searchTmdbCandidate({ ...context, clauses: [[18]] }, { fetch, token: 'secret',
     baseUrl: 'https://example.test/3', onMovieEvaluated: () => validations++ });
   assertEquals(result.kind, 'completed_empty');
@@ -123,11 +125,55 @@ Deno.test('deadline remains active while a successful response body is being rea
   if (result !== 'hung') assertEquals(result.kind, 'search_incomplete');
 });
 
-Deno.test('page 500 can complete only when every ascending page fits the explicit budget',async()=>{
+Deno.test('positive total with empty declared pages is pagination-inconsistent',async()=>{
+  const result=await searchTmdbCandidate(context,{fetch:(input)=>{
+    const current=Number(new URL(String(input)).searchParams.get('page'));
+    return response({page:current,total_pages:2,total_results:4,results:[]});},
+    token:'secret',baseUrl:'https://example.test/3'});
+  assertEquals(result,{kind:'search_incomplete',reason:'pagination_inconsistent'});
+});
+
+Deno.test('aggregate raw rows fewer or greater than reported total are incomplete',async()=>{
+  for(const totalResults of [3,1]){
+    const result=await searchTmdbCandidate(context,{fetch:(input)=>{
+      const current=Number(new URL(String(input)).searchParams.get('page'));
+      return response({page:current,total_pages:2,total_results:totalResults,
+        results:[{...eligible,id:current,genre_ids:[18]}]});},
+      token:'secret',baseUrl:'https://example.test/3'});
+    assertEquals(result,{kind:'search_incomplete',reason:'pagination_inconsistent'});
+  }
+});
+
+Deno.test('valid multi-page no-match uses raw row count before ID deduplication',async()=>{
+  let validations=0;
+  const result=await searchTmdbCandidate(context,{fetch:(input)=>{
+    const current=Number(new URL(String(input)).searchParams.get('page'));
+    return response({page:current,total_pages:2,total_results:2,
+      results:[{...eligible,id:99,genre_ids:[18]}]});},
+    token:'secret',baseUrl:'https://example.test/3',onMovieEvaluated:()=>validations++});
+  assertEquals(result,{kind:'completed_empty'});assertEquals(validations,1);
+});
+
+Deno.test('a page with more raw rows than its reported total is incomplete before a match',async()=>{
+  const result=await searchTmdbCandidate(context,{fetch:()=>response({page:1,total_pages:1,total_results:0,
+    results:[eligible]}),token:'secret',baseUrl:'https://example.test/3'});
+  assertEquals(result,{kind:'search_incomplete',reason:'pagination_inconsistent'});
+});
+
+Deno.test('the historical 500-page empty contradiction cannot complete',async()=>{
+  const result=await searchTmdbCandidate({releaseYearFrom:2000,releaseYearTo:2000,clauses:[]},{
+    fetch:(input)=>{const current=Number(new URL(String(input)).searchParams.get('page'));
+      return response({page:current,total_pages:500,total_results:10_000,results:[]});},
+    token:'secret',baseUrl:'https://example.test/3',maxRequests:500,deadlineMs:20_000});
+  assertEquals(result,{kind:'search_incomplete',reason:'pagination_inconsistent'});
+});
+
+Deno.test('page 500 can complete only when raw counts and metadata fit the explicit budget',async()=>{
   const visited:number[]=[];
   const result=await searchTmdbCandidate({releaseYearFrom:2000,releaseYearTo:2000,clauses:[]},{
     fetch:(input)=>{const current=Number(new URL(String(input)).searchParams.get('page'));visited.push(current);
-      return response({page:current,total_pages:500,total_results:10_000,results:[]});},
+      return response({page:current,total_pages:500,total_results:10_000,
+        results:Array.from({length:20},(_,offset)=>({...eligible,id:offset+1,adult:true}))});},
     token:'secret',baseUrl:'https://example.test/3',maxRequests:500,deadlineMs:20_000});
   assertEquals(result.kind,'completed_empty');assertEquals(visited.length,500);
   assertEquals(visited[0],1);assertEquals(visited[499],500);

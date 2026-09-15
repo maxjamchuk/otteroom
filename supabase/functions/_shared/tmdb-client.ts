@@ -108,6 +108,8 @@ export async function searchTmdbCandidate(constraint: CandidateConstraint,
     } catch (error) {
       return { kind: 'search_incomplete', reason: error instanceof TmdbFailure ? error.failure : 'malformed_response' };
     }
+    if (first.results.length > first.totalResults)
+      return { kind: 'search_incomplete', reason: 'pagination_inconsistent' };
     if (first.totalPages > 500) {
       const parts = splitDates(from, to);
       if (!parts) return { kind: 'search_incomplete', reason: 'single_day_overflow' };
@@ -119,6 +121,7 @@ export async function searchTmdbCandidate(constraint: CandidateConstraint,
     }
     const totalPages = Math.max(1, first.totalPages);
     const expectedResults = first.totalResults;
+    let rawResultCount = 0;
     for (let pageNumber = 1; pageNumber <= totalPages; pageNumber++) {
       let page = first;
       if (pageNumber !== 1) {
@@ -132,12 +135,17 @@ export async function searchTmdbCandidate(constraint: CandidateConstraint,
         if (page.totalPages !== first.totalPages || page.totalResults !== expectedResults)
           return { kind: 'search_incomplete', reason: 'pagination_inconsistent' };
       }
+      if (page.results.length > expectedResults)
+        return { kind: 'search_incomplete', reason: 'pagination_inconsistent' };
+      rawResultCount += page.results.length;
       for (const movie of page.results) {
         if (seen.has(movie.id)) continue;
         seen.add(movie.id); dependencies.onMovieEvaluated?.(movie);
         if (eligibleMovie(movie, constraint)) return { kind: 'match', movie };
       }
     }
+    if (rawResultCount !== expectedResults)
+      return { kind: 'search_incomplete', reason: 'pagination_inconsistent' };
     return { kind: 'completed_empty' };
   };
 

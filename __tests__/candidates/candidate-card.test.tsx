@@ -64,8 +64,12 @@ it('renders stable completed-empty meaning and new-room link without acquisition
 });
 
 it('fails closed on integrity error',()=>{
-  render(<CandidateCard model={model({attempt:'integrity-error',status:'integrity-error',candidate:null,
-    posterSource:null,message:'Candidate status could not be verified. Reload the room and try again.'})}/>);
-  expect(screen.queryByTestId('candidate-title')).toBeNull(); expect(screen.queryByRole('button')).toBeNull();
+  render(<CandidateCard model={model({attempt:'integrity-error',status:'integrity-error',
+    message:'Candidate status could not be verified. Reload the room and try again.'})}/>);
+  expect(screen.getByText('Candidate status could not be verified. Reload the room and try again.')).toBeVisible();
+  expect(screen.queryByTestId('candidate-title')).toBeNull(); expect(screen.queryByTestId('candidate-year')).toBeNull();
+  expect(screen.queryByTestId('candidate-poster')).toBeNull();
+  expect(screen.queryByTestId('candidate-poster-fallback')).toBeNull();
+  expect(screen.queryByRole('image')).toBeNull(); expect(screen.queryByRole('button')).toBeNull();
   expect(screen.queryByRole('link')).toBeNull();
 });

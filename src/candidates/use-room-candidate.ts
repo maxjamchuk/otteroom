@@ -56,7 +56,7 @@ export function useRoomCandidate(room: AcceptedRoomState | null) {
     return () => { disposed = true; };
   }, [requesting, roomId, generation, requestAttempt, eligible]);
 
-  const posterUrl = state.candidate?.posterUrl;
+  const posterUrl = state.attempt === 'integrity-error' ? null : state.candidate?.posterUrl;
   const posterSource = useMemo(() => posterUrl ? { uri: posterUrl } : null, [posterUrl]);
   const retry = useCallback(() => {
     if (!activeImage.current || !sameCandidateImage(activeImage.current, image)) return;

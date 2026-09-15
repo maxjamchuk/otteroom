@@ -93,5 +93,20 @@ it('terminal refetch clears stale acquisition error and suppresses conflict',asy
   await act(async()=>hook.rerender({value:{...base,candidateAcquisitionStatus:'assigned'}}));
   expect(hook.result.current.candidate?.tmdbMovieId).toBe(7);
   await act(async()=>hook.rerender({value:{...base,candidateAcquisitionStatus:'assigned',candidateIntegrityError:true}}));
-  expect(hook.result.current.attempt).toBe('integrity-error');
+  expect(hook.result.current).toMatchObject({attempt:'integrity-error',candidate:null,posterSource:null});
 });
+
+it.each(['candidateIntegrityError','resolutionIntegrityError'] as const)(
+  'fails closed after candidate display when %s becomes authoritative',async integrityFlag=>{
+    const hook=await mount();
+    expect(hook.result.current.candidate).toEqual(available.candidate);
+    expect(hook.result.current.posterSource).toEqual({uri:available.candidate.posterUrl});
+    const stalePosterLoad=hook.result.current.onLoad;
+
+    await act(async()=>hook.rerender({value:{...base,candidateAcquisitionStatus:'assigned',
+      [integrityFlag]:true}}));
+    expect(hook.result.current).toMatchObject({attempt:'integrity-error',candidate:null,posterSource:null});
+    await act(async()=>stalePosterLoad());
+    expect(hook.result.current).toMatchObject({attempt:'integrity-error',candidate:null,posterSource:null});
+    expect(mockEnsure).toHaveBeenCalledTimes(1);
+  });
