@@ -205,6 +205,15 @@ attribution and image requirements using official current sources. Do not infer
 an endpoint, secret-handling design or cache lifetime from this roadmap. The
 constitution's credential and least-privilege requirements continue to apply.
 
+Feature 006 was temporarily reopened on 2026-09-15 after a real local live-TMDB
+run exposed provider-ordered genre evidence being rejected by the unchanged
+database canonical-array invariant. Remediation SHA `f180d4b` canonicalizes at
+the provider parsing boundary. A new exact-SHA receipt proves the complete live
+UI/Auth → Feature 005 → Edge → TMDB Discover → exact eligibility → PostgreSQL
+commit → TMDB Details/Configuration → converged browser/reload path with two
+anonymous voters and no fixture fallback. Feature 006 is COMPLETE again;
+Feature 007 has not started.
+
 ### 007 — Swipe Decisions
 
 **Goal:** Each member of the assembled voting group independently decides on the

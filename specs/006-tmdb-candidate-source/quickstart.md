@@ -1178,3 +1178,78 @@ secrets separately and remove only owned resources afterward.
   review: the applicable full evidence already ran at the exact implementation
   SHA, and the completion changes affect only this ledger, `tasks.md` and the
   roadmap status.
+
+### Live TMDB-to-database ordering defect and failing-first remediation
+
+- After completion commit `a570821cde06d77ae619ce94f4f7693b40cdd28a`, a
+  real local full-stack manual run reached live TMDB with a valid token after
+  Feature 005 resolved compatible, but the UI ended in `Unable to find a movie
+  right now. Please try again.` and the Edge application log recorded
+  `stage=operation`, `failure=internal`. This also exposed an acceptance gap:
+  the earlier browser receipt substituted only the TMDB boundary and the live
+  contract tested TMDB separately, so neither proved the complete live
+  UI/Auth-to-TMDB-to-PostgreSQL-to-browser seam. Those older receipts remain
+  historical evidence and do not prove this newly required release path.
+- Investigation confirmed that `parseMovie()` deduplicated `genre_ids` while
+  retaining provider order. `commit_room_tmdb_candidate` deliberately accepts
+  only a sorted, deduplicated canonical array, so an ordinary response such as
+  `[16,10751,12,14]` reached the RPC noncanonically and was rejected as
+  `Invalid candidate evidence`; the outer fixed Edge boundary then mapped that
+  rejection to `operation/internal`. The database invariant and eligibility
+  semantics were correct and remain unchanged.
+- Failing-first command:
+  `npm exec -- deno test --allow-env --allow-net=127.0.0.1 --filter 'unsorted TMDB genres' supabase/functions/_tests/room-candidate.test.ts`.
+  RED was 0 passed / 1 failed, with expected `[12,14,16,10751]` and received
+  `[16,10751,12,14]`. The regression enters through `parseDiscoverPage`, proves
+  exact AND-of-OR eligibility, and inspects the evidence handed to
+  `commit_room_tmdb_candidate`.
+- The only production change sorts the already deduplicated numeric array at
+  the TMDB parsing boundary. GREEN for the same command was 1/1. The affected
+  eligibility/search/operation set passed 40/40; the full Edge suite passed
+  40/40 with the separate live-only contract ignored; the full client suite
+  passed 40 suites / 672 tests; candidate-authority pgTAP passed 52/52; lint,
+  typecheck, `db:types:check` and `git diff --check` passed. No migration,
+  schema or generated-type source changed.
+- Remediation commit `f180d4bcf17a6766fcea8cec958c54221792c752`
+  (`fix: canonicalize TMDB genre evidence`) was pushed non-force to `main`.
+  The first normal push stopped before remote contact on the already documented
+  unreadable system SSH include; the empty-config SSH workaround then advanced
+  `origin/main` from `a570821` to the same remediation commit.
+
+### Mandatory real live full-stack receipt on the exact remediation SHA
+
+- At `2026-09-15T20:59+05:00`, exact pushed SHA
+  `f180d4bcf17a6766fcea8cec958c54221792c752` ran local Supabase, the real local
+  `room-candidate` Edge Function with its ignored server-only token, Expo web,
+  and the pinned Playwright browser runtime. No TMDB stub, route interception,
+  fixture candidate or fallback source was configured. The temporary local
+  acceptance driver and browser container were removed afterward; Expo, Edge
+  and the owned Supabase stack were stopped.
+- Two independent normal browser contexts created exactly two new anonymous
+  users during the receipt. The voting creator created a two-voter room, the
+  second voter joined, and both participant rows were normal voters. Each saved
+  `Any genre; 2000–2000`; PostgreSQL showed two canonical empty genre arrays and
+  Feature 005 resolved `compatible` after both filters completed.
+- Live TMDB Discover selected TMDB movie `1768727`. PostgreSQL's post-commit
+  row was exactly `ready`, voters `2/2`, filters `2/2`, resolution `compatible`,
+  acquisition `assigned`, authoritative `tmdb_movie_id=1768727`, and legacy
+  `movie_candidate_id IS NULL`. Live Details/Configuration returned
+  **Old Habits Die Hard (2000)** with an HTTPS TMDB poster.
+- Both clients rendered the same title, year and poster and every observed
+  Edge response carried the same TMDB ID. Both pages were then reloaded; each
+  rendered **Old Habits Die Hard (2000)** with the poster again, while the
+  database assignment remained unchanged.
+- Browser traffic recorded zero direct `themoviedb.org` requests and zero calls
+  to the private prepare/commit RPCs. All six browser-to-Edge calls returned
+  HTTP 200 with only `outcome=available` and the public candidate presentation
+  fields; there were no failed browser requests or client-visible secret/private
+  constraint names. Edge runtime logged six real `room-candidate` request-serving
+  entries correlated to those six HTTP 200 responses, with no
+  `operation/internal` or other application failure log.
+- This receipt adds two successful anonymous identity attempts to the prior
+  recorded cumulative 445, for 447/447 recorded attempts. The externally
+  reported failure's identity cost was not instrumented and is not guessed.
+  R01 remains exactly one historical generated-types write in commit
+  `bcd3e4ad12cf43e5a5d7392c2cae0a65d19f986e`; this remediation ran check-only
+  and the canonical SHA-256 remains
+  `adcec775b81b96552ada2887a69e3eaf80ce6d8ae465a2bcf52cb82e2396f5d3`.

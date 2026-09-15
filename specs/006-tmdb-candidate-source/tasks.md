@@ -623,3 +623,27 @@ unchanged.
 - All 34 functional requirements, 8 non-functional requirements, 12 success
   criteria, 28 acceptance scenarios and all eight constitution principles are
   satisfied. Feature 007 has not started.
+
+## Live-seam remediation current status
+
+- The live manual failure after `a570821cde06d77ae619ce94f4f7693b40cdd28a`
+  invalidated the previous final-source claim and reopened Feature 006. Older
+  controlled-browser, live-contract and exact-SHA receipts remain historical;
+  they did not prove the complete live TMDB-to-PostgreSQL browser seam.
+- Failing-first evidence proved provider-ordered `genre_ids` were deduplicated
+  but not sorted before the unchanged database canonical-evidence check. The
+  one-line parser fix and its parsing/eligibility/commit regression are pushed
+  in `f180d4bcf17a6766fcea8cec958c54221792c752`. Affected Edge tests passed
+  40/40, full Edge passed 40/40 plus one live-only ignore, client passed
+  40/672, candidate-authority DB passed 52/52, and lint/typecheck/check-only
+  types/diff checks passed.
+- The mandatory exact-SHA local acceptance used two normal anonymous voters and
+  no provider substitute. Feature 005 resolved compatible, live Discover chose
+  TMDB `1768727`, PostgreSQL committed that one ID, and both clients displayed
+  **Old Habits Die Hard (2000)** with its poster before and after reload. Six
+  Edge calls returned HTTP 200 `available`; Edge logs contained six serving
+  entries and no `operation/internal`. Browser traffic contained no direct TMDB
+  or private candidate RPC request and no secret/private-constraint disclosure.
+- Feature 006 is COMPLETE again at remediation SHA `f180d4b`; R01 remains one
+  historical generated-types write, recorded cumulative identities are now
+  447/447, and Feature 007 has not started.
