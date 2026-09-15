@@ -45,7 +45,7 @@ function parseMovie(value: unknown): TmdbMovie {
       !(row.poster_path === null || typeof row.poster_path === 'string' &&
         /^\/[A-Za-z0-9_-]+\.(?:jpe?g|png|webp)$/i.test(row.poster_path)))
     throw new Error('malformed_response');
-  const genres = [...new Set(row.genre_ids as number[])];
+  const genres = [...new Set(row.genre_ids as number[])].sort((a, b) => a - b);
   if (!genres.every(id => canonicalIds.has(id))) throw new Error('malformed_response');
   return Object.freeze({ id: row.id, adult: row.adult, genreIds: Object.freeze(genres),
     title: row.title.trim(), releaseDate: row.release_date, posterPath: row.poster_path });

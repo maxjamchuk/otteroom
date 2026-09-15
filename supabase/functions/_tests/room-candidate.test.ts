@@ -1,6 +1,7 @@
-import { assertEquals, assertFalse } from './assert.ts';
+import { assert, assertEquals, assertFalse } from './assert.ts';
 import { createRoomCandidateHandler, SERVER_RPC_NAMES } from '../room-candidate/index.ts';
 import type { EdgeDependencies, RpcName } from '../_shared/candidate-contracts.ts';
+import { eligibleMovie, parseDiscoverPage } from '../_shared/tmdb-eligibility.ts';
 
 const roomId = '11111111-1111-4111-8111-111111111111';
 const actorId = '22222222-2222-4222-8222-222222222222';
@@ -70,6 +71,40 @@ Deno.test('compatible flow searches, commits before Details, and returns only CA
   assertFalse(/clause|filter|fixture|actor|poster_path|release_date|genre/i.test(text));
   assertEquals(JSON.parse(text), { outcome: 'available', candidate: { tmdb_movie_id: 7,
     title: 'Winner', release_year: 2000, poster_url: null } });
+});
+
+Deno.test('unsorted TMDB genres are canonical through exact eligibility and candidate commit', async () => {
+  const constraint = { releaseYearFrom: 2000, releaseYearTo: 2020,
+    clauses: [[16], [12,14]] as number[][] };
+  const parsedMovie = parseDiscoverPage({ page: 1, total_pages: 1, total_results: 1, results: [{
+    id: 7, adult: false, genre_ids: [16,10751,12,14,16], title: 'Winner',
+    release_date: '2000-01-01', poster_path: null,
+  }] }, 1).results[0];
+  assertEquals(parsedMovie.genreIds, [12,14,16,10751]);
+  assert(eligibleMovie(parsedMovie, constraint));
+
+  const calls: Array<{ name: RpcName; args: Record<string, unknown> }> = [];
+  const handler = createRoomCandidateHandler({
+    verifyJwt: async () => actorId,
+    rpc: async (name, args) => {
+      calls.push({ name, args });
+      return name === 'prepare_room_tmdb_candidate'
+        ? preflightRow({ outcome: 'acquire', release_year_from: constraint.releaseYearFrom,
+            release_year_to: constraint.releaseYearTo, genre_clauses_tmdb_ids: constraint.clauses })
+        : { outcome: 'assigned', tmdb_movie_id: parsedMovie.id };
+    },
+    search: async value => {
+      assert(eligibleMovie(parsedMovie, value));
+      return { kind: 'match', movie: parsedMovie };
+    },
+    details: async id => ({ tmdbMovieId: id, title: 'Winner', releaseYear: 2000, posterUrl: null }),
+  });
+
+  assertEquals((await handler(request())).status, 200);
+  assertEquals(calls[1], { name: 'commit_room_tmdb_candidate', args: {
+    p_room_id: roomId, p_actor_user_id: actorId, p_tmdb_movie_id: 7,
+    p_release_year: 2000, p_tmdb_genre_ids: [12,14,16,10751], p_adult: false,
+  } });
 });
 
 Deno.test('responsive controlled provider completes at least 95 of 100 minimum presentations under ten seconds', async () => {

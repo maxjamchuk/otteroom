@@ -9,7 +9,7 @@ import {
 
 const constraint = { releaseYearFrom: 2000, releaseYearTo: 2020,
   clauses: [[28, 12], [18, 35]] as number[][] };
-const movie = { id: 41, adult: false, genreIds: [28, 18], title: 'Exact Film',
+const movie = { id: 41, adult: false, genreIds: [18, 28], title: 'Exact Film',
   releaseDate: '2000-01-01', posterPath: null };
 
 Deno.test('canonical mapping contains exactly the approved nineteen positive unique IDs', () => {
