@@ -13,8 +13,9 @@ const page = (number: number, pages: number, results: unknown[] = []) =>
 Deno.test('search traverses pages ascending and short-circuits on first exact match', async () => {
   const urls: URL[] = [];
   const fetch: FetchLike = (input) => { const url = new URL(String(input)); urls.push(url);
-    return response(page(Number(url.searchParams.get('page')), 3,
-      url.searchParams.get('page') === '2' ? [eligible] : [{ ...eligible, id: 8, genre_ids: [18] }])); };
+    return response({ ...page(Number(url.searchParams.get('page')), 3,
+      url.searchParams.get('page') === '2' ? [eligible] : [{ ...eligible, id: 8, genre_ids: [18] }]),
+      total_results: 2 }); };
   const result = await searchTmdbCandidate(context, { fetch, token: 'secret', baseUrl: 'https://example.test/3' });
   assertEquals(result, { kind: 'match', movie: { id: 7, adult: false, genreIds: [28], title: 'Winner',
     releaseDate: '2000-01-01', posterPath: null } });
@@ -142,6 +143,15 @@ Deno.test('aggregate raw rows fewer or greater than reported total are incomplet
       token:'secret',baseUrl:'https://example.test/3'});
     assertEquals(result,{kind:'search_incomplete',reason:'pagination_inconsistent'});
   }
+});
+
+Deno.test('cumulative raw row overflow rejects a later eligible movie',async()=>{
+  const result=await searchTmdbCandidate(context,{fetch:(input)=>{
+    const current=Number(new URL(String(input)).searchParams.get('page'));
+    return response({page:current,total_pages:2,total_results:1,
+      results:[current===1?{...eligible,id:8,genre_ids:[18]}:eligible]});},
+    token:'secret',baseUrl:'https://example.test/3'});
+  assertEquals(result,{kind:'search_incomplete',reason:'pagination_inconsistent'});
 });
 
 Deno.test('valid multi-page no-match uses raw row count before ID deduplication',async()=>{

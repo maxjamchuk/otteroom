@@ -138,6 +138,8 @@ export async function searchTmdbCandidate(constraint: CandidateConstraint,
       if (page.results.length > expectedResults)
         return { kind: 'search_incomplete', reason: 'pagination_inconsistent' };
       rawResultCount += page.results.length;
+      if (rawResultCount > expectedResults)
+        return { kind: 'search_incomplete', reason: 'pagination_inconsistent' };
       for (const movie of page.results) {
         if (seen.has(movie.id)) continue;
         seen.add(movie.id); dependencies.onMovieEvaluated?.(movie);
