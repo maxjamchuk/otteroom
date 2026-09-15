@@ -37,6 +37,12 @@ function enterIntegrityError(state: CandidateState): CandidateState {
     { ...state, attempt: 'integrity-error', candidate: null };
 }
 
+function candidateResultAuthority(result: CandidateResult): Exclude<CandidateAcquisitionStatus, 'pending'> | null {
+  if (result.outcome === 'available' || result.outcome === 'metadata_unavailable') return 'assigned';
+  if (result.outcome === 'no_candidates') return 'no_candidates';
+  return null;
+}
+
 export function observeAuthoritativeStatus(state: CandidateState, eligible: boolean,
   status: CandidateAcquisitionStatus, integrityError = false): CandidateState {
   if (integrityError || state.attempt === 'integrity-error')
@@ -69,7 +75,11 @@ export function failCandidate(state: CandidateState, request: CandidateRequest):
 export function receiveCandidate(state: CandidateState, request: CandidateRequest,
   result: CandidateResult): CandidateState {
   if (!sameCandidateRequest(state, request) || state.attempt === 'inactive' ||
-      state.attempt === 'integrity-error' || state.attempt === 'no-candidates') return state;
+      state.attempt === 'integrity-error') return state;
+  const incomingAuthority = candidateResultAuthority(result);
+  if (state.authoritativeStatus !== 'pending' && incomingAuthority !== null &&
+      state.authoritativeStatus !== incomingAuthority) return enterIntegrityError(state);
+  if (state.attempt === 'no-candidates') return state;
   if (result.outcome === 'no_candidates') return { ...state, authoritativeStatus: 'no_candidates',
     attempt: 'no-candidates', candidate: null };
   if (result.outcome === 'metadata_unavailable') return { ...state,

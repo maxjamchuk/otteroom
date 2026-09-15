@@ -69,6 +69,50 @@ it('suppresses a displayed candidate on every authoritative integrity transition
   expect(retryCandidate(explicitRoomConflict)).toBe(explicitRoomConflict);
 });
 
+it('fails closed when an Edge empty result contradicts an accepted assigned candidate', () => {
+  const displayed = finishPoster(metadata(), metadata(), true);
+  const conflict = receiveCandidate(displayed, displayed, { outcome: 'no_candidates' });
+  expect(conflict).toMatchObject({ authoritativeStatus: 'assigned',
+    attempt: 'integrity-error', candidate: null });
+  expect(candidateMessage(conflict)).toBe(
+    'Candidate status could not be verified. Reload the room and try again.');
+  expect(retryCandidate(conflict)).toBe(conflict);
+});
+
+it.each([available, { outcome: 'metadata_unavailable' } as const])(
+  'fails closed when an Edge assigned result contradicts accepted no-candidates: $outcome', result => {
+    const empty = receiveCandidate(acquiring(), acquiring(), { outcome: 'no_candidates' });
+    const conflict = receiveCandidate(empty, empty, result);
+    expect(conflict).toMatchObject({ authoritativeStatus: 'no_candidates',
+      attempt: 'integrity-error', candidate: null });
+    expect(retryCandidate(conflict)).toBe(conflict);
+  });
+
+it('allows repeated/equal Edge terminals and assigned metadata recovery', () => {
+  const empty = receiveCandidate(acquiring(), acquiring(), { outcome: 'no_candidates' });
+  expect(receiveCandidate(empty, empty, { outcome: 'no_candidates' })).toBe(empty);
+
+  const displayed = finishPoster(metadata(), metadata(), true);
+  const refreshed = receiveCandidate(displayed, displayed, available);
+  expect(refreshed).toMatchObject({ authoritativeStatus: 'assigned', candidate,
+    attempt: 'loading-poster' });
+  expect(receiveCandidate(displayed, displayed, { outcome: 'metadata_unavailable' })).toMatchObject({
+    authoritativeStatus: 'assigned', attempt: 'metadata-error', candidate,
+  });
+});
+
+it('keeps an Edge terminal conflict sticky against every later callback', () => {
+  const loadingPoster = metadata();
+  const conflict = receiveCandidate(loadingPoster, loadingPoster, { outcome: 'no_candidates' });
+  for (const result of [available, { outcome: 'no_candidates' } as const,
+    { outcome: 'not_found' } as const]) {
+    expect(receiveCandidate(conflict, conflict, result)).toBe(conflict);
+  }
+  expect(failCandidate(conflict, conflict)).toBe(conflict);
+  expect(finishPoster(conflict, loadingPoster, true)).toBe(conflict);
+  expect(finishPoster(conflict, loadingPoster, false)).toBe(conflict);
+});
+
 it('does not let a stale poster callback restore success after integrity failure', () => {
   const loadingPoster = metadata();
   const integrity = observeAuthoritativeStatus(loadingPoster, true, 'assigned', true);

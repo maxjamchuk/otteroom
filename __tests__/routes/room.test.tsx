@@ -244,6 +244,21 @@ it('fails closed when the room channel observes conflicting terminal authorities
   expect(screen.queryByRole('link',{name:'Create a new room'})).toBeNull();
 });
 
+it('suppresses candidate and new-room success when Edge contradicts assigned authority',async()=>{
+  mockJoin.mockResolvedValue(ready({filter_completed_count:2,
+    filter_resolution_status:'compatible',candidate_acquisition_status:'assigned'}));
+  mockRecover.mockResolvedValue({...saved,outcome:'locked',filter_completed_count:2});
+  mockEnsureCandidate.mockResolvedValue({outcome:'no_candidates'});
+  await mount();
+  expect(screen.getByText('Candidate status could not be verified. Reload the room and try again.')).toBeVisible();
+  expect(screen.queryByText('No eligible movie was observed during the completed search.')).toBeNull();
+  expect(screen.queryByTestId('candidate-title')).toBeNull();
+  expect(screen.queryByTestId('candidate-poster')).toBeNull();
+  expect(screen.queryByTestId('candidate-poster-fallback')).toBeNull();
+  expect(screen.queryByRole('button',{name:/Retry.*movie/i})).toBeNull();
+  expect(screen.queryByRole('link',{name:'Create a new room'})).toBeNull();
+});
+
 it('keeps room synchronization Retry separate from resolution Retry',async()=>{
   mockJoin.mockResolvedValue(ready({filter_completed_count:2}));
   mockRecover.mockResolvedValue({...saved,outcome:'locked',filter_completed_count:2});

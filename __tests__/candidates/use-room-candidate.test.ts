@@ -96,6 +96,28 @@ it('terminal refetch clears stale acquisition error and suppresses conflict',asy
   expect(hook.result.current).toMatchObject({attempt:'integrity-error',candidate:null,posterSource:null});
 });
 
+it('fails closed when assigned recovery receives an Edge no-candidates terminal',async()=>{
+  mockEnsure.mockResolvedValueOnce({outcome:'no_candidates'});
+  const hook=await mount({...base,candidateAcquisitionStatus:'assigned'});
+  expect(hook.result.current).toMatchObject({authoritativeStatus:'assigned',
+    attempt:'integrity-error',candidate:null,posterSource:null});
+  expect(hook.result.current.message).toMatch(/could not be verified/i);
+  await act(async()=>hook.result.current.retry());
+  expect(mockEnsure).toHaveBeenCalledTimes(1);
+});
+
+it.each([{outcome:'available',candidate:available.candidate} as const,
+  {outcome:'metadata_unavailable'} as const])(
+  'ignores a retired in-flight Edge $outcome after no-candidates refetch',async result=>{
+    const pending=deferred<CandidateResult>(); mockEnsure.mockReturnValueOnce(pending.promise);
+    const hook=await mount();
+    await act(async()=>hook.rerender({value:{...base,candidateAcquisitionStatus:'no_candidates'}}));
+    await act(async()=>pending.resolve(result));
+    expect(hook.result.current).toMatchObject({authoritativeStatus:'no_candidates',
+      attempt:'no-candidates',candidate:null,posterSource:null});
+    expect(hook.result.current.message).toMatch(/No eligible movie/i);
+  });
+
 it.each(['candidateIntegrityError','resolutionIntegrityError'] as const)(
   'fails closed after candidate display when %s becomes authoritative',async integrityFlag=>{
     const hook=await mount();
