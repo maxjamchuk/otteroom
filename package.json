@@ -64,7 +64,8 @@
     "db:test": "supabase test db supabase/tests/database",
     "db:types": "node scripts/database-types.mjs write",
     "db:types:check": "node scripts/database-types.mjs check",
-    "env:local": "node scripts/configure-local-env.mjs"
+    "env:local": "node scripts/configure-local-env.mjs",
+    "edge": "supabase functions serve room-candidate --env-file supabase/functions/.env.local"
   },
   "private": true,
   "engines": {
