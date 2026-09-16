@@ -198,8 +198,8 @@ into the checkout, and remove only owned resources afterward.
 
 ## Full historical browser acceptance
 
-The existing `npm run test:e2e` remains the full current E/G/H inventory: 36
-cases and 82 identities. Run it, plus C1, when any of the following applies:
+The existing `npm run test:e2e` remains the full current E/G/H/I/J inventory:
+42 cases and 100 identities. Run it, plus C1, when any of the following applies:
 
 - explicit release or milestone validation, including the first useful MVP
   release unless its approved release plan states a stricter superset;
@@ -214,7 +214,7 @@ cases and 82 identities. Run it, plus C1, when any of the following applies:
 
 An additive, fail-closed profile selector that leaves full discovery, context
 lifecycle, safety controls and case code unchanged requires static/unit coverage
-of that selector, not an otherwise unmotivated 82-identity rerun. Any change to
+of that selector, not an otherwise unmotivated 100-identity rerun. Any change to
 the underlying execution or safety semantics does require the full gate.
 
 ## R02 accounting
@@ -234,7 +234,7 @@ timestamps, scanner result and cleanup result.
   signup-free hour from the last counted attempt and wait outside the harness.
 - Workers remain 1, retries 0 and repeatEach 1 for normal real-stack profiles
   until a separately reviewed isolation design proves another setting safe.
-- Full historical acceptance is 82; C1 is 1; permanent smoke is 16. Targeted
+- Full historical acceptance is 100; C1 is 1; permanent smoke is 16. Targeted
   selection costs the sum of its current case budgets and is never free merely
   because the same case ran earlier in the hour.
 
@@ -246,7 +246,7 @@ selection. The normal formulas are:
 | Normal feature checkpoint | `1 + 16 + F + T` |
 | Repeatability block | `1 + 2 × (16 + F) + T` |
 | Fresh checkout | `1 + 16 = 17` |
-| Explicit full historical checkpoint | `1 + 82 = 83` |
+| Explicit full historical checkpoint | `1 + 100 = 101` |
 
 To keep a normal checkpoint at or below 50, `F + T` must be at most 33. To keep
 it at or below 30, `F + T` must be at most 13.
