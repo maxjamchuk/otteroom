@@ -1,13 +1,13 @@
 import { expect, type Page, type Route } from '@playwright/test';
 import { PARTICIPANT_GENRES, PARTICIPANT_GENRE_VALUES, type ParticipantGenre } from '../src/filters/genres';
 import { test, safeBody } from './support/safe-diagnostics';
-import { assertReady, committedRoomSnapshot, createWaiting, createWaitingWithSession, observeCandidateRpcZero,
+import { assertReady, committedRoomSnapshot, createWaiting, createWaitingWithSession, isolateCandidateAcquisition, observeCandidateRpcZero,
   ownParticipant, realtimeBarrier, startHost, withParticipants, type PublicApi, type RoomProjection } from './support/room-harness';
 import { assertFilterProgress, boundedFilterSnapshot, installCommittedResponseLoss, installPreCommitFailure,
   installSubmitHold, installSubmitOverlap, recoverOwnFilter, submitOwnFilter } from './support/filter-harness';
 import { verifyInvitationQr } from './support/qr-harness';
 import { assertResolutionTrafficZero, assertResolutionView, assertStoredResolution,
-  observeResolutionTraffic } from './support/resolution-harness';
+  observeFilterResolutionBoundary, observeResolutionTraffic } from './support/resolution-harness';
 
 export const filterAnonymousBudget = Object.freeze({ H01: 3, H02: 3, H03: 3 });
 
@@ -106,13 +106,14 @@ test('@filters H01 validates private owned filters and editable saved state', as
     const final = await submitOwnFilter(pages[2], api, room, ['animation', 'family'], 1990, 2010);
     expect(final.outcome === 'saved' && final.filter_completed_count === 3).toBe(true);
     for(const page of pages)await assertResolutionView(page,'incompatible');
+    for(const page of pages)await expect(page.getByTestId('candidate-decision-surface')).toHaveCount(0);
     expect((await assertStoredResolution(diagnostics.page,api,room,'incompatible')).filter_completed_count===3).toBe(true);
     const completed = candidateZero(pages, room);
     assertResolutionTrafficZero(pages);
     expect(completed.filters.length === 3 && new Set(completed.filters.map(filter => JSON.stringify(filter.genres))).size === 3).toBe(true);
     for (const page of pages) await assertFilterProgress(page, room, 3);
     expect([diagnostics, second, third].reduce((sum, item) => sum + item.signupAttempts, 0) === filterAnonymousBudget.H01).toBe(true);
-    await diagnostics.record({ scenario: 'H01', outcome: 'defaults; genres19/Any; boundary years; invalid and spoofed writes preserved; distinct private values; valid pre-lock edit; N/N frozen incompatible continuation; candidate/TMDB0; identities3' });
+    await diagnostics.record({ scenario: 'H01', outcome: 'defaults; genres19/Any; boundary years; invalid and spoofed writes preserved; distinct private values; N/N frozen incompatible continuation; candidate/decision UI/TMDB0; identities3' });
     } finally { await transport.close(); }
   }));
 });
@@ -121,9 +122,11 @@ test('@filters H02 recovers filters through failures and lost acknowledgements',
   test.setTimeout(90000);
   await safeBody(diagnostics, () => withParticipants(browser, { baseURL, viewport }, info, 2, async ([first, second]) => {
     const pages = [diagnostics.page, first.page, second.page];
+    const candidateIsolation = await isolateCandidateAcquisition(pages, diagnostics);
     const transport = await realtimeBarrier(first.page);
     try {
       const initial = await createWaiting(diagnostics.page, diagnostics, { requiredVoterCount: 2, creatorIsVoter: false });
+      candidateIsolation.allow(initial.room);
       for (const voter of [first, second]) await startHost(voter.page, voter);
       await assemble([first.page, second.page], initial.api, initial.room, initial.invitation);
       await transport.wait('readiness', 1); await transport.wait('reads', 1);
@@ -146,26 +149,40 @@ test('@filters H02 recovers filters through failures and lost acknowledgements',
       expect((await recoverOwnFilter(first.page, initial.api, initial.room)).outcome === 'locked').toBe(true);
       await assertFilterProgress(diagnostics.page, initial.room, 2);
       expect((await directJoin(first.page, initial.api, initial.room)).outcome === 'already_member').toBe(true);
+      await candidateIsolation.wait(initial.room, 'incompatible');
 
       const next = await createNext(diagnostics.page, diagnostics, initial.api, committedRoomSnapshot(initial.room), false, 2);
+      candidateIsolation.allow(next.room);
       await assemble([first.page, second.page], initial.api, next.room, next.invitation);
+      const concurrentResolution = observeFilterResolutionBoundary(pages, next.room, 'compatible',
+        'concurrent-filter-submission', diagnostics);
       const overlap = await installSubmitOverlap([first.page, second.page]);
-      const submissions = [submitOwnFilter(first.page, initial.api, next.room, ['action'], 1900, 2026),
-        submitOwnFilter(second.page, initial.api, next.room, ['comedy'], 1900, 2026)];
-      await overlap.wait(); overlap.release(); const results = await Promise.all(submissions); await overlap.close();
-      expect(results.every(result => result.outcome === 'saved') && boundedFilterSnapshot(next.room).count === 2).toBe(true);
+      try {
+        const submissions = [submitOwnFilter(first.page, initial.api, next.room, ['action'], 1900, 2026),
+          submitOwnFilter(second.page, initial.api, next.room, ['comedy'], 1900, 2026)];
+        await overlap.wait(); overlap.release(); const results = await Promise.all(submissions);
+        expect(results.every(result => result.outcome === 'saved') && boundedFilterSnapshot(next.room).count === 2).toBe(true);
+        await concurrentResolution.wait(first.page);
+      } finally { await overlap.close(); concurrentResolution.close(); }
+      await candidateIsolation.wait(next.room, 'compatible');
 
       const third = await createNext(diagnostics.page, diagnostics, initial.api, committedRoomSnapshot(next.room), false, 2);
+      candidateIsolation.allow(third.room);
       await assemble([first.page, second.page], initial.api, third.room, third.invitation);
       const loss = await installCommittedResponseLoss(first.page);
       await expect(submitOwnFilter(first.page, initial.api, third.room, ['music'], 1950, 2000)).rejects.toThrow();
       expect(loss.calls() === 1 && loss.result()?.outcome === 'saved' && boundedFilterSnapshot(third.room).count === 1).toBe(true);
       await loss.close(); expect((await recoverOwnFilter(first.page, initial.api, third.room)).outcome === 'saved').toBe(true);
-      expect((await submitOwnFilter(second.page, initial.api, third.room, ['mystery'], 2000, 2026)).filter_completed_count === 2).toBe(true);
-      for (const room of [initial.room, next.room, third.room]) candidateZero(pages, room);
+      const lostResponseResolution = observeFilterResolutionBoundary(pages, third.room, 'compatible',
+        'committed-response-loss', diagnostics);
+      try {
+        expect((await submitOwnFilter(second.page, initial.api, third.room, ['mystery'], 2000, 2026)).filter_completed_count === 2).toBe(true);
+        await lostResponseResolution.wait(first.page);
+      } finally { lostResponseResolution.close(); }
+      await candidateIsolation.wait(third.room, 'compatible');
       expect([diagnostics, first, second].reduce((sum, item) => sum + item.signupAttempts, 0) === filterAnonymousBudget.H02).toBe(true);
-      await diagnostics.record({ scenario: 'H02', outcome: 'non-voter aggregate only; QR/link/code/reload/socket recovery; disconnected incomplete/completed voters; abort/retry; duplicate overlap; committed-response-loss recovery; candidate0; identities3' });
-    } finally { await transport.close(); }
+      await diagnostics.record({ scenario: 'H02', outcome: 'non-voter aggregate only; QR/link/code/reload/socket recovery; disconnected incomplete/completed voters; abort/retry; duplicate overlap; committed-response-loss recovery; later candidate handoffs isolated and drained; identities3' });
+    } finally { await candidateIsolation.close(); await transport.close(); }
   }));
 });
 
@@ -174,10 +191,12 @@ test('@filters H03 serializes final completion and freezes every filter', async 
   await safeBody(diagnostics, () => withParticipants(browser, { baseURL, viewport }, info, 2, async ([second, third]) => {
     const pages = [diagnostics.page, second.page, third.page];
     pages.forEach(observeResolutionTraffic);
+    const candidateIsolation = await isolateCandidateAcquisition(pages, diagnostics);
     const transport = await realtimeBarrier(diagnostics.page);
     try {
     let readiness = transport.stats.readiness, reads = transport.stats.reads;
     const first = await createWaiting(diagnostics.page, diagnostics, { requiredVoterCount: 3, creatorIsVoter: true });
+    candidateIsolation.allow(first.room);
     for (const voter of [second, third]) await startHost(voter.page, voter);
     await assemble([second.page, third.page], first.api, first.room, first.invitation);
     await transport.wait('readiness', readiness + 1); await transport.wait('reads', reads + 1);
@@ -194,9 +213,11 @@ test('@filters H03 serializes final completion and freezes every filter', async 
     for (const [page, genres] of [[pages[0], ['war']], [pages[1], []], [pages[2], ['western']]] as const)
       expect((await submitOwnFilter(page, first.api, first.room, genres, 1900, 2026)).outcome === 'locked').toBe(true);
     expect(JSON.stringify(boundedFilterSnapshot(first.room)) === JSON.stringify(frozen)).toBe(true);
+    await candidateIsolation.wait(first.room, 'compatible');
 
     readiness = transport.stats.readiness; reads = transport.stats.reads;
     const editFirst = await createNext(diagnostics.page, diagnostics, first.api, committedRoomSnapshot(first.room));
+    candidateIsolation.allow(editFirst.room);
     await assemble([second.page, third.page], first.api, editFirst.room, editFirst.invitation);
     await transport.wait('readiness', readiness + 1); await transport.wait('reads', reads + 1);
     await submitOwnFilter(pages[0], first.api, editFirst.room, ['action'], 1900, 2026);
@@ -206,9 +227,11 @@ test('@filters H03 serializes final completion and freezes every filter', async 
     for(const page of pages)await assertResolutionView(page,'compatible');
     await assertStoredResolution(diagnostics.page,first.api,editFirst.room,'compatible');
     expect((await recoverOwnFilter(pages[0], first.api, editFirst.room)).outcome === 'locked').toBe(true);
+    await candidateIsolation.wait(editFirst.room, 'compatible');
 
     readiness = transport.stats.readiness; reads = transport.stats.reads;
     const finalFirst = await createNext(diagnostics.page, diagnostics, first.api, committedRoomSnapshot(editFirst.room));
+    candidateIsolation.allow(finalFirst.room);
     await assemble([second.page, third.page], first.api, finalFirst.room, finalFirst.invitation);
     await transport.wait('readiness', readiness + 1); await transport.wait('reads', reads + 1);
     await Promise.all([submitOwnFilter(pages[0], first.api, finalFirst.room, ['action'], 1900, 2026),
@@ -222,9 +245,11 @@ test('@filters H03 serializes final completion and freezes every filter', async 
     const beforeLocked = boundedFilterSnapshot(finalFirst.room);
     expect((await submitOwnFilter(pages[0], first.api, finalFirst.room, ['western'], 1900, 2026)).outcome === 'locked').toBe(true);
     expect(JSON.stringify(boundedFilterSnapshot(finalFirst.room)) === JSON.stringify(beforeLocked)).toBe(true);
+    await candidateIsolation.wait(finalFirst.room, 'compatible');
 
     readiness = transport.stats.readiness; reads = transport.stats.reads;
     const active = await createNext(diagnostics.page, diagnostics, first.api, committedRoomSnapshot(finalFirst.room));
+    candidateIsolation.allow(active.room);
     await assemble([second.page, third.page], first.api, active.room, active.invitation);
     await transport.wait('readiness', readiness + 1); await transport.wait('reads', reads + 1);
     const repeats = await Promise.all([submitOwnFilter(pages[0], first.api, active.room, ['history'], 1900, 2026),
@@ -241,12 +266,11 @@ test('@filters H03 serializes final completion and freezes every filter', async 
     const activeFrozen = boundedFilterSnapshot(active.room);
     expect(activeFrozen.filters.some(filter => filter.genres.includes('history')) &&
       !activeFrozen.filters.some(filter => filter.genres.includes('horror'))).toBe(true);
-    for (const room of [first.room, editFirst.room, finalFirst.room, active.room]) {
-      const complete = candidateZero(pages, room); expect(complete.row.filter_completed_count === 3 && complete.filters.length === 3).toBe(true);
-    }
-    assertResolutionTrafficZero(pages);
+    const activeComplete = await candidateIsolation.wait(active.room, 'compatible');
+    expect(activeComplete.row.filter_completed_count === 3 && activeComplete.filters.length === 3).toBe(true);
+    expect(pages.every(page => observeResolutionTraffic(page).tmdb() === 0)).toBe(true);
     expect([diagnostics, second, third].reduce((sum, item) => sum + item.signupAttempts, 0) === filterAnonymousBudget.H03).toBe(true);
-    await diagnostics.record({ scenario: 'H03', outcome: 'distinct final-two race coexists with automatic compatible resolution; concurrent same-voter saved/unchanged; edit-first and final-first orders; lost final acknowledgement; active save returns locked after observed N/N; all castable locked/no-write; candidate/TMDB0; identities3' });
-    } finally { await transport.close(); }
+    await diagnostics.record({ scenario: 'H03', outcome: 'distinct final-two race coexists with automatic compatible resolution; concurrent same-voter saved/unchanged; edit-first and final-first orders; lost final acknowledgement; active save returns locked after observed N/N; all castable locked/no-write; later candidate handoffs isolated and drained; identities3' });
+    } finally { await candidateIsolation.close(); await transport.close(); }
   }));
 });

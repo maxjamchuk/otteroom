@@ -176,7 +176,7 @@ it('Feature 006 discovery retains serial default acceptance and bounded runtime 
   const { parseInvocation } = await import('./scripts/run-e2e.mjs');
   assert.deepEqual(config.projects.find(p => p.name === 'acceptance').testMatch,
     ['room-session.spec.ts', 'generalized-room-membership-qr.spec.ts', 'participant-filters.spec.ts', 'common-filter-resolution.spec.ts',
-      'tmdb-candidate-source.spec.ts']);
+      'tmdb-candidate-source.spec.ts', 'swipe-decisions.spec.ts']);
   assert.equal(config.workers, 1); assert.equal(config.repeatEach, 1); assert.equal(config.retries, 0);
   assert.equal(config.reporter[0][0], './e2e/support/safe-reporter.ts');
   for (const field of ['trace', 'video', 'screenshot']) assert.equal(config.use[field], 'off');
@@ -316,10 +316,10 @@ it('discovers E/G/H/I/J with 100 identities and the 42-case final inventory', ()
   assert.deepEqual(candidateBudgets, { J01:3,J02:4,J03:2 });
   assert.equal(47 + 9 + Object.values(budgets).reduce((a, b) => a + b, 0) + 9 + 9, 100);
   assert.equal(24 + 3 + titles.length + resolutionTitles.length + candidateTitles.length, 42);
-  const C1 = 1, smoke = 16, owner = 9;
-  assert.deepEqual({ normal: C1 + smoke + owner,
-    repeatability: C1 + 2 * (smoke + owner),
+  const C1 = 1, smoke = 16, owner = 6, targeted = 2;
+  assert.deepEqual({ normal: C1 + smoke + owner + targeted,
+    repeatability: C1 + 2 * (smoke + owner) + targeted,
     fresh: C1 + smoke,
-    total: C1 + 2 * (smoke + owner) + C1 + smoke },
-  { normal: 26, repeatability: 51, fresh: 17, total: 68 });
+    total: C1 + 2 * (smoke + owner) + targeted + C1 + smoke },
+  { normal: 25, repeatability: 47, fresh: 17, total: 64 });
 `));

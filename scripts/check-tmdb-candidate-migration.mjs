@@ -72,8 +72,9 @@ try{
   if(resetStarted){try{
     await managed(localExecutable('supabase'),['db','reset','--local','--no-seed'],{signal:null});
     const empty=(await bounded('docker',sqlArgs,{signal:null,input:`select not exists(select 1 from public.rooms)
+      and not exists(select 1 from public.candidate_decisions)
       and not exists(select 1 from auth.users) and to_regprocedure('public.prepare_room_tmdb_candidate(uuid,uuid)') is not null;`})).trim();
-    if(empty!=='t')fail();receipt('latest-reset=true owned-fixtures=0');
+    if(empty!=='t')fail();receipt('latest-reset=true owned-fixtures=0 decisions=0');
   }catch{receipt('cleanup=FAIL');process.exitCode=1;}}
   if(locked){try{await fs.unlink(lock);}catch{receipt('lock-cleanup=FAIL');process.exitCode=1;}}
   process.removeListener('SIGINT',onInt);process.removeListener('SIGTERM',onTerm);

@@ -11,6 +11,7 @@ type State = {
   hold: boolean;
   released: boolean;
   calls: { discover: number; details: number; configuration: number; poster: number };
+  provider: { requests: number; completed: number; active: number };
   held: number;
   invalid: number;
   release: Set<() => void>;
@@ -53,15 +54,25 @@ function validDiscover(url: URL): boolean {
 
 function fresh(scenario: TmdbStubScenario, hold = false): State {
   return { scenario, hold, released: !hold, calls: { discover: 0, details: 0, configuration: 0, poster: 0 },
-    held: 0, invalid: 0, release: new Set() };
+    provider: { requests: 0, completed: 0, active: 0 }, held: 0, invalid: 0, release: new Set() };
 }
 
-export async function startTmdbStub() {
+function loopback(address: string | undefined): boolean {
+  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+}
+
+export async function startTmdbStub(providerToken: string) {
+  if (typeof providerToken !== 'string' || providerToken.length < 16 || providerToken.length > 256 ||
+      /[\r\n]/.test(providerToken)) throw new Error('TMDB_STUB_TOKEN_INVALID');
   let state = fresh('candidate');
   const server = http.createServer(async (request, response) => {
     try {
       const url = new URL(request.url ?? '/', 'http://stub.invalid');
-      if (url.pathname === '/__control' && request.method === 'POST') {
+      const control = url.pathname === '/__control';
+      if (control && !loopback(request.socket.remoteAddress)) {
+        json(response, 404, { status_code: 34 }); return;
+      }
+      if (control && request.method === 'POST') {
         const value = await body(request) as Record<string, unknown>;
         if (!value || Object.keys(value).some(key => !['scenario','hold','release'].includes(key))) throw new Error('control');
         if (value.release === true) {
@@ -74,11 +85,23 @@ export async function startTmdbStub() {
         }
         json(response, 200, { ok: true }); return;
       }
-      if (url.pathname === '/__control' && request.method === 'GET') {
+      if (control && request.method === 'GET') {
         json(response, 200, { scenario: state.scenario, calls: state.calls, held: state.held,
-          released: state.released, invalid: state.invalid }); return;
+          released: state.released, invalid: state.invalid, provider: state.provider }); return;
       }
-      if (!/^Bearer\s+\S+$/.test(String(request.headers.authorization ?? ''))) {
+      const providerState = state;
+      providerState.provider.requests++;
+      providerState.provider.active++;
+      let providerSettled = false;
+      const settleProvider = (completed: boolean) => {
+        if (providerSettled) return;
+        providerSettled = true;
+        providerState.provider.active--;
+        if (completed) providerState.provider.completed++;
+      };
+      response.once('finish', () => settleProvider(true));
+      response.once('close', () => settleProvider(false));
+      if (request.headers.authorization !== `Bearer ${providerToken}`) {
         state.invalid++; json(response, 401, { status_code: 7 }); return;
       }
       if (url.pathname === '/3/discover/movie' && request.method === 'GET') {
@@ -118,13 +141,19 @@ export async function startTmdbStub() {
     } catch { state.invalid++; json(response, 400, { status_code: 5 }); }
   });
   await new Promise<void>((resolve, reject) => {
-    server.once('error', reject); server.listen(0, '127.0.0.1', () => { server.removeListener('error', reject); resolve(); });
+    // The Supabase Edge runtime is a container and reaches the host through
+    // host.docker.internal. A loopback-only listener refuses that connection on
+    // native Linux Docker, so the provider endpoint must bind the host gateway.
+    // Control remains loopback-only and provider traffic requires the exact
+    // invocation-scoped random bearer token.
+    server.once('error', reject); server.listen(0, '0.0.0.0', () => { server.removeListener('error', reject); resolve(); });
   });
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('TMDB_STUB_START_FAILED');
   return Object.freeze({
     controlUrl: `http://127.0.0.1:${address.port}/__control`,
     edgeBaseUrl: `http://host.docker.internal:${address.port}/3`,
+    providerAddress: address.address,
     close: async () => {
       for (const resume of state.release) resume(); state.release.clear();
       await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));

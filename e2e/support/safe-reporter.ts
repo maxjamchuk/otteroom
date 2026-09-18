@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Reporter, TestCase, TestResult } from '@playwright/test/reporter';
 import { sanitizeDiagnostic, safeDiagnosticLocation } from './sanitize-diagnostics.ts';
+import { parseHarnessDiagnostic, type HarnessDiagnostic } from './harness-observability.ts';
 
 type SafeInput = {
   status?: unknown;
@@ -37,6 +38,10 @@ const candidateCases=new Map([
   ['@feature006 J02 non-voting parity private traffic and completed empty','J02'],
   ['@feature006 J03 failure recovery response loss and same identity degradation','J03'],
 ]);
+const decisionCases=new Map([
+  ['@feature007 K01 exact-two immutable decision lifecycle','K01'],
+  ['@feature007 K02 larger-room aggregate-only decision convergence','K02'],
+]);
 
 function scenarioFor(title: unknown): string {
   if (typeof title !== 'string') return 'unclassified';
@@ -44,6 +49,7 @@ function scenarioFor(title: unknown): string {
   if (filterCases.has(title)) return 'filters';
   if(resolutionCases.has(title))return 'resolution';
   if(candidateCases.has(title))return 'candidate';
+  if(decisionCases.has(title))return 'decision';
   if (title.startsWith('@baseline ')) return 'baseline';
   if (title.startsWith('@auth ')) return 'auth';
   if (title.startsWith('@us1 E01 ')) return 'us1';
@@ -70,6 +76,7 @@ function browserCaseFor(title: unknown): string {
   if (scenario === 'filters') return filterCases.get(title)!;
   if(scenario==='resolution')return resolutionCases.get(title)!;
   if(scenario==='candidate')return candidateCases.get(title)!;
+  if(scenario==='decision')return decisionCases.get(title)!;
   if (['us1', 'us2-join', 'us2-realtime', 'us4'].includes(scenario)) {
     return title.match(/^@[^ ]+ (E(?:0[1-9]|1[0-2])) /)?.[1] ?? 'none';
   }
@@ -87,6 +94,19 @@ export function safeResult(test: { title?: unknown; expectedStatus?: unknown; re
     result.annotations?.some(item => item.type === name && item.description === expected) === true;
   const count = (name: string) => (result.annotations ?? []).filter(item => item.type === name && /^[0-9]{1,2}$/.test(item.description ?? ''))
     .reduce((sum, item) => sum + Number(item.description), 0);
+  const bounded = (name: string, maximum: number) => {
+    const values = (result.annotations ?? []).filter(item => item.type === name && /^(?:0|[1-9][0-9]{0,5})$/.test(item.description ?? ''));
+    if (values.length !== 1) return 0;
+    const value = Number(values[0].description);
+    return value <= maximum ? value : 0;
+  };
+  const harnessDiagnostics: HarnessDiagnostic[] = [];
+  for (const annotation of result.annotations ?? []) {
+    if (annotation.type !== 'safe-harness-diagnostic' || typeof annotation.description !== 'string' ||
+        Buffer.byteLength(annotation.description) > 4096 || harnessDiagnostics.length >= 4) continue;
+    try { harnessDiagnostics.push(parseHarnessDiagnostic(JSON.parse(annotation.description))); }
+    catch { /* Invalid or unreviewed annotations are dropped. */ }
+  }
   return {
     scenario: scenarioFor(test.title),
     browserCase: browserCaseFor(test.title),
@@ -100,6 +120,10 @@ export function safeResult(test: { title?: unknown; expectedStatus?: unknown; re
     authSuccess: receipt('safe-auth-success', 'confirmed'),
     signups: count('safe-signups'),
     identities: count('safe-identities'),
+    performanceSamples: bounded('safe-performance-samples', 20),
+    performancePassing: bounded('safe-performance-passing', 20),
+    performanceMaximumMs: bounded('safe-performance-maximum-ms', 600000),
+    performanceRecoverableFailures: bounded('safe-performance-recoverable-failures', 20),
     budgetFailure: receipt('safe-auth-budget', 'exhausted'),
     capture: [...(result.annotations ?? [])].reverse().find(item => item.type === 'safe-capture-result' &&
       ['stabilizing', 'unstable-dom', 'unsafe-ui', 'changed-dom', 'changed-viewport', 'changed-values', 'invalid-png', 'verified'].includes(item.description ?? ''))?.description ?? 'none',
@@ -108,6 +132,7 @@ export function safeResult(test: { title?: unknown; expectedStatus?: unknown; re
     stage: ['cleanup', 'scanner', 'sanitizer', 'ui', 'capture-guards', 'config'].find(value => receipt('safe-stage', value)) ?? 'none',
     ui: [...(result.annotations ?? [])].reverse().find(item => item.type === 'safe-ui-result' && ['safe', 'incomplete', 'credential'].includes(item.description ?? ''))?.description ?? 'none',
     uiReason: [...(result.annotations ?? [])].reverse().find(item => item.type === 'safe-ui-reason' && ['safe', 'inspection-bound', 'nontext-visual', 'canvas', 'iframe', 'img', 'svg', 'object', 'embed', 'background-image', 'animation'].includes(item.description ?? ''))?.description ?? 'none',
+    harnessDiagnostics,
     location: typeof result.error?.message === 'string' ?
       safeDiagnosticLocation(result.error.message) ?? 'none' : 'none',
   };
@@ -146,7 +171,10 @@ export default class SafeReporter implements Reporter {
     if (!this.#directory) return;
     if (this.#runnerFailed) this.#results.push({
       scenario: 'runner', browserCase: 'none', worker: -1, repetition: 0, context: 'none', status: 'failed', category: 'E2E_FAILURE',
-      cleanup: false, authSuccess: false, signups: 0, identities: 0, budgetFailure: false, capture: 'none', captureAttempts: 0, artifactsComplete: false, location: 'none', stage: 'none', ui: 'none', uiReason: 'none',
+      cleanup: false, authSuccess: false, signups: 0, identities: 0, performanceSamples: 0,
+      performancePassing: 0, performanceMaximumMs: 0, performanceRecoverableFailures: 0,
+      budgetFailure: false, capture: 'none', captureAttempts: 0, artifactsComplete: false, location: 'none', stage: 'none', ui: 'none', uiReason: 'none',
+      harnessDiagnostics: [],
     });
     // Every field was projected to fixed vocabulary above; never serialize TestResult.
     const summary = JSON.stringify(this.#results);

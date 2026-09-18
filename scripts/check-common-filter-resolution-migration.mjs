@@ -101,7 +101,8 @@ try{
       and not exists(select 1 from private.room_filter_resolutions)
       and not exists(select 1 from private.room_filter_resolution_genre_clauses)
       and (select count(*)=19 from private.tmdb_movie_genres)
-      and not exists(select 1 from public.rooms where candidate_acquisition_status<>'pending' or tmdb_movie_id is not null)
+      and not exists(select 1 from public.rooms where candidate_acquisition_status<>'pending' or tmdb_movie_id is not null or decision_completed_count<>0)
+      and not exists(select 1 from public.candidate_decisions)
       and not exists(select 1 from auth.users)
       and to_regprocedure('public.resolve_common_filters(uuid)') is not null
       and to_regprocedure('public.prepare_room_tmdb_candidate(uuid,uuid)') is not null

@@ -9,7 +9,7 @@ const pending: AcceptedRoomState = {
   isCreator: true, isVoter: true, state: 'ready', title: 'Ready', voterCount: 2,
   requiredVoterCount: 2, filterCompletedCount: 2, filtersComplete: true,
   filterResolutionStatus: 'pending', resolutionIntegrityError: false,
-  candidateAcquisitionStatus: 'pending', candidateIntegrityError: false,
+  candidateAcquisitionStatus: 'pending', candidateIntegrityError: false, decisionCompletedCount: 0,
 };
 
 it('is inactive without exact Ready N/N pending authority', () => {

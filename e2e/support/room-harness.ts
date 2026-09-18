@@ -1,12 +1,14 @@
 import { spawnSync } from 'node:child_process';
-import { expect, type Page, type Browser, type BrowserContextOptions, type TestInfo, type Response, type Request, type Frame, type WebSocketRoute } from '@playwright/test';
+import { expect, type Page, type Browser, type BrowserContextOptions, type TestInfo, type Response, type Request, type Route, type Frame, type WebSocketRoute } from '@playwright/test';
 import { safeBody, SafeDiagnostics } from './safe-diagnostics.ts';
+import { candidateBoundaryDiagnostic, containmentDiagnostic } from './harness-observability.ts';
 
 export type PublicApi = { origin: string; publicKey: string };
 export type RoomProjection = { id: string; code: string; state: string; voter_count: number;
   required_voter_count: number; filter_completed_count: number;
   filter_resolution_status: 'pending' | 'compatible' | 'incompatible';
-  candidate_acquisition_status: 'pending' | 'assigned' | 'no_candidates' };
+  candidate_acquisition_status: 'pending' | 'assigned' | 'no_candidates';
+  decision_completed_count: number };
 export type CreationConfiguration = { requiredVoterCount: number; creatorIsVoter: boolean };
 export const twoVoters = { requiredVoterCount: 2, creatorIsVoter: true } as const;
 type Member = { id: string; room_id: string; user_id: string; is_voter: boolean; joined_at: string };
@@ -14,17 +16,142 @@ type StoredRoom = RoomProjection & { creator_user_id: string; creation_request_i
   created_at: string; updated_at: string; movie_candidate_id: string | null; tmdb_movie_id: number | null };
 type StoredFilter = { room_member_id: string; genres: string[]; release_year_from: number;
   release_year_to: number; xmin: string };
-const candidateTraffic = new WeakMap<Page, { count: number; listener: (request: Request) => void }>();
+const candidateTraffic = new WeakMap<Page, { count: number; byRoom: Map<string, number>;
+  listener: (request: Request) => void }>();
 
 export function observeCandidateRpcZero(page: Page) {
   let traffic = candidateTraffic.get(page);
   if (!traffic) {
-    traffic = { count: 0, listener: request => {
-      if (new URL(request.url()).pathname === '/functions/v1/room-candidate') traffic!.count++;
+    traffic = { count: 0, byRoom: new Map(), listener: request => {
+      if (new URL(request.url()).pathname === '/functions/v1/room-candidate') {
+        traffic!.count++;
+        try {
+          const roomId = request.postDataJSON()?.room_id;
+          if (typeof roomId === 'string' && /^[0-9a-f-]{36}$/.test(roomId))
+            traffic!.byRoom.set(roomId, (traffic!.byRoom.get(roomId) ?? 0) + 1);
+        } catch { /* the owning request validator reports malformed traffic */ }
+      }
     } };
     candidateTraffic.set(page, traffic); page.on('request', traffic.listener);
   }
-  return { count: () => traffic!.count };
+  return { count: (roomId?: string) => roomId ? traffic!.byRoom.get(roomId) ?? 0 : traffic!.count };
+}
+
+// Historical filter/resolution cases stop at their own authority boundary. Once
+// Feature 006 made compatible resolution launch candidate acquisition, those
+// cases must explicitly contain and drain the later-feature request instead of
+// asserting that the client never dispatches it or leaving Edge work behind for
+// the following controlled-provider case.
+export async function isolateCandidateAcquisition(pages: Page[],
+  diagnostics?: Pick<SafeDiagnostics, 'recordHarnessDiagnostic'>) {
+  if (pages.length < 2 || pages.length > 4 || new Set(pages).size !== pages.length)
+    throw new Error('E2E_SAFE_FAILURE');
+  type State = { requests: number; active: number; started: number; completed: number;
+    failures: number; cancellations: number; reopened: number; everDrained: boolean };
+  const allowed = new Map<string, State>();
+  const tracked = new Map<Request, State>();
+  let harnessFailures = 0;
+  let failed = false, disposed = false;
+  const entries = pages.map(page => {
+    const onFailed = (request: Request) => {
+      const state = tracked.get(request);
+      if (state) state.cancellations++;
+    };
+    return { page, onFailed, handler: async (route: Route) => {
+    let state: State | undefined;
+    try {
+      const body = route.request().postDataJSON();
+      const roomId = body?.room_id;
+      if (disposed || route.request().method() !== 'POST' ||
+          Object.keys(body ?? {}).join(',') !== 'room_id' || typeof roomId !== 'string' ||
+          !allowed.has(roomId)) throw new Error();
+      state = allowed.get(roomId)!;
+      tracked.set(route.request(), state);
+      if (state.everDrained) state.reopened++;
+      state.active++;
+      state.requests++;
+      state.started++;
+      // Historical filter/resolution cases own no provider contract. A fixed safe
+      // Edge-domain response contains any real per-room browser dispatch and
+      // prevents that later-feature request from escaping into the next case.
+      await route.fulfill({ status: 200, contentType: 'application/json',
+        body: JSON.stringify({ outcome: 'not_ready' }) });
+    } catch {
+      failed = true;
+      if (state) state.failures++; else harnessFailures++;
+      await route.abort('failed').catch(() => {});
+    } finally {
+      if (state) {
+        state.active--;
+        state.completed++;
+        if (state.active === 0) state.everDrained = true;
+      }
+    }
+  }}; });
+  for (const entry of entries) {
+    entry.page.on('requestfailed', entry.onFailed);
+    await entry.page.route('**/functions/v1/room-candidate', entry.handler);
+  }
+  const diagnose = (state: State) => containmentDiagnostic({ handoffs: state.requests,
+    activeHandlers: state.active, handlersStarted: state.started, handlersCompleted: state.completed,
+    handlerFailures: state.failures, requestCancellations: state.cancellations,
+    reopenedAfterDrain: state.reopened, harnessFailures, disposed });
+  const drain = async (room: RoomProjection, timeout = 15000) => {
+    const state = allowed.get(room.id);
+    if (disposed || !state) throw new Error('E2E_SAFE_FAILURE');
+    try {
+      await expect.poll(() => failed || disposed ? -1 :
+        state.active === 0 && state.started === state.completed ? 1 : 0, { timeout }).toBe(1);
+    } catch (error) {
+      diagnostics?.recordHarnessDiagnostic(diagnose(state));
+      throw error;
+    }
+    if (failed || disposed || state.active !== 0 || state.started !== state.completed)
+      throw new Error('E2E_SAFE_FAILURE');
+    state.everDrained = true;
+  };
+  return {
+    allow(room: RoomProjection) {
+      if (disposed || !/^[0-9a-f-]{36}$/.test(room.id) || allowed.has(room.id))
+        throw new Error('E2E_SAFE_FAILURE');
+      allowed.set(room.id, { requests: 0, active: 0, started: 0, completed: 0,
+        failures: 0, cancellations: 0, reopened: 0, everDrained: false });
+    },
+    drain,
+    async wait(room: RoomProjection, expectedResolution: 'compatible' | 'incompatible') {
+      // H02/H03 own the terminal resolution transition, not a later-feature
+      // acquisition request. The containment route makes every future request
+      // non-mutating; the expected authoritative terminal is therefore the safe
+      // inspection boundary even when no browser naturally dispatches one.
+      const assertBoundary = (phase: 'before-drain' | 'after-drain') => {
+        const stored = committedRoomSnapshot(room);
+        const diagnostic = candidateBoundaryDiagnostic({ phase, expectedResolution,
+          filterResolution: stored.row.filter_resolution_status,
+          candidateStatus: stored.row.candidate_acquisition_status,
+          authoritativeCandidateNull: stored.row.tmdb_movie_id === null,
+          relatedCandidateEvidenceNull: stored.row.movie_candidate_id === null,
+          decisionCount: stored.row.decision_completed_count });
+        if (diagnostic.missing.length) {
+          diagnostics?.recordHarnessDiagnostic(diagnostic);
+          throw new Error('E2E_SAFE_FAILURE');
+        }
+        return stored;
+      };
+      assertBoundary('before-drain');
+      await drain(room);
+      return assertBoundary('after-drain');
+    },
+    async close() {
+      if (disposed) return;
+      await expect.poll(() => [...allowed.values()].reduce((sum, state) => sum + state.active, 0),
+        { timeout: 30000 }).toBe(0).catch(() => { failed = true; });
+      disposed = true;
+      await Promise.all(entries.map(async entry => {
+        entry.page.removeListener('requestfailed', entry.onFailed);
+        await entry.page.unroute('**/functions/v1/room-candidate', entry.handler);
+      }));
+    },
+  };
 }
 
 // Owner-only bounded snapshots remain in memory. No browser credentials,
@@ -48,7 +175,7 @@ export function committedRoomSnapshot(room: RoomProjection) {
     if (!Array.isArray(snapshots) || snapshots.length !== 1 || !/^[0-9]+$/.test(snapshots[0].xmin)) throw new Error();
     const { row, members, filters } = snapshots[0] as { row: StoredRoom; members: Member[]; filters: StoredFilter[] };
     if (!row || row.id !== room.id || row.code !== room.code ||
-      Object.keys(row).sort().join(',') !== 'candidate_acquisition_status,code,created_at,creation_request_id,creator_user_id,filter_completed_count,filter_resolution_status,id,movie_candidate_id,required_voter_count,state,tmdb_movie_id,updated_at,voter_count' ||
+      Object.keys(row).sort().join(',') !== 'candidate_acquisition_status,code,created_at,creation_request_id,creator_user_id,decision_completed_count,filter_completed_count,filter_resolution_status,id,movie_candidate_id,required_voter_count,state,tmdb_movie_id,updated_at,voter_count' ||
       !Number.isInteger(row.required_voter_count) || row.required_voter_count < 2 || row.required_voter_count > 2147483647 ||
       !Number.isInteger(row.voter_count) || row.voter_count < 0 || row.voter_count > row.required_voter_count ||
       row.state !== (row.voter_count === row.required_voter_count ? 'ready' : 'waiting') ||
@@ -61,6 +188,9 @@ export function committedRoomSnapshot(room: RoomProjection) {
       (row.candidate_acquisition_status === 'assigned') !== (typeof row.tmdb_movie_id === 'number' &&
         Number.isSafeInteger(row.tmdb_movie_id) && row.tmdb_movie_id > 0) ||
       row.candidate_acquisition_status !== 'pending' && row.filter_resolution_status !== 'compatible' ||
+      !Number.isInteger(row.decision_completed_count) || row.decision_completed_count < 0 ||
+      row.decision_completed_count > row.required_voter_count ||
+      row.decision_completed_count > 0 && row.candidate_acquisition_status !== 'assigned' ||
       row.movie_candidate_id !== null && typeof row.movie_candidate_id !== 'string' ||
       !Array.isArray(members) || members.length < 1 || members.length > 5 ||
       members.some(m => Object.keys(m).sort().join(',') !== 'id,is_voter,joined_at,room_id,user_id' || m.room_id !== row.id ||
@@ -106,20 +236,20 @@ export async function startHost(page: Page, diagnostics: SafeDiagnostics): Promi
 
 export async function ownRooms(page: Page, api: PublicApi, targetId?: string, targetCode?: string): Promise<RoomProjection[]> {
   // A real member-authorized Data API read, never an owner/service-role oracle.
-  // Session access stays inside this browser context and only the eight public room fields return.
+    // Session access stays inside this browser context and only the nine public room fields return.
   const rows: unknown = await page.evaluate(async ({ origin, publicKey, targetId, targetCode }) => {
     const key = Object.keys(localStorage).find(name => /^sb-.+-auth-token$/.test(name));
     const session = key ? JSON.parse(localStorage.getItem(key) ?? 'null') : null;
     if (!session?.access_token) throw new Error('E2E_SAFE_FAILURE');
     const filter = targetId ? `&id=eq.${encodeURIComponent(targetId)}` : targetCode ? `&code=eq.${encodeURIComponent(targetCode)}` : '';
-    const response = await fetch(`${origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status${filter}`, {
+    const response = await fetch(`${origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status,decision_completed_count${filter}`, {
       headers: { apikey: publicKey, Authorization: `Bearer ${session.access_token}` },
     });
     if (!response.ok) throw new Error('E2E_SAFE_FAILURE');
     return response.json();
   }, { ...api, targetId, targetCode });
   if (!Array.isArray(rows) || rows.length > 10 || rows.some(row => !row ||
-    Object.keys(row).sort().join(',') !== 'candidate_acquisition_status,code,filter_completed_count,filter_resolution_status,id,required_voter_count,state,voter_count' || typeof row.id !== 'string' ||
+    Object.keys(row).sort().join(',') !== 'candidate_acquisition_status,code,decision_completed_count,filter_completed_count,filter_resolution_status,id,required_voter_count,state,voter_count' || typeof row.id !== 'string' ||
     typeof row.code !== 'string' || !/^[0-9A-F]{10}$/.test(row.code) || !Number.isInteger(row.voter_count) || !Number.isInteger(row.required_voter_count) || row.voter_count < 0 ||
     row.required_voter_count < 2 || row.required_voter_count > 2147483647 || row.voter_count > row.required_voter_count ||
     row.state !== (row.voter_count === row.required_voter_count ? 'ready' : 'waiting') ||
@@ -129,7 +259,10 @@ export async function ownRooms(page: Page, api: PublicApi, targetId?: string, ta
     row.filter_resolution_status !== 'pending' &&
       (row.state !== 'ready' || row.filter_completed_count !== row.required_voter_count) ||
     !['pending','assigned','no_candidates'].includes(row.candidate_acquisition_status) ||
-    row.candidate_acquisition_status !== 'pending' && row.filter_resolution_status !== 'compatible')) {
+    row.candidate_acquisition_status !== 'pending' && row.filter_resolution_status !== 'compatible' ||
+    !Number.isInteger(row.decision_completed_count) || row.decision_completed_count < 0 ||
+    row.decision_completed_count > row.required_voter_count ||
+    row.decision_completed_count > 0 && row.candidate_acquisition_status !== 'assigned')) {
     throw new Error('E2E_SAFE_FAILURE');
   }
   return rows;
@@ -149,7 +282,7 @@ export async function assertWaiting(page: Page, diagnostics: SafeDiagnostics, ro
   expect(await page.evaluate(({ id, participant }) => !document.body.innerText.includes(id) && !document.body.innerText.includes(participant), { id: room.id, participant })).toBe(true);
   await diagnostics.assertAuthAccounting(1, 1);
   await diagnostics.assertNoCredentialTextUi();
-  expect(observeCandidateRpcZero(page).count()).toBe(candidateTrafficBefore);
+  expect(observeCandidateRpcZero(page).count(room.id)).toBe(candidateTrafficBefore);
   await expect(page.getByRole('checkbox')).toHaveCount(0);
 }
 
@@ -218,7 +351,7 @@ export async function realtimeBarrier(page: Page, holdInitial = false) {
     const url = new URL(r.url());
     if (url.pathname.endsWith('/rpc/join_room')) stats.joins++;
     if (url.pathname === '/rest/v1/rooms' && url.searchParams.get('id') &&
-      url.searchParams.get('select')?.replaceAll(' ', '') === 'id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status') {
+      url.searchParams.get('select')?.replaceAll(' ', '') === 'id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status,decision_completed_count') {
       // Dispatch and completion are distinct: a response already in flight can
       // finish after an observed socket loss without issuing any new request.
       stats.readRequests++; readDocuments.set(r, documentGeneration);
@@ -228,7 +361,7 @@ export async function realtimeBarrier(page: Page, holdInitial = false) {
   };
   const response = async (r: Response) => {
     const url = new URL(r.url());
-    if (url.pathname !== '/rest/v1/rooms' || !url.searchParams.get('id') || url.searchParams.get('select')?.replaceAll(' ', '') !== 'id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status') return;
+    if (url.pathname !== '/rest/v1/rooms' || !url.searchParams.get('id') || url.searchParams.get('select')?.replaceAll(' ', '') !== 'id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status,decision_completed_count') return;
     let bytes: Buffer;
     try { bytes = await r.body(); }
     catch {
@@ -247,12 +380,15 @@ export async function realtimeBarrier(page: Page, holdInitial = false) {
       if (bytes.length > 4096) throw new Error('E2E_SAFE_FAILURE');
       const rows = JSON.parse(bytes.toString('utf8'));
       if (!r.ok() || !Array.isArray(rows) || rows.length !== 1 ||
-        Object.keys(rows[0]).sort().join(',') !== 'candidate_acquisition_status,code,filter_completed_count,filter_resolution_status,id,required_voter_count,state,voter_count' || url.searchParams.get('id') !== `eq.${rows[0].id}` ||
+        Object.keys(rows[0]).sort().join(',') !== 'candidate_acquisition_status,code,decision_completed_count,filter_completed_count,filter_resolution_status,id,required_voter_count,state,voter_count' || url.searchParams.get('id') !== `eq.${rows[0].id}` ||
         !['pending','compatible','incompatible'].includes(rows[0].filter_resolution_status) ||
         rows[0].filter_resolution_status !== 'pending' &&
           (rows[0].state !== 'ready' || rows[0].filter_completed_count !== rows[0].required_voter_count) ||
         !['pending','assigned','no_candidates'].includes(rows[0].candidate_acquisition_status) ||
-        rows[0].candidate_acquisition_status !== 'pending' && rows[0].filter_resolution_status !== 'compatible') throw new Error('E2E_SAFE_FAILURE');
+        rows[0].candidate_acquisition_status !== 'pending' && rows[0].filter_resolution_status !== 'compatible' ||
+        !Number.isInteger(rows[0].decision_completed_count) || rows[0].decision_completed_count < 0 ||
+        rows[0].decision_completed_count > rows[0].required_voter_count ||
+        rows[0].decision_completed_count > 0 && rows[0].candidate_acquisition_status !== 'assigned') throw new Error('E2E_SAFE_FAILURE');
       stats.reads++; changed();
     } catch { if (!disposed) failure('read'); }
   };
@@ -370,7 +506,7 @@ export async function assertAccepted(response: Response, room: RoomProjection, o
   member: { isCreator: boolean; isVoter: boolean }, state: 'waiting' | 'ready', count = state === 'ready' ? room.required_voter_count : room.voter_count) {
   const rows: unknown = await response.json();
   const valid = response.ok() && Array.isArray(rows) && rows.length === 1 && rows[0] &&
-    Object.keys(rows[0]).sort().join(',') === 'candidate_acquisition_status,filter_completed_count,filter_resolution_status,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
+    Object.keys(rows[0]).sort().join(',') === 'candidate_acquisition_status,decision_completed_count,filter_completed_count,filter_resolution_status,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
     rows[0].outcome === outcome && rows[0].room_id === room.id && rows[0].room_code === room.code &&
     rows[0].is_creator === member.isCreator && rows[0].is_voter === member.isVoter &&
     rows[0].room_state === state && rows[0].voter_count === count && rows[0].required_voter_count === room.required_voter_count &&
@@ -378,6 +514,9 @@ export async function assertAccepted(response: Response, room: RoomProjection, o
     rows[0].filter_completed_count <= room.required_voter_count &&
     ['pending','compatible','incompatible'].includes(rows[0].filter_resolution_status) &&
     ['pending','assigned','no_candidates'].includes(rows[0].candidate_acquisition_status) &&
+    Number.isInteger(rows[0].decision_completed_count) && rows[0].decision_completed_count >= 0 &&
+    rows[0].decision_completed_count <= rows[0].required_voter_count &&
+    (rows[0].decision_completed_count === 0 || rows[0].candidate_acquisition_status === 'assigned') &&
     (rows[0].candidate_acquisition_status === 'pending' || rows[0].filter_resolution_status === 'compatible') &&
     (rows[0].filter_resolution_status === 'pending' ||
       rows[0].room_state === 'ready' && rows[0].filter_completed_count === room.required_voter_count);
@@ -395,11 +534,11 @@ export async function createWaiting(page: Page, diagnostics: SafeDiagnostics, co
   expect(response.ok() && Object.keys(request).sort().join(',') === 'p_creation_request_id,p_creator_is_voter,p_required_voter_count' &&
     request.p_required_voter_count === configuration.requiredVoterCount && request.p_creator_is_voter === configuration.creatorIsVoter &&
     Array.isArray(rows) && rows.length === 1 && rows[0].outcome === 'created' &&
-    Object.keys(rows[0]).sort().join(',') === 'candidate_acquisition_status,filter_completed_count,filter_resolution_status,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
+    Object.keys(rows[0]).sort().join(',') === 'candidate_acquisition_status,decision_completed_count,filter_completed_count,filter_resolution_status,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
     rows[0].is_creator === true && rows[0].is_voter === configuration.creatorIsVoter && rows[0].room_state === 'waiting' &&
     rows[0].voter_count === Number(configuration.creatorIsVoter) && rows[0].required_voter_count === configuration.requiredVoterCount &&
     rows[0].filter_completed_count === 0 && rows[0].filter_resolution_status === 'pending' &&
-    rows[0].candidate_acquisition_status === 'pending').toBe(true);
+    rows[0].candidate_acquisition_status === 'pending' && rows[0].decision_completed_count === 0).toBe(true);
   const rooms = await ownRooms(page, api);
   expect(rooms.length === 1 && rooms[0].id === rows[0].room_id && rooms[0].code === rows[0].room_code).toBe(true);
   const room = rooms[0];
@@ -425,7 +564,7 @@ export async function assertReady(page: Page, diagnostics: SafeDiagnostics, room
   await expect(page.getByText(`${stored.row.filter_completed_count} of ${stored.row.required_voter_count} filters collected`, { exact: true })).toBeVisible();
   await expect(page.getByTestId('candidate-card')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Retry candidate', exact: true })).toHaveCount(0);
-  expect(observeCandidateRpcZero(page).count()).toBe(0);
+  expect(observeCandidateRpcZero(page).count(room.id)).toBe(0);
 }
 
 export async function linkGuest(guest: SafeDiagnostics, room: RoomProjection, invitation: string) {
@@ -450,7 +589,6 @@ export async function createWaitingWithSession(page: Page, diagnostics: SafeDiag
   previous: ReturnType<typeof committedRoomSnapshot>, configuration: CreationConfiguration = twoVoters) {
   await diagnostics.assertAuthAccounting(1, 1);
   const participant = await ownParticipant(page);
-  const candidateTrafficBefore = observeCandidateRpcZero(page).count();
   expect((await page.goto('/'))?.status() === 200).toBe(true);
   await expect(page.getByRole('button', { name: 'Create Room' })).toBeVisible();
   await configureCreation(page, configuration);
@@ -463,7 +601,7 @@ export async function createWaitingWithSession(page: Page, diagnostics: SafeDiag
   const room = selectCreatedTrial(await response.json(), await ownRooms(page, api), request?.p_creation_request_id,
     previous.row.creation_request_id, previous.row.id);
   await assertAccepted(await recovered, room, 'already_member', { isCreator: true, isVoter: configuration.creatorIsVoter }, 'waiting');
-  await assertWaiting(page, diagnostics, room, candidateTrafficBefore);
+  await assertWaiting(page, diagnostics, room);
   await diagnostics.assertAuthAccounting(1, 1);
   expect(await ownParticipant(page) === participant).toBe(true);
   const invitation = await page.getByLabel('Invitation link', { exact: true }).innerText();

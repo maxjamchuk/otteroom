@@ -7,6 +7,8 @@ import { CommonFilterResolutionPanel } from '../../src/resolution/common-filter-
 import { useCommonFilterResolution } from '../../src/resolution/use-common-filter-resolution';
 import { CandidateCard } from '../../src/candidates/candidate-card';
 import { useRoomCandidate } from '../../src/candidates/use-room-candidate';
+import { CandidateDecisionSurface } from '../../src/decisions/candidate-decision-surface';
+import { useCandidateDecision } from '../../src/decisions/use-candidate-decision';
 import { invitationLink, parseRoomSegment } from '../../src/rooms/code';
 import { InvitationQr } from '../../src/rooms/invitation-qr';
 import { joinRoom } from '../../src/rooms/service';
@@ -86,6 +88,10 @@ function AcceptedRoom({ initial }: { initial: AcceptedRoomState & { invitation?:
   const filters = useParticipantFilter(state, error, observeFilterProgress);
   const resolution = useCommonFilterResolution(state, observeResolutionStatus);
   const candidate = useRoomCandidate(state);
+  const decision = useCandidateDecision(state, candidate);
+  const recognizableCandidate = candidate.candidate !== null &&
+    (candidate.attempt === 'loading-poster' || candidate.attempt === 'poster-error' ||
+      candidate.attempt === 'available' || candidate.attempt === 'no-poster');
   const invitation = state.isCreator || state.state === 'waiting' ? initial.invitation : undefined;
   return <>
     <Text accessibilityRole="header" style={styles.title}>{state.title}</Text>
@@ -101,7 +107,9 @@ function AcceptedRoom({ initial }: { initial: AcceptedRoomState & { invitation?:
     </>}
     {error && <>
       <Text accessibilityLiveRegion="polite">Unable to synchronize this room. Please try again.</Text>
-      <Pressable accessibilityRole="button" accessibilityLabel="Retry synchronization" disabled={retrying} onPress={retry}>
+      <Pressable accessibilityRole="button" accessibilityLabel="Retry synchronization" disabled={retrying} onPress={() => {
+        decision.synchronize(); retry();
+      }}>
         <Text>{retrying ? 'Reconnecting…' : 'Retry synchronization'}</Text>
       </Pressable>
     </>}
@@ -113,7 +121,9 @@ function AcceptedRoom({ initial }: { initial: AcceptedRoomState & { invitation?:
         {!state.filtersComplete && <Text>Waiting for voters to finish their filters.</Text>}
       </>}
       {state.filtersComplete && <CommonFilterResolutionPanel model={resolution} />}
-      <CandidateCard model={candidate} />
+    {recognizableCandidate
+      ? <CandidateDecisionSurface candidate={candidate} decision={decision} />
+      : <CandidateCard model={candidate} />}
     </>}
   </>;
 }

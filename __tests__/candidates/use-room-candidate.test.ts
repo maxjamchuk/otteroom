@@ -10,7 +10,7 @@ const base: AcceptedRoomState = { kind: 'accepted', id: '11111111-1111-4111-8111
   code: 'ABCDEF0123', isCreator: true, isVoter: true, state: 'ready', title: 'Ready',
   voterCount: 2, requiredVoterCount: 2, filterCompletedCount: 2, filtersComplete: true,
   filterResolutionStatus: 'compatible', resolutionIntegrityError: false,
-  candidateAcquisitionStatus: 'pending', candidateIntegrityError: false };
+  candidateAcquisitionStatus: 'pending', candidateIntegrityError: false, decisionCompletedCount: 0 };
 const available = { outcome: 'available', candidate: { tmdbMovieId: 7, title: 'TMDB Film',
   releaseYear: 2020, posterUrl: 'https://image.tmdb.org/t/p/w500/a.jpg' } } as const;
 function deferred<T>() { let resolve!: (value:T)=>void, reject!: (value:unknown)=>void;

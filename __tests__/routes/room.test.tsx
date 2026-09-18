@@ -7,6 +7,7 @@ import RoomRouteScreen from '../../app/room/[code]';
 const mockJoin = jest.fn(), mockRefetch = jest.fn(), mockBootstrap = jest.fn(), mockRemove = jest.fn();
 const mockRecover = jest.fn(), mockSubmit = jest.fn(), mockEnsureCandidate = jest.fn();
 const mockResolve = jest.fn();
+const mockGetDecision = jest.fn(), mockSubmitDecision = jest.fn();
 jest.mock('../../src/rooms/service', () => ({
   joinRoom: (code: string) => mockJoin(code), refetchRoom: (id: string) => mockRefetch(id),
 }));
@@ -17,6 +18,10 @@ jest.mock('../../src/filters/service', () => ({
 }));
 jest.mock('../../src/candidates/service', () => ({ ensureRoomCandidate: (id: string) => mockEnsureCandidate(id) }));
 jest.mock('../../src/resolution/service', () => ({ resolveCommonFilters: (id: string) => mockResolve(id) }));
+jest.mock('../../src/decisions/service', () => ({
+  getCandidateDecision: (...args: unknown[]) => mockGetDecision(...args),
+  submitCandidateDecision: (...args: unknown[]) => mockSubmitDecision(...args),
+}));
 jest.mock('../../src/auth/anonymous-session', () => ({ bootstrapAnonymousSession: () => mockBootstrap() }));
 
 type TestChannel = { on: jest.Mock; subscribe: jest.Mock; status: (value: string) => void;
@@ -37,7 +42,8 @@ jest.mock('../../src/lib/supabase', () => ({ getSupabase: () => ({ channel: mock
 const host = { outcome: 'already_member', room_id: '11111111-1111-4111-8111-111111111111',
   room_code: 'ABCDEF0123', room_state: 'waiting', is_creator: true, is_voter: true,
   voter_count: 1, required_voter_count: 2, filter_completed_count: 0,
-  filter_resolution_status: 'pending', candidate_acquisition_status: 'pending' } as const;
+  filter_resolution_status: 'pending', candidate_acquisition_status: 'pending',
+  decision_completed_count: 0 } as const;
 const absent = { outcome: 'not_submitted', genres: null, release_year_from: null, release_year_to: null,
   filter_completed_count: 0, required_voter_count: 2, allowed_release_year_max: 2026 } as const;
 const saved = { outcome: 'saved', genres: ['action'], release_year_from: 1990, release_year_to: 2020,
@@ -49,12 +55,19 @@ beforeEach(() => {
   mockBootstrap.mockReset().mockResolvedValue({ user: { id: 'retained' } });
   mockRefetch.mockReset().mockResolvedValue({ id: host.room_id, code: host.room_code, state: 'ready',
     voter_count: 2, required_voter_count: 2, filter_completed_count: 0,
-    filter_resolution_status: 'pending', candidate_acquisition_status: 'pending' });
+    filter_resolution_status: 'pending', candidate_acquisition_status: 'pending',
+    decision_completed_count: 0 });
   mockRecover.mockReset().mockResolvedValue(absent);
   mockSubmit.mockReset().mockResolvedValue(saved);
   mockEnsureCandidate.mockReset().mockResolvedValue({ outcome: 'available', candidate: {
     tmdbMovieId: 7, title: 'TMDB Film', releaseYear: 2020, posterUrl: null } });
   mockResolve.mockReset().mockResolvedValue({ outcome: 'compatible', filter_resolution_status: 'compatible' });
+  mockGetDecision.mockReset().mockResolvedValue({ outcome: 'not_decided', myDecision: null,
+    completedCount: 0, requiredVoterCount: 2, decisionSetComplete: false,
+    twoVoterAgreement: false });
+  mockSubmitDecision.mockReset().mockResolvedValue({ outcome: 'accepted', myDecision: 'yes',
+    completedCount: 1, requiredVoterCount: 2, decisionSetComplete: false,
+    twoVoterAgreement: false });
   mockRemove.mockReset().mockImplementation(async (channel: TestChannel) => { channel.status('CLOSED'); return 'ok'; });
 });
 afterEach(() => jest.restoreAllMocks());
@@ -234,7 +247,7 @@ it('fails closed when the room channel observes conflicting terminal authorities
   mockRecover.mockResolvedValue({...saved,outcome:'locked',filter_completed_count:2});
   mockRefetch.mockResolvedValue({id:host.room_id,code:host.room_code,state:'ready',voter_count:2,
     required_voter_count:2,filter_completed_count:2,filter_resolution_status:'incompatible',
-    candidate_acquisition_status:'pending'});
+    candidate_acquisition_status:'pending',decision_completed_count:0});
   await mount();
   expect(screen.getByText('Filters are compatible.')).toBeVisible();
   await act(async()=>{channels[0].system({extension:'postgres_changes',status:'ok'});});
@@ -257,6 +270,113 @@ it('suppresses candidate and new-room success when Edge contradicts assigned aut
   expect(screen.queryByTestId('candidate-poster-fallback')).toBeNull();
   expect(screen.queryByRole('button',{name:/Retry.*movie/i})).toBeNull();
   expect(screen.queryByRole('link',{name:'Create a new room'})).toBeNull();
+});
+
+it('gives a voting creator the same authoritative Yes/No controls without changing the candidate', async () => {
+  mockJoin.mockResolvedValue(ready({ is_creator: true, is_voter: true, filter_completed_count: 2,
+    filter_resolution_status: 'compatible', candidate_acquisition_status: 'assigned' }));
+  mockRecover.mockResolvedValue({ ...saved, outcome: 'locked', filter_completed_count: 2 });
+  await mount();
+  expect(mockGetDecision).toHaveBeenCalledWith(host.room_id, 7);
+  expect(screen.getByText('TMDB Film')).toBeVisible();
+  expect(screen.getByText('2020')).toBeVisible();
+  fireEvent.press(screen.getByRole('button', { name: 'Yes — want to watch' }));
+  await act(async () => {});
+  expect(mockSubmitDecision).toHaveBeenCalledWith(host.room_id, 7, 'yes');
+  expect(screen.getByText('You chose Yes')).toBeVisible();
+  expect(mockEnsureCandidate).toHaveBeenCalledTimes(1);
+});
+
+it('lets a non-voting creator recover aggregate status but exposes no decision controls', async () => {
+  mockJoin.mockResolvedValue(ready({ is_creator: true, is_voter: false, filter_completed_count: 2,
+    filter_resolution_status: 'compatible', candidate_acquisition_status: 'assigned' }));
+  mockGetDecision.mockResolvedValue({ outcome: 'observer', myDecision: null, completedCount: 1,
+    requiredVoterCount: 2, decisionSetComplete: false, twoVoterAgreement: false });
+  await mount();
+  expect(mockGetDecision).toHaveBeenCalledWith(host.room_id, 7);
+  expect(screen.getByText('1 of 2 decisions collected.')).toBeVisible();
+  expect(screen.queryByRole('button', { name: /want to watch/ })).toBeNull();
+  expect(mockSubmitDecision).not.toHaveBeenCalled();
+  expect(screen.getByText('TMDB Film')).toBeVisible();
+});
+
+it('keeps the candidate stable through uncertain submission and explicit private reconciliation', async () => {
+  mockJoin.mockResolvedValue(ready({ filter_completed_count: 2,
+    filter_resolution_status: 'compatible', candidate_acquisition_status: 'assigned' }));
+  mockRecover.mockResolvedValue({ ...saved, outcome: 'locked', filter_completed_count: 2 });
+  mockSubmitDecision.mockRejectedValueOnce(new Error('committed response discarded'));
+  await mount();
+  fireEvent.press(screen.getByRole('button', { name: "No — don't want to watch" }));
+  await act(async () => {});
+  expect(screen.getByText('Unable to confirm your choice. Please retry.')).toBeVisible();
+  expect(screen.getAllByRole('button', { name: /want to watch/ })).toHaveLength(2);
+  expect(screen.getByRole('button', { name: "No — don't want to watch" })).toBeDisabled();
+  expect(screen.getByText('TMDB Film')).toBeVisible();
+  mockGetDecision.mockResolvedValueOnce({ outcome: 'decided', myDecision: 'no', completedCount: 1,
+    requiredVoterCount: 2, decisionSetComplete: false, twoVoterAgreement: false });
+  fireEvent.press(screen.getByRole('button', { name: 'Retry decision recovery' }));
+  await act(async () => {});
+  expect(screen.getByText('You chose No')).toBeVisible();
+  expect(screen.getByText('TMDB Film')).toBeVisible();
+  expect(mockEnsureCandidate).toHaveBeenCalledTimes(1);
+  expect(mockSubmitDecision).toHaveBeenCalledTimes(1);
+});
+
+it('uses synchronization Retry to reread private decision authority on the same candidate', async () => {
+  mockJoin.mockResolvedValue(ready({ filter_completed_count: 2,
+    filter_resolution_status: 'compatible', candidate_acquisition_status: 'assigned',
+    decision_completed_count: 1 }));
+  mockRecover.mockResolvedValue({ ...saved, outcome: 'locked', filter_completed_count: 2 });
+  mockGetDecision.mockResolvedValue({ outcome: 'decided', myDecision: 'yes', completedCount: 1,
+    requiredVoterCount: 2, decisionSetComplete: false, twoVoterAgreement: false });
+  await mount();
+  expect(screen.getByText('You chose Yes')).toBeVisible();
+  await act(async () => channels[0].status('CHANNEL_ERROR'));
+  fireEvent.press(screen.getByRole('button', { name: 'Retry synchronization' }));
+  await act(async () => {});
+  expect(mockGetDecision).toHaveBeenCalledTimes(2);
+  expect(screen.getByText('You chose Yes')).toBeVisible();
+  expect(screen.getByText('TMDB Film')).toBeVisible();
+  expect(mockEnsureCandidate).toHaveBeenCalledTimes(1);
+});
+
+it.each([['no', "No — don't want to watch"], ['yes', 'Yes — want to watch']] as const)(
+  'exposes keyboard-equivalent %s activation with exact accessible labels and live result',
+  async (value, label) => {
+    mockJoin.mockResolvedValue(ready({ filter_completed_count: 2,
+      filter_resolution_status: 'compatible', candidate_acquisition_status: 'assigned' }));
+    mockRecover.mockResolvedValue({ ...saved, outcome: 'locked', filter_completed_count: 2 });
+    mockSubmitDecision.mockResolvedValue({ outcome: 'accepted', myDecision: value,
+      completedCount: 1, requiredVoterCount: 2, decisionSetComplete: false,
+      twoVoterAgreement: false });
+    await mount();
+    const buttons = screen.getAllByRole('button', { name: /want to watch/ });
+    expect(buttons).toHaveLength(2);
+    expect(buttons[0]).toHaveProp('focusable', true);
+    expect(buttons[1]).toHaveProp('focusable', true);
+    // Pressable's activation event is the shared touch/Enter/Space semantic path.
+    fireEvent.press(screen.getByRole('button', { name: label }));
+    await act(async () => {});
+    expect(mockSubmitDecision).toHaveBeenCalledWith(host.room_id, 7, value);
+    expect(screen.getByText(`You chose ${value === 'yes' ? 'Yes' : 'No'}`)).toHaveProp(
+      'accessibilityLiveRegion', 'polite');
+    expect(screen.getByText('TMDB Film')).toBeVisible();
+  });
+
+it('renders exact-two agreement as a neutral current-candidate fact with no progression', async () => {
+  mockJoin.mockResolvedValue(ready({ filter_completed_count: 2,
+    filter_resolution_status: 'compatible', candidate_acquisition_status: 'assigned',
+    decision_completed_count: 2 }));
+  mockRecover.mockResolvedValue({ ...saved, outcome: 'locked', filter_completed_count: 2 });
+  mockGetDecision.mockResolvedValue({ outcome: 'decided', myDecision: 'yes', completedCount: 2,
+    requiredVoterCount: 2, decisionSetComplete: true, twoVoterAgreement: true });
+  await mount();
+  expect(screen.getByText('2 of 2 decisions collected.')).toBeVisible();
+  expect(screen.getByText('Current candidate agreement: both voters chose Yes.')).toBeVisible();
+  expect(screen.queryByText(/next candidate|match|celebrat/i)).toBeNull();
+  expect(screen.getByText('TMDB Film')).toBeVisible();
+  expect(mockEnsureCandidate).toHaveBeenCalledTimes(1);
+  expect(mockSubmitDecision).not.toHaveBeenCalled();
 });
 
 it('keeps room synchronization Retry separate from resolution Retry',async()=>{
@@ -286,7 +406,7 @@ it('only a fresh canonical room entry clears a terminal integrity overlay',async
   mockRecover.mockResolvedValue({...saved,outcome:'locked',filter_completed_count:2});
   mockRefetch.mockResolvedValue({id:host.room_id,code:host.room_code,state:'ready',voter_count:2,
     required_voter_count:2,filter_completed_count:2,filter_resolution_status:'incompatible',
-    candidate_acquisition_status:'pending'});
+    candidate_acquisition_status:'pending',decision_completed_count:0});
   await mount('/room/ABCDEF0123',true);
   await act(async()=>{channels[0].system({extension:'postgres_changes',status:'ok'});});
   expect(screen.getByText('Common-filter status could not be verified.')).toBeVisible();
@@ -345,7 +465,8 @@ it.each([
 ])('keeps rejected %s projection private and opens no channel or filter request', async (outcome, message) => {
   mockJoin.mockResolvedValue({ outcome, room_id: null, room_code: null, room_state: null,
     is_creator: null, is_voter: null, voter_count: null, required_voter_count: null,
-    filter_completed_count: null, filter_resolution_status: null, candidate_acquisition_status: null });
+    filter_completed_count: null, filter_resolution_status: null, candidate_acquisition_status: null,
+    decision_completed_count: null });
   await mount();
   expect(screen.getByText(message)).toBeVisible();
   expect(mockChannel).not.toHaveBeenCalled(); expect(mockRecover).not.toHaveBeenCalled();

@@ -24,6 +24,18 @@ const prelude = `
   const sentinel = () => 'synthetic-' + randomUUID();
 `;
 
+it('Feature 007 diagnostics retain only fixed categories and bounded aggregate counts', () => verify(prelude + `
+  const { decisionDiagnostic } = await import('./e2e/support/safe-diagnostics.ts');
+  for (const category of ['authentication','recovery','submission','synchronization','performance'])
+    assert.deepEqual(decisionDiagnostic(category,{attempts:20,recoverableFailures:0}),
+      {component:'candidate-decision',category,attempts:20,recoverableFailures:0});
+  for (const value of [{attempts:21,recoverableFailures:0},{attempts:1,recoverableFailures:2},
+    {attempts:1,recoverableFailures:0,room_id:'synthetic'}])
+    assert.throws(()=>decisionDiagnostic('submission',value));
+  for (const category of ['yes','no','peer','raw-rpc',sentinel()])
+    assert.throws(()=>decisionDiagnostic(category,{attempts:1,recoverableFailures:0}));
+`));
+
 it('Feature 006 diagnostics accept only fixed failure categories and bounded aggregate counts', () => verify(prelude + `
   const { candidateDiagnostic } = await import('./e2e/support/safe-diagnostics.ts');
   for (const category of ['authentication','request','preflight','search_incomplete','assignment','metadata','poster']) {
@@ -76,6 +88,228 @@ describe('credential-safe diagnostics boundaries', () => {
     await overlap.wait(); overlap.release(); await Promise.all(calls); await overlap.close();
     assert.equal(pages.every(page => page.routes.length === 0), true); assert.equal(continued, 3);
     assert.equal(JSON.stringify(overlap).includes(body.p_room_id), false);
+  `));
+  it('scopes candidate traffic by room without requiring one request per page or replacing browser requests', () => verify(prelude + `
+    const { isolateCandidateAcquisition } = await import('./e2e/support/room-harness.ts');
+    const { installCandidateRequestOverlap } = await import('./e2e/support/candidate-harness.ts');
+    const makePage = () => ({ routes: [], events: new Map(),
+      async route(match, handler) { this.routes.push({ match, handler }); },
+      async unroute(match, handler) { this.routes = this.routes.filter(item => item.match !== match || item.handler !== handler); },
+      on(name, handler) { if (!this.events.has(name)) this.events.set(name, new Set()); this.events.get(name).add(handler); },
+      removeListener(name, handler) { this.events.get(name)?.delete(handler); },
+      emit(name, value) { for (const handler of this.events.get(name) ?? []) handler(value); } });
+    const room = id => ({ id, code: 'ABCDEF0123', state: 'ready', voter_count: 2,
+      required_voter_count: 2, filter_completed_count: 2, filter_resolution_status: 'compatible',
+      candidate_acquisition_status: 'pending', decision_completed_count: 0 });
+    const firstRoom = room('11111111-1111-4111-8111-111111111111');
+    const secondRoom = room('22222222-2222-4222-8222-222222222222');
+    const isolatedPages = [makePage(), makePage()];
+    const isolated = await isolateCandidateAcquisition(isolatedPages);
+    isolated.allow(firstRoom); isolated.allow(secondRoom);
+    // Historical H02/H03 may validly reach compatible authority without any
+    // later-feature candidate dispatch. Zero traffic must already be drained.
+    await isolated.drain(secondRoom);
+    let fulfilled = 0;
+    await isolatedPages[0].routes[0].handler({
+      request: () => ({ method: () => 'POST', postDataJSON: () => ({ room_id: firstRoom.id }) }),
+      fulfill: async value => { assert.equal(value.body, '{"outcome":"not_ready"}'); fulfilled++; },
+      abort: async () => { throw new Error('unexpected abort'); },
+    });
+    await isolated.drain(firstRoom); assert.equal(fulfilled, 1);
+    await isolated.close(); assert.equal(isolatedPages.every(page => page.routes.length === 0), true);
+
+    const pages = [makePage(), makePage(), makePage()];
+    const overlap = await installCandidateRequestOverlap(pages, firstRoom);
+    let forwarded = 0;
+    const candidate = { outcome: 'available', candidate: { tmdb_movie_id: 6006,
+      title: 'Controlled Constellation', release_year: 2005,
+      poster_url: 'https://image.tmdb.org/t/p/w500/controlled.png' } };
+    const call = page => {
+      const request = { method: () => 'POST', postDataJSON: () => ({ room_id: firstRoom.id }) };
+      return page.routes[0].handler({ request: () => request,
+        continue: async () => { forwarded++; const response = { request: () => request, status: () => 200,
+          body: async () => Buffer.from(JSON.stringify(candidate)) }; page.emit('response', response);
+          page.emit('requestfinished', request); },
+        abort: async () => { throw new Error('unexpected abort'); },
+      });
+    };
+    const calls = [call(pages[0]), call(pages[1])];
+    await overlap.wait(); overlap.release(); await Promise.all(calls); await overlap.drain();
+    assert.equal(forwarded, 2); assert.deepEqual(overlap.results(), [
+      { status: 200, outcome: 'available' }, { status: 200, outcome: 'available' }]);
+    await overlap.close();
+    assert.equal(pages.every(page => page.routes.length === 0), true);
+  `));
+  it('classifies every containment and native candidate drain subcondition independently', () => verify(prelude + `
+    const { containmentDiagnostic, candidateBoundaryDiagnostic, candidateOverlapDiagnostic,
+      filterResolutionBoundaryDiagnostic, parseHarnessDiagnostic } =
+      await import('./e2e/support/harness-observability.ts');
+    const containment = (patch = {}) => containmentDiagnostic({ handoffs: 0, activeHandlers: 0,
+      handlersStarted: 0, handlersCompleted: 0, handlerFailures: 0, requestCancellations: 0,
+      reopenedAfterDrain: 0, harnessFailures: 0, disposed: false, ...patch });
+    assert.equal(containment().classification, 'no-handoff');
+    assert.equal(containment({ handoffs: 1, activeHandlers: 1, handlersStarted: 1 }).classification, 'active-handler');
+    assert.equal(containment({ handoffs: 2, activeHandlers: 1, handlersStarted: 2,
+      handlersCompleted: 1, reopenedAfterDrain: 1 }).classification, 'new-work-after-drain');
+    assert.equal(containment({ handoffs: 1, handlersStarted: 1, handlersCompleted: 1,
+      handlerFailures: 1 }).classification, 'handler-failure');
+    assert.equal(containment({ handoffs: 1, handlersStarted: 1, handlersCompleted: 1,
+      requestCancellations: 1 }).classification, 'request-cancellation');
+    assert.equal(containment({ harnessFailures: 1 }).classification, 'other');
+    assert.equal(containment({ disposed: true }).classification, 'disposed');
+    assert.deepEqual(parseHarnessDiagnostic(containment({ handoffs: 1, activeHandlers: 1,
+      handlersStarted: 1 })), containment({ handoffs: 1, activeHandlers: 1, handlersStarted: 1 }));
+
+    const boundary = (patch = {}) => candidateBoundaryDiagnostic({ phase: 'before-drain',
+      expectedResolution: 'compatible', filterResolution: 'compatible', candidateStatus: 'pending',
+      authoritativeCandidateNull: true, relatedCandidateEvidenceNull: true, decisionCount: 0, ...patch });
+    assert.deepEqual(boundary().missing, []); assert.equal(boundary().compatible, true);
+    const incompatible = boundary({ expectedResolution: 'incompatible', filterResolution: 'incompatible' });
+    assert.deepEqual(incompatible.missing, []); assert.equal(incompatible.compatible, false);
+    assert.deepEqual(boundary({ filterResolution: 'incompatible' }).missing, ['resolution-mismatch']);
+    assert.deepEqual(boundary({ candidateStatus: 'assigned' }).missing, ['candidate-pending']);
+    assert.deepEqual(boundary({ authoritativeCandidateNull: false }).missing,
+      ['authoritative-candidate-null']);
+    assert.deepEqual(boundary({ relatedCandidateEvidenceNull: false }).missing,
+      ['related-candidate-evidence-null']);
+    assert.deepEqual(boundary({ decisionCount: 1 }).missing, ['decisions-zero']);
+    const everyBoundaryFailure = boundary({ filterResolution: 'pending', candidateStatus: 'no_candidates',
+      authoritativeCandidateNull: false, relatedCandidateEvidenceNull: false, decisionCount: 2 });
+    assert.deepEqual(everyBoundaryFailure.missing, ['resolution-mismatch','candidate-pending',
+      'authoritative-candidate-null','related-candidate-evidence-null','decisions-zero']);
+    assert.deepEqual(parseHarnessDiagnostic(incompatible), incompatible);
+
+    const resolutionBoundary = (patch = {}) => filterResolutionBoundaryDiagnostic({
+      operationPhase: 'concurrent-filter-submission', expectedFilterCount: 2,
+      authoritativeFilterCount: 2, expectedResolution: 'compatible',
+      filterResolution: 'compatible', terminalViewObserved: true,
+      resolverRequestsObserved: 2, resolverResponsesObserved: 2,
+      resolverSuccessResponses: 2, resolverRequestFailures: 0, ...patch });
+    assert.deepEqual(resolutionBoundary().missing, []);
+    assert.deepEqual(resolutionBoundary({ authoritativeFilterCount: 1 }).missing, ['filter-count']);
+    assert.deepEqual(resolutionBoundary({ filterResolution: 'pending' }).missing, ['terminal-authority']);
+    assert.deepEqual(resolutionBoundary({ terminalViewObserved: false }).missing, ['terminal-view']);
+    assert.deepEqual(resolutionBoundary({ authoritativeFilterCount: 1,
+      filterResolution: 'pending', terminalViewObserved: false }).missing,
+      ['filter-count','terminal-authority','terminal-view']);
+    assert.deepEqual(parseHarnessDiagnostic(resolutionBoundary()), resolutionBoundary());
+
+    const request = sequence => ({ sequence, routeObserved: true, continueSucceeded: true,
+      nativeResponseObserved: true, httpStatus: 200, expectedAvailable: true,
+      requestFinished: true, requestFailed: 'none', active: false });
+    const overlap = (patch = {}, requests = [request('req-1'), request('req-2')]) =>
+      candidateOverlapDiagnostic({ forwarding: 0, responseValidationActive: 0, failed: false,
+        disposed: false, provider: { state: 'observed', requests: 3, completed: 2, active: 1 },
+        authority: 'absent', requests, ...patch });
+    assert.deepEqual(overlap().missing, []); assert.equal(overlap().phase, 'before-authority');
+    assert.deepEqual(overlap({}, [request('req-1')]).missing, ['minimum-overlap']);
+    assert.deepEqual(overlap({}, [{ ...request('req-1'), continueSucceeded: false }, request('req-2')]).missing,
+      ['native-continue']);
+    assert.deepEqual(overlap({}, [{ ...request('req-1'), nativeResponseObserved: false,
+      httpStatus: null, expectedAvailable: false }, request('req-2')]).missing,
+      ['native-response','http-200-available']);
+    assert.deepEqual(overlap({}, [{ ...request('req-1'), httpStatus: 503,
+      expectedAvailable: false }, request('req-2')]).missing, ['http-200-available']);
+    assert.deepEqual(overlap({}, [{ ...request('req-1'), requestFinished: false,
+      active: true }, request('req-2')]).missing, ['request-settlement','active-request']);
+    assert.deepEqual(overlap({}, [{ ...request('req-1'), requestFinished: false,
+      requestFailed: 'aborted' }, request('req-2')]).missing, ['request-failure']);
+    assert.deepEqual(overlap({ responseValidationActive: 1 }).missing, ['response-validation']);
+    assert.deepEqual(overlap({ forwarding: 1 }).missing, ['forwarding']);
+    assert.deepEqual(overlap({ failed: true }).missing, ['harness-failure']);
+    assert.deepEqual(overlap({ disposed: true }).missing, ['disposed']);
+    const after = overlap({ authority: 'present' }); assert.equal(after.phase, 'after-authority');
+    assert.deepEqual(parseHarnessDiagnostic(after), after);
+
+    const harness = fs.readFileSync('e2e/support/room-harness.ts','utf8');
+    const beforeBoundary = harness.indexOf("assertBoundary('before-drain')");
+    const drainBoundary = harness.indexOf('await drain(room)', beforeBoundary);
+    const afterBoundary = harness.indexOf("assertBoundary('after-drain')", drainBoundary);
+    assert.equal(beforeBoundary >= 0 && beforeBoundary < drainBoundary && drainBoundary < afterBoundary, true);
+    const h02 = fs.readFileSync('e2e/participant-filters.spec.ts','utf8');
+    const installContainment = h02.indexOf('await isolateCandidateAcquisition(pages, diagnostics)');
+    const createFirstRoom = h02.indexOf('await createWaiting(', installContainment);
+    const allowFirstRoom = h02.indexOf('candidateIsolation.allow(initial.room)', createFirstRoom);
+    const firstFilterSubmission = h02.indexOf('submitOwnFilter(', allowFirstRoom);
+    assert.equal(installContainment >= 0 && installContainment < createFirstRoom &&
+      createFirstRoom < allowFirstRoom && allowFirstRoom < firstFilterSubmission, true);
+    assert.equal(h02.includes("candidateIsolation.wait(initial.room, 'incompatible')"), true);
+    assert.equal(h02.includes("candidateIsolation.wait(next.room, 'compatible')"), true);
+    assert.equal(h02.includes("candidateIsolation.wait(third.room, 'compatible')"), true);
+    const installConcurrentResolution = h02.indexOf('observeFilterResolutionBoundary(pages, next.room');
+    const releaseConcurrentFilters = h02.indexOf('overlap.release()', installConcurrentResolution);
+    const waitConcurrentResolution = h02.indexOf('await concurrentResolution.wait(first.page)', releaseConcurrentFilters);
+    const inspectConcurrentCandidate = h02.indexOf("candidateIsolation.wait(next.room, 'compatible')",
+      waitConcurrentResolution);
+    assert.equal(installConcurrentResolution >= 0 &&
+      installConcurrentResolution < releaseConcurrentFilters &&
+      releaseConcurrentFilters < waitConcurrentResolution &&
+      waitConcurrentResolution < inspectConcurrentCandidate, true);
+    const installLostResponseResolution = h02.indexOf('observeFilterResolutionBoundary(pages, third.room');
+    const finalLostResponseFilter = h02.indexOf('submitOwnFilter(second.page', installLostResponseResolution);
+    const waitLostResponseResolution = h02.indexOf('await lostResponseResolution.wait(first.page)',
+      finalLostResponseFilter);
+    const inspectLostResponseCandidate = h02.indexOf("candidateIsolation.wait(third.room, 'compatible')",
+      waitLostResponseResolution);
+    assert.equal(installLostResponseResolution >= 0 &&
+      installLostResponseResolution < finalLostResponseFilter &&
+      finalLostResponseFilter < waitLostResponseResolution &&
+      waitLostResponseResolution < inspectLostResponseCandidate, true);
+    const resolutionHarness = fs.readFileSync('e2e/support/resolution-harness.ts','utf8');
+    const observerStart = resolutionHarness.indexOf('export function observeFilterResolutionBoundary');
+    const observerEnd = resolutionHarness.indexOf('export async function installResolutionPreCommitFailure',
+      observerStart);
+    const observer = resolutionHarness.slice(observerStart, observerEnd);
+    for (const required of ["page.on('request'", "page.on('response'", "page.on('requestfailed'",
+      'await assertResolutionView(page,expectedResolution)', 'committedRoomSnapshot(room)'])
+      assert.equal(observer.includes(required), true);
+    for (const forbidden of ['page.route(', 'route.fetch(', 'route.continue(', 'waitForTimeout(', 'setTimeout('])
+      assert.equal(observer.includes(forbidden), false);
+  `));
+  it('emits bounded safe diagnostics from both drain timeout paths and retains them in the safe receipt', () => verify(prelude + `
+    const { isolateCandidateAcquisition } = await import('./e2e/support/room-harness.ts');
+    const { installCandidateRequestOverlap } = await import('./e2e/support/candidate-harness.ts');
+    const { candidateBoundaryDiagnostic } = await import('./e2e/support/harness-observability.ts');
+    const { safeResult } = await import('./e2e/support/safe-reporter.ts');
+    const { scanArtifacts } = await import('./scripts/check-e2e-artifacts.mjs');
+    const makePage = () => ({ routes: [], events: new Map(),
+      async route(match, handler) { this.routes.push({ match, handler }); },
+      async unroute(match, handler) { this.routes = this.routes.filter(item => item.match !== match || item.handler !== handler); },
+      on(name, handler) { if (!this.events.has(name)) this.events.set(name, new Set()); this.events.get(name).add(handler); },
+      removeListener(name, handler) { this.events.get(name)?.delete(handler); } });
+    const room = { id: '11111111-1111-4111-8111-111111111111', code: 'ABCDEF0123', state: 'ready',
+      voter_count: 2, required_voter_count: 2, filter_completed_count: 2,
+      filter_resolution_status: 'compatible', candidate_acquisition_status: 'pending', decision_completed_count: 0 };
+    const captured = [], sink = { recordHarnessDiagnostic: value => captured.push(value) };
+    const first = [makePage(), makePage()], containment = await isolateCandidateAcquisition(first, sink);
+    containment.allow(room); await containment.drain(room, 5);
+    let release; const active = first[0].routes[0].handler({
+      request: () => ({ method: () => 'POST', postDataJSON: () => ({ room_id: room.id }) }),
+      fulfill: async () => new Promise(resolve => { release = resolve; }),
+      abort: async () => { throw new Error('unexpected abort'); },
+    });
+    for(let index=0;index<20&&!release;index++)await new Promise(resolve=>setTimeout(resolve,1));
+    await assert.rejects(containment.drain(room, 5));
+    assert.equal(captured[0].classification, 'new-work-after-drain');
+    assert.equal(captured[0].handoffs, 1); assert.equal(captured[0].activeHandlers, 1);
+    release(); await active; await containment.close();
+    const second = [makePage(), makePage()], overlap = await installCandidateRequestOverlap(second, room, sink);
+    await assert.rejects(overlap.drain(5)); await overlap.close();
+    assert.deepEqual(captured[1].missing, ['minimum-overlap']);
+    assert.equal(captured[1].provider.state, 'unavailable');
+    assert.equal(captured[1].authority, 'inspection-failed');
+    captured.push(candidateBoundaryDiagnostic({ phase: 'before-drain', expectedResolution: 'compatible',
+      filterResolution: 'incompatible', candidateStatus: 'assigned',
+      authoritativeCandidateNull: false, relatedCandidateEvidenceNull: true, decisionCount: 1 }));
+    const annotations = captured.map(value => ({ type: 'safe-harness-diagnostic', description: JSON.stringify(value) }));
+    annotations.push({ type: 'safe-harness-diagnostic', description: JSON.stringify({ room_id: sentinel() }) });
+    const receipt = safeResult({ title: '@feature006 J01 exact compatible acquisition and lifecycle convergence' },
+      { status: 'failed', annotations });
+    assert.deepEqual(receipt.harnessDiagnostics, captured);
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'otteroom-harness-diagnostic-'));
+    try { fs.writeFileSync(path.join(directory, 'summary.json'), JSON.stringify([receipt]));
+      assert.equal(scanArtifacts(directory).ok, true); }
+    finally { fs.rmSync(directory, { recursive: true }); }
   `));
   it('rejects unsafe QR subtrees and clears every decoded RGBA buffer on failure', () => verify(prelude + `
     const { assertSafeQrMarkup, decodeQrRgba } = await import('./e2e/support/qr-harness.ts');
@@ -414,7 +648,7 @@ it('explicitly discovers H01–H03, I01–I03 and J01–J03 with fixed safe labe
   const { safeDiagnosticLocation } = await import('./e2e/support/sanitize-diagnostics.ts');
   assert.deepEqual(config.projects.find(p => p.name === 'acceptance').testMatch,
     ['room-session.spec.ts', 'generalized-room-membership-qr.spec.ts', 'participant-filters.spec.ts', 'common-filter-resolution.spec.ts',
-      'tmdb-candidate-source.spec.ts']);
+      'tmdb-candidate-source.spec.ts', 'swipe-decisions.spec.ts']);
   const titles = ['@filters H01 validates private owned filters and editable saved state',
     '@filters H02 recovers filters through failures and lost acknowledgements',
     '@filters H03 serializes final completion and freezes every filter'];
@@ -450,11 +684,8 @@ it('explicitly discovers H01–H03, I01–I03 and J01–J03 with fixed safe labe
     assert.equal(result.scenario, 'unclassified'); assert.equal(result.browserCase, 'none');
   }
   assert.equal(safeDiagnosticLocation('e2e/arbitrary.ts:12:3'), undefined);
-  for (const file of ['scripts/run-e2e.mjs', 'e2e/support/safe-diagnostics.ts']) {
-    const source = fs.readFileSync(file, 'utf8');
-    assert.equal(/acceptance[ -]N=100/.test(source), true);
-    assert.equal(source.includes('N=47'), false);
-  }
+  assert.equal(/acceptance[ -]N=106/.test(fs.readFileSync('scripts/run-e2e.mjs', 'utf8')), true);
+  assert.equal(/acceptance[ -]N=106/.test(fs.readFileSync('e2e/support/safe-diagnostics.ts', 'utf8')), true);
   const runner = fs.readFileSync('scripts/run-e2e.mjs', 'utf8');
   assert.equal(runner.includes("'H01'"), true);
   assert.equal(runner.includes("'filters'"), true);
@@ -512,14 +743,14 @@ it('Realtime dispatch accounting distinguishes a late prior response from a new 
     await connect(browser);
     serverMessage(JSON.stringify([null, null, 'realtime:room:' + id, 'system',
       { extension: 'postgres_changes', status: 'ok', message: 'Subscribed to PostgreSQL' }]));
-    const url = 'http://127.0.0.1:55321/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status&id=eq.' + id;
+    const url = 'http://127.0.0.1:55321/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status,decision_completed_count&id=eq.' + id;
     const request = { url: () => url }; page.emit('request', request);
     const delayed = new Promise(resolve => { finish = resolve; });
     page.emit('response', { request: () => request, url: () => url, ok: () => true, body: async () => Buffer.from(JSON.stringify(await delayed)) });
     assert.equal(transport.stats.readRequests, 1); assert.equal(transport.stats.reads, 0);
     const before = { ...transport.stats };
     finish([{ id, code: 'ABCDEF0123', state: 'waiting', voter_count: 2, required_voter_count: 3, filter_completed_count: 0,
-      filter_resolution_status: 'pending', candidate_acquisition_status: 'pending' }]);
+      filter_resolution_status: 'pending', candidate_acquisition_status: 'pending', decision_completed_count: 0 }]);
     await transport.wait('reads', 1);
     assert.equal(transport.stats.readRequests, before.readRequests);
     assert.notEqual(transport.stats.reads, before.reads);
@@ -542,7 +773,7 @@ const realtimePrelude = prelude + `
   const system = JSON.stringify([null, null, 'realtime:room:' + id, 'system',
     { extension: 'postgres_changes', status: 'ok', message: 'Subscribed to PostgreSQL' }]);
   serverMessage(system);
-  const url = 'http://127.0.0.1:55321/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status&id=eq.' + id;
+  const url = 'http://127.0.0.1:55321/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status,decision_completed_count&id=eq.' + id;
   const request = { url: () => url };
   const turn = () => new Promise(resolve => setImmediate(resolve));
 `;
@@ -588,7 +819,7 @@ it.each(['retired-body', 'active-body', 'retired-malformed', 'retired-valid'])('
     if ('${trial}'.endsWith('body')) reject(Error('synthetic unavailable body'));
     else finish(Buffer.from('${trial}' === 'retired-malformed' ? '{}' : JSON.stringify([
       { id, code: 'ABCDEF0123', state: 'waiting', voter_count: 2, required_voter_count: 3, filter_completed_count: 0,
-        filter_resolution_status: 'pending', candidate_acquisition_status: 'pending' }])));
+        filter_resolution_status: 'pending', candidate_acquisition_status: 'pending', decision_completed_count: 0 }])));
     await turn();
     if (['active-body', 'retired-malformed'].includes('${trial}')) assert.throws(() => transport.assertHealthy());
     else {
@@ -596,4 +827,21 @@ it.each(['retired-body', 'active-body', 'retired-malformed', 'retired-valid'])('
       assert.equal(transport.stats.reads, '${trial}' === 'retired-valid' ? 1 : 0);
     }
   } finally { await transport.close(); }
+`));
+
+it('scanner rejects Feature 007 private decision artifacts while aggregate receipts remain safe', () => verify(prelude + `
+  const { scanArtifacts } = await import('./scripts/check-e2e-artifacts.mjs');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'otteroom-decision-scan-'));
+  try {
+    fs.writeFileSync(path.join(directory, 'safe.json'), JSON.stringify({ browserCase: 'K01',
+      performanceSamples: 20, performancePassing: 19, performanceMaximumMs: 1999,
+      performanceRecoverableFailures: 0 }));
+    assert.equal(scanArtifacts(directory).ok, true);
+    for (const value of ['candidate_decisions', 'submit_room_candidate_decision',
+      'room_member_id', 'my_decision=yes', 'tmdb_movie_id=6006']) {
+      fs.writeFileSync(path.join(directory, 'unsafe.txt'), value);
+      assert.equal(scanArtifacts(directory).ok, false);
+      fs.unlinkSync(path.join(directory, 'unsafe.txt'));
+    }
+  } finally { fs.rmSync(directory, { recursive: true }); }
 `));

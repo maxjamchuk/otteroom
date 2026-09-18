@@ -85,7 +85,7 @@ Deno.test('4xx and exhausted 5xx classes are incomplete after exact bounded atte
 Deno.test('transport abort and malformed JSON/schema never become completed-empty', async () => {
   const transport=await searchTmdbCandidate(context,{fetch:()=>Promise.reject(new Error('private')),
     token:'secret',baseUrl:'https://example.test/3',sleep:async()=>{},random:()=>0});
-  assertEquals(transport.kind,'search_incomplete');
+  assertEquals(transport,{kind:'search_incomplete',reason:'timeout'});
   const malformedJson=await searchTmdbCandidate(context,{fetch:()=>Promise.resolve(new Response('{')),
     token:'secret',baseUrl:'https://example.test/3'});
   assertEquals(malformedJson.kind,'search_incomplete');

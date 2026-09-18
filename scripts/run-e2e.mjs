@@ -12,13 +12,23 @@ import { startTmdbStub } from '../e2e/support/tmdb-stub.ts';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const smokeSelection = 'G03|G04|G05|G08|H01';
+const t063DebugSelection = 'I01|I03|H02|H03|E05|E06|E09|E11|E12 direct|J01|J02';
+const t063RemainingSelection = 'I03|H02|J01|J02';
+const t063FinalSelection = 'H02|J01|J02';
 const smokeCases = new Set(['G03', 'G04', 'G05', 'G08', 'H01']);
 const resolutionCases = new Map([['I01', 3], ['I02', 4], ['I03', 2]]);
 const feature006Cases = new Map([['J01', 3], ['J02', 4], ['J03', 2]]);
+const feature007Cases = new Map([['K01', 2], ['K02', 4]]);
+const t063DebugCases = new Map([['I01',3],['I03',2],['H02',3],['H03',3],['E05',3],['E06',3],
+  ['E09',2],['E11',1],['E12-mutation',3],['J01',3],['J02',4]]);
+const t063RemainingCases = new Map([['I03',2],['H02',3],['J01',3],['J02',4]]);
+const t063FinalCases = new Map([['H02',3],['J01',3],['J02',4]]);
 const acceptanceSelections = new Set(['@membership', 'G01', 'G02', 'G03', 'G04', 'G05', 'G06', 'G07', 'G08', 'G09',
   '@filters', 'H01', 'H02', 'H03', '@auth', '@us1', '@us2-join', '@us2-realtime', '@us3', '@us4', '@capacity-smoke',
   '@resolution', 'I01', 'I02', 'I03', '@feature006', 'J01', 'J02', 'J03',
-  'E01', 'E02', 'E03', 'E04', 'E05', 'E06', 'E07', 'E08', 'E09', 'E10', 'E11', 'E12', smokeSelection]);
+  '@feature007', 'K01', 'K02',
+  'E01', 'E02', 'E03', 'E04', 'E05', 'E06', 'E07', 'E08', 'E09', 'E10', 'E11', 'E12',
+  smokeSelection, t063DebugSelection, t063RemainingSelection, t063FinalSelection]);
 
 const forbiddenEnvironmentOverrides = ['OTTEROOM_TMDB_STUB_CONTROL_URL','OTTEROOM_E2E_IDENTITY',
   'TMDB_API_BASE_URL','TMDB_API_READ_ACCESS_TOKEN','SUPABASE_SERVICE_ROLE_KEY'];
@@ -29,13 +39,15 @@ export function validateInvocationEnvironment(environment = process.env) {
 
 export function parseInvocation(argv) {
   const [requestedMode, ...requestedOptions] = argv;
-  if (!['acceptance', 'smoke', 'security', 'feature006'].includes(requestedMode)) throw new Error('SAFE_INVOCATION_REQUIRED');
-  if ((requestedMode === 'smoke' || requestedMode === 'feature006') && requestedOptions.length > 0) throw new Error('UNSAFE_OVERRIDE_REJECTED');
-  const mode = requestedMode === 'smoke' || requestedMode === 'feature006' ? 'acceptance' : requestedMode;
+  if (!['acceptance', 'smoke', 'security', 'feature006', 'feature007'].includes(requestedMode)) throw new Error('SAFE_INVOCATION_REQUIRED');
+  if (['smoke', 'feature006', 'feature007'].includes(requestedMode) && requestedOptions.length > 0) throw new Error('UNSAFE_OVERRIDE_REJECTED');
+  const mode = ['smoke', 'feature006', 'feature007'].includes(requestedMode) ? 'acceptance' : requestedMode;
   const profile = requestedMode === 'smoke' ? 'smoke' : requestedMode === 'feature006' ? 'feature006' :
+    requestedMode === 'feature007' ? 'feature007' :
     mode === 'security' ? 'security' : 'acceptance';
   const options = requestedMode === 'smoke' ? ['--grep', smokeSelection] :
-    requestedMode === 'feature006' ? ['--grep', '@feature006'] : requestedOptions;
+    requestedMode === 'feature006' ? ['--grep', '@feature006'] :
+    requestedMode === 'feature007' ? ['--grep', '@feature007'] : requestedOptions;
   const forwarded = [], seen = new Set();
   let grep;
   for (let i = 0; i < options.length; i++) {
@@ -52,10 +64,17 @@ export function parseInvocation(argv) {
       (mode === 'security' && value !== '1') || (name === '--repeat-each' && Number(value) > 3)) throw new Error('UNSAFE_OVERRIDE_REJECTED');
     forwarded.push(name, value);
   }
-  if (grep === '@feature006' && forwarded.some((value, index) => index % 2 === 0 && value !== '--grep'))
+  if (['@feature006', '@feature007', 'K01', 'K02', 'J03'].includes(grep) &&
+    forwarded.some((value, index) => index % 2 === 0 && value !== '--grep'))
     throw new Error('UNSAFE_OVERRIDE_REJECTED');
   const boundedProfile=mode==='acceptance'&&grep==='@resolution'?'resolution':
-    mode==='acceptance'&&grep==='H03'?'h03':profile;
+    mode==='acceptance'&&grep===t063DebugSelection?'t063-debug':
+    mode==='acceptance'&&grep===t063RemainingSelection?'t063-debug-remaining':
+    mode==='acceptance'&&grep===t063FinalSelection?'t063-final-target':
+    mode==='acceptance'&&grep==='G04'?'g04':
+    mode==='acceptance'&&grep==='H03'?'h03':mode==='acceptance'&&grep==='J03'?'j03':
+    mode==='acceptance'&&grep==='K01'?'k01':mode==='acceptance'&&grep==='K02'?'k02':
+    profile==='acceptance'&&!grep?'full':profile;
   return Object.freeze({ mode, profile:boundedProfile, staticOnly: mode === 'security' && grep === '@diagnostics-static', forwarded });
 }
 
@@ -85,6 +104,24 @@ export function verifyProbeArtifacts(directory) {
 }
 
 export function verifyAcceptanceProfile(profile, results) {
+  const exactReceipt=(result,browserCase,identities)=>result?.browserCase===browserCase&&
+    result?.signups===identities&&result?.identities===identities&&result?.status==='passed'&&
+    result?.cleanup===true&&result?.authSuccess===true&&result?.budgetFailure!==true;
+  const performanceReceipt=result=>result?.performanceSamples===20&&
+    Number.isInteger(result?.performancePassing)&&result.performancePassing>=19&&result.performancePassing<=20&&
+    Number.isInteger(result?.performanceMaximumMs)&&result.performanceMaximumMs>=0&&
+    result.performanceRecoverableFailures===0;
+  if(profile==='feature007'){
+    if(!Array.isArray(results)||results.length!==feature007Cases.size)return false;
+    return [...feature007Cases].every(([browserCase,identities])=>results.some(result=>
+      exactReceipt(result,browserCase,identities)&&(browserCase!=='K01'||performanceReceipt(result))))&&
+      results.reduce((sum,result)=>sum+result.identities,0)===6;
+  }
+  if(profile==='k01'||profile==='k02'){
+    const browserCase=profile.toUpperCase(),identities=feature007Cases.get(browserCase);
+    return Array.isArray(results)&&results.length===1&&exactReceipt(results[0],browserCase,identities)&&
+      (browserCase!=='K01'||performanceReceipt(results[0]));
+  }
   if(profile==='feature006'){
     if(!Array.isArray(results)||results.length!==feature006Cases.size)return false;
     return [...feature006Cases].every(([browserCase,identities])=>results.some(result=>
@@ -100,6 +137,23 @@ export function verifyAcceptanceProfile(profile, results) {
   }
   if(profile==='h03')return Array.isArray(results)&&results.length===1&&results[0]?.browserCase==='H03'&&
     results[0]?.signups===3&&results[0]?.identities===3;
+  if(profile==='j03')return Array.isArray(results)&&results.length===1&&exactReceipt(results[0],'J03',2);
+  if(profile==='t063-debug')return Array.isArray(results)&&results.length===t063DebugCases.size&&
+    [...t063DebugCases].every(([browserCase,identities])=>results.some(result=>
+      exactReceipt(result,browserCase,identities)))&&
+    results.reduce((sum,result)=>sum+result.identities,0)===30;
+  if(profile==='t063-debug-remaining')return Array.isArray(results)&&results.length===t063RemainingCases.size&&
+    [...t063RemainingCases].every(([browserCase,identities])=>results.some(result=>
+      exactReceipt(result,browserCase,identities)))&&
+    results.reduce((sum,result)=>sum+result.identities,0)===12;
+  if(profile==='t063-final-target')return Array.isArray(results)&&results.length===t063FinalCases.size&&
+    [...t063FinalCases].every(([browserCase,identities])=>results.some(result=>
+      exactReceipt(result,browserCase,identities)))&&
+    results.reduce((sum,result)=>sum+result.identities,0)===10;
+  if(profile==='g04')return Array.isArray(results)&&results.length===1&&exactReceipt(results[0],'G04',4);
+  if(profile==='full')return Array.isArray(results)&&results.length===44&&
+    results.reduce((sum,result)=>sum+(Number.isInteger(result?.identities)?result.identities:0),0)===106&&
+    [...feature007Cases].every(([browserCase,identities])=>results.some(result=>exactReceipt(result,browserCase,identities)));
   if (profile !== 'smoke') return true;
   if (!Array.isArray(results) || results.length !== smokeCases.size) return false;
   const cases = new Set(results.map(result => result?.browserCase));
@@ -138,8 +192,8 @@ async function waitForFunctionReady(signal) {
 async function startControlledProvider(registry, signal) {
   const envFile = path.join(root, 'supabase/functions/.env');
   if (fs.existsSync(envFile)) throw new Error('OWNED_ENV_CONFLICT');
-  const stub = await startTmdbStub();
   const token = `controlled-${randomBytes(32).toString('hex')}`;
+  const stub = await startTmdbStub(token);
   registry.register('controlled-tmdb', [token]);
   fs.writeFileSync(envFile, `TMDB_API_READ_ACCESS_TOKEN=${token}\nTMDB_API_BASE_URL=${stub.edgeBaseUrl}\n`,
     { flag: 'wx', mode: 0o600 });
@@ -189,13 +243,13 @@ export async function executeInvocation(invocation, { artifactRoot = path.join(r
     process.stdout.write(JSON.stringify({ component: 'e2e-controller', selection: invocation.staticOnly ? 'synthetic-only' : invocation.profile,
       status: outcome === 0 ? 'passed' : 'failed', artifacts: scan.fileCount, findings: scan.findings,
       innerExit: exitCode, probeArtifactsComplete: completeProbe,
-      scenarios: results.map(result => ({ scenario: ['A', 'B', 'C', 'baseline', 'auth', 'filters', 'membership', 'resolution', 'candidate', 'us1', 'us2-join', 'us2-realtime', 'us3', 'us4', 'capacity-smoke'].includes(result.scenario) ? result.scenario : 'other', status: result.status === 'passed' ? 'passed' : 'failed',
-        browserCase: ['G01', 'G02', 'G03', 'G04', 'G05', 'G06', 'G07', 'G08', 'G09', 'H01', 'H02', 'H03', 'I01', 'I02', 'I03', 'J01', 'J02', 'J03', 'E01', 'E02', 'E03', 'E04', 'E05', 'E06', 'E07', 'E08', 'E09', 'E10', 'E11', 'E12-read', 'E12-subscription', 'E12-navigation', 'E12-mutation'].includes(result.browserCase) ? result.browserCase : 'none',
+      scenarios: results.map(result => ({ scenario: ['A', 'B', 'C', 'baseline', 'auth', 'filters', 'membership', 'resolution', 'candidate', 'decision', 'us1', 'us2-join', 'us2-realtime', 'us3', 'us4', 'capacity-smoke'].includes(result.scenario) ? result.scenario : 'other', status: result.status === 'passed' ? 'passed' : 'failed',
+        browserCase: ['G01', 'G02', 'G03', 'G04', 'G05', 'G06', 'G07', 'G08', 'G09', 'H01', 'H02', 'H03', 'I01', 'I02', 'I03', 'J01', 'J02', 'J03', 'K01', 'K02', 'E01', 'E02', 'E03', 'E04', 'E05', 'E06', 'E07', 'E08', 'E09', 'E10', 'E11', 'E12-read', 'E12-subscription', 'E12-navigation', 'E12-mutation'].includes(result.browserCase) ? result.browserCase : 'none',
         worker: Number.isInteger(result.worker) && result.worker >= 0 && result.worker < 4 ? result.worker : -1,
         repetition: Number.isInteger(result.repetition) && result.repetition >= 1 && result.repetition <= 3 ? result.repetition : 0,
         signups: Number.isInteger(result.signups) ? result.signups : 0, identities: Number.isInteger(result.identities) ? result.identities : 0 })),
     }) + '\n');
-    if (results.some(result => result.budgetFailure === true)) process.stderr.write(`AUTH_BUDGET_FAILURE HTTP 429: ${invocation.profile === 'smoke' ? 'smoke N=16' : invocation.profile==='feature006'?'feature006 N=9':invocation.profile==='resolution'?'resolution N=9':invocation.profile==='h03'?'H03 N=3':'acceptance N=100'}, local anonymous_users=150. Check configured limit and remaining hourly allowance; stop/start only after config change, never retry/reset/restart to evade quota.\n`);
+    if (results.some(result => result.budgetFailure === true)) process.stderr.write(`AUTH_BUDGET_FAILURE HTTP 429: ${invocation.profile === 'smoke' ? 'smoke N=16' : invocation.profile==='feature006'?'feature006 N=9':invocation.profile==='feature007'?'feature007 N=6':invocation.profile==='resolution'?'resolution N=9':invocation.profile==='h03'?'H03 N=3':invocation.profile==='j03'?'J03 N=2':invocation.profile==='t063-debug'?'T063 debug N=30':invocation.profile==='t063-debug-remaining'?'T063 debug remaining N=12':invocation.profile==='t063-final-target'?'T063 final target N=10':'acceptance N=106'}, local anonymous_users=150. Check configured limit and remaining hourly allowance; stop/start only after config change, never retry/reset/restart to evade quota.\n`);
   } catch (error) { process.stderr.write(runtimeDiagnostic(error) + '\n'); outcome = signalExit(signal) ?? 1; }
   finally {
     try { await closeProvider?.(); } catch { process.stderr.write('TMDB_STUB_CLEANUP_FAILED\n'); outcome = 1; }

@@ -1,5 +1,36 @@
 /** @jest-environment node */
 import { spawnSync } from 'node:child_process';
+import type { Database } from '../../src/types/database.generated';
+
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends
+  (<T>() => T extends B ? 1 : 2) ? true : false;
+type Assert<T extends true> = T;
+
+type _DecisionEnum = Assert<Equal<Database['public']['Enums']['candidate_decision_value'], 'yes' | 'no'>>;
+type _DecisionTableColumns = Assert<Equal<keyof Database['public']['Tables']['candidate_decisions']['Row'],
+  'room_member_id' | 'tmdb_movie_id' | 'decision' | 'accepted_at'>>;
+type _RoomDecisionColumn = Assert<Equal<Database['public']['Tables']['rooms']['Row']['decision_completed_count'], number>>;
+type _CreateDecisionColumn = Assert<Equal<Database['public']['Functions']['create_room']['Returns'][number]['decision_completed_count'], number>>;
+type _JoinDecisionColumn = Assert<Equal<Database['public']['Functions']['join_room']['Returns'][number]['decision_completed_count'], number>>;
+type _GetArgs = Assert<Equal<Database['public']['Functions']['get_room_candidate_decision']['Args'], {
+  p_expected_tmdb_movie_id: number;
+  p_room_id: string;
+}>>;
+type _SubmitArgs = Assert<Equal<Database['public']['Functions']['submit_room_candidate_decision']['Args'], {
+  p_decision: 'yes' | 'no';
+  p_expected_tmdb_movie_id: number;
+  p_room_id: string;
+}>>;
+type DecisionReturn = {
+  decision_completed_count: number;
+  decision_set_complete: boolean;
+  my_decision: 'yes' | 'no';
+  outcome: string;
+  required_voter_count: number;
+  two_voter_agreement: boolean;
+};
+type _GetReturn = Assert<Equal<Database['public']['Functions']['get_room_candidate_decision']['Returns'][number], DecisionReturn>>;
+type _SubmitReturn = Assert<Equal<Database['public']['Functions']['submit_room_candidate_decision']['Returns'][number], DecisionReturn>>;
 
 // Child assertions use only synthetic schema bytes. Never forward child output.
 function verify(source: string) {

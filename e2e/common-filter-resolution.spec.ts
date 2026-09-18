@@ -2,7 +2,7 @@ import { expect, type Page } from '@playwright/test';
 import { test, safeBody, type SafeDiagnostics } from './support/safe-diagnostics.ts';
 import {
   assertAccepted, assertReady, assertWaiting, committedRoomSnapshot, createWaiting,
-  createWaitingWithSession, observeCandidateRpcZero, ownParticipant, realtimeBarrier,
+  createWaitingWithSession, isolateCandidateAcquisition, observeCandidateRpcZero, ownParticipant, realtimeBarrier,
   startHost, withParticipants, type PublicApi, type RoomProjection,
 } from './support/room-harness.ts';
 import { assertFilterProgress, boundedFilterSnapshot, recoverOwnFilter,
@@ -42,12 +42,14 @@ test('@resolution I01 converges a three-voter compatible room across reload reco
   await safeBody(diagnostics,()=>withParticipants(browser,{baseURL,viewport},info,2,async([middle,last])=>{
     const group=[diagnostics,middle,last],pages=group.map(item=>item.page);
     pages.forEach(observeResolutionTraffic);
+    const candidateIsolation=await isolateCandidateAcquisition(pages,diagnostics);
     const transports=await Promise.all(pages.map(page=>realtimeBarrier(page)));
     const transport=transports[1];
     try{
       const initialReadiness=transports[0].stats.readiness,initialReads=transports[0].stats.reads;
       const {api,room,invitation}=await createWaiting(diagnostics.page,diagnostics,
         {requiredVoterCount:3,creatorIsVoter:true});
+      candidateIsolation.allow(room);
       await transports[0].wait('readiness',initialReadiness+1);
       await transports[0].wait('reads',initialReads+1);
       for(const voter of [middle,last])await startHost(voter.page,voter);
@@ -85,11 +87,11 @@ test('@resolution I01 converges a three-voter compatible room across reload reco
       await transport.wait('readiness',beforeReconnect+1);await assertResolutionView(middle.page,'compatible');
       for(const item of group){await item.page.goto('/');await item.page.goto(`/room/${room.code}`);
         await assertResolutionView(item.page,'compatible');}
-      unchangedFilters(room,frozen);assertResolutionTrafficZero(pages);
-      expect(committedRoomSnapshot(room).row.movie_candidate_id===null).toBe(true);
+      unchangedFilters(room,frozen);await candidateIsolation.wait(room,'compatible');
+      expect(pages.every(page=>observeResolutionTraffic(page).tmdb()===0)).toBe(true);
       expect(group.reduce((sum,item)=>sum+item.signupAttempts,0)===resolutionAnonymousBudget.I01).toBe(true);
-      await diagnostics.record({scenario:'I01',outcome:'partial pending; Any plus two disjoint canonical OR selections and overlapping years; compatible convergence; reload/reconnect/re-entry; frozen filters; candidate/TMDB0; identities3'});
-    }finally{await Promise.all(transports.map(item=>item.close()));}
+      await diagnostics.record({scenario:'I01',outcome:'partial pending; Any plus two disjoint canonical OR selections and overlapping years; compatible convergence; reload/reconnect/re-entry; frozen filters; later candidate handoff isolated and drained; identities3'});
+    }finally{await candidateIsolation.close();await Promise.all(transports.map(item=>item.close()));}
   }));
 });
 
@@ -138,10 +140,12 @@ test('@resolution I03 recovers pre-commit failure and committed-response loss wi
   await safeBody(diagnostics,()=>withParticipants(browser,{baseURL,viewport},info,1,async([voter])=>{
     const group=[diagnostics,voter],pages=group.map(item=>item.page);
     pages.forEach(observeResolutionTraffic);
+    const candidateIsolation=await isolateCandidateAcquisition(pages,diagnostics);
     const transports=await Promise.all(pages.map(page=>realtimeBarrier(page)));
     try{
       const hostReadiness=transports[0].stats.readiness,hostReads=transports[0].stats.reads;
       const first=await createWaiting(diagnostics.page,diagnostics,{requiredVoterCount:2,creatorIsVoter:true});
+      candidateIsolation.allow(first.room);
       await transports[0].wait('readiness',hostReadiness+1);await transports[0].wait('reads',hostReads+1);
       await startHost(voter.page,voter);
       await admit(voter,first.api,first.room,first.invitation,'ready',2,transports[1]);
@@ -155,10 +159,12 @@ test('@resolution I03 recovers pre-commit failure and committed-response loss wi
       await diagnostics.page.getByRole('button',{name:'Retry common-filter resolution',exact:true}).click();
       for(const page of pages)await assertResolutionView(page,'compatible');
       const firstFrozen=boundedFilterSnapshot(first.room);
+      await candidateIsolation.wait(first.room,'compatible');
 
       const nextReadiness=transports[0].stats.readiness,nextReads=transports[0].stats.reads;
       const next=await createWaitingWithSession(diagnostics.page,diagnostics,first.api,
         committedRoomSnapshot(first.room),{requiredVoterCount:2,creatorIsVoter:true});
+      candidateIsolation.allow(next.room);
       await transports[0].wait('readiness',nextReadiness+1);await transports[0].wait('reads',nextReads+1);
       await admit(voter,first.api,next.room,next.invitation,'ready',2,transports[1]);
       await submitOwnFilter(diagnostics.page,first.api,next.room,['drama'],1990,2010);
@@ -172,10 +178,10 @@ test('@resolution I03 recovers pre-commit failure and committed-response loss wi
       for(const page of pages)await assertResolutionView(page,'compatible');
       expect((await assertStoredResolution(diagnostics.page,first.api,next.room,'compatible')).filter_completed_count===2).toBe(true);
       unchangedFilters(first.room,firstFrozen);expect(boundedFilterSnapshot(next.room).filters.length===2).toBe(true);
-      assertResolutionTrafficZero(pages);
-      for(const room of [first.room,next.room])expect(committedRoomSnapshot(room).row.movie_candidate_id===null).toBe(true);
+      await candidateIsolation.wait(next.room,'compatible');
+      expect(pages.every(page=>observeResolutionTraffic(page).tmdb()===0)).toBe(true);
       expect(group.reduce((sum,item)=>sum+item.signupAttempts,0)===resolutionAnonymousBudget.I03).toBe(true);
-      await diagnostics.record({scenario:'I03',outcome:'two identities reused across two rooms; pre-forward resolution failure pending then explicit Retry; committed compatible response discarded then stored-status reload recovery; frozen filters; candidate/TMDB0; identities2'});
-    }finally{await Promise.all(transports.map(item=>item.close()));}
+      await diagnostics.record({scenario:'I03',outcome:'two identities reused across two rooms; pre-forward resolution failure pending then explicit Retry; committed compatible response discarded then stored-status reload recovery; frozen filters; later candidate handoffs isolated and drained; identities2'});
+    }finally{await candidateIsolation.close();await Promise.all(transports.map(item=>item.close()));}
   }));
 });

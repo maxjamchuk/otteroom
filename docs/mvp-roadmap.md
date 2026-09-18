@@ -1,7 +1,7 @@
 # Otteroom MVP Roadmap
 
 **Status:** Normative current sequencing and directional feature decomposition.
-Established 2026-09-10. Features 001–006 are COMPLETE; Features 007–009 are PLANNED.
+Established 2026-09-10. Features 001–007 are COMPLETE; Features 008–009 are PLANNED.
 
 ## Authority and feature boundaries
 
@@ -37,7 +37,7 @@ roadmap does not authorize implementing the whole MVP at once.
 | 004 | Participant Filters | COMPLETE | Each assembled voter configures recoverable genres and release-year filters |
 | 005 | Common Filter Resolution | COMPLETE | Resolve compatible candidate constraints across the assembled voting group |
 | 006 | TMDB Candidate Source | COMPLETE | Real eligible TMDB candidates with stable room assignment |
-| 007 | Swipe Decisions | PLANNED | Independent, persistent right/left decisions per voter and candidate |
+| 007 | Swipe Decisions | COMPLETE | Independent, persistent right/left decisions per voter and candidate |
 | 008 | Candidate Progression | PLANNED | Recoverable progression governed by resolved agreement semantics; stop advancing on agreement |
 | 009 | Match | PLANNED | Authoritative shared choice and match experience using the established agreement rule; first useful MVP boundary |
 
@@ -212,7 +212,7 @@ the provider parsing boundary. A new exact-SHA receipt proves the complete live
 UI/Auth → Feature 005 → Edge → TMDB Discover → exact eligibility → PostgreSQL
 commit → TMDB Details/Configuration → converged browser/reload path with two
 anonymous voters and no fixture fallback. Feature 006 is COMPLETE again;
-Feature 007 has not started.
+Feature 007 later consumed this handoff without changing its candidate authority.
 
 ### 007 — Swipe Decisions
 
@@ -235,6 +235,16 @@ resolve the larger-group agreement policy unless its future specification
 deliberately requires that decision. Decision lifecycle details and any
 implementation library belong to the 007 specification and plan. Agreement
 semantics must be established by 008 specification; final match UX belongs to 009.
+
+Feature 007 completed on 2026-09-18 at validated implementation SHA
+`06f88fab32f8954a824c663e36d08c6af51292a7`. Its deterministic, bounded
+real-stack, full-regression, repeatability and exact-SHA fresh-checkout evidence
+is recorded in the Feature 007 quickstart. The release preserves one unchanged
+current TMDB candidate while fixed voters record immutable private decisions,
+derives only the exact-two yes/yes agreement fact, and adds no progression,
+larger-group agreement policy or match UX. The exact implementation commit is
+preserved in `test-results/t065-candidate.bundle` because the validation
+workspace Git metadata was read-only.
 
 ### 008 — Candidate Progression
 

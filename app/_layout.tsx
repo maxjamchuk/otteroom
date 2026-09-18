@@ -1,6 +1,7 @@
 import { Stack } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { AppState, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { bootstrapAnonymousSession } from '../src/auth/anonymous-session';
 import { getSupabase } from '../src/lib/supabase';
 
@@ -34,7 +35,7 @@ export default function RootLayout() {
   }, [attempt]);
 
   if (state !== 'ready') return (
-    <View style={styles.container}>
+    <GestureHandlerRootView style={styles.root}><View style={styles.container}>
       <Text accessibilityRole="header" style={styles.title}>Otteroom</Text>
       <Text accessibilityLiveRegion="polite">
         {state === 'loading' ? 'Restoring local session…' : 'Unable to restore your local session. Please try again.'}
@@ -44,12 +45,15 @@ export default function RootLayout() {
           <Text>Retry session</Text>
         </Pressable>
       )}
-    </View>
+    </View></GestureHandlerRootView>
   );
-  return <Stack screenOptions={{ headerShown: false }} />;
+  return <GestureHandlerRootView style={styles.root}>
+    <Stack screenOptions={{ headerShown: false }} />
+  </GestureHandlerRootView>;
 }
 
 const styles = StyleSheet.create({
+  root: { flex: 1 },
   container: { flex: 1, justifyContent: 'center', padding: 24, gap: 20 },
   title: { fontSize: 32, fontWeight: '600' },
 });

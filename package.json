@@ -57,6 +57,7 @@
     "test:e2e:smoke": "node scripts/run-e2e.mjs smoke",
     "test:e2e:security": "node scripts/run-e2e.mjs security",
     "test:e2e:feature006": "node scripts/run-e2e.mjs feature006",
+    "test:e2e:feature007": "node scripts/run-e2e.mjs feature007",
     "supabase:start": "node scripts/safe-process.mjs supabase:start",
     "supabase:status": "node scripts/safe-process.mjs supabase:status",
     "supabase:stop": "node scripts/safe-process.mjs supabase:stop",

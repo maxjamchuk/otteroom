@@ -4,7 +4,7 @@ import { normalizeRoomCode } from './code';
 type GeneratedRow = Database['public']['Functions']['create_room']['Returns'][number];
 export type RoomResolutionStatus = Database['public']['Enums']['filter_resolution_status'];
 export type CandidateAcquisitionStatus = Database['public']['Enums']['candidate_acquisition_status'];
-type Projection = Pick<GeneratedRow, 'room_id' | 'room_code' | 'voter_count' | 'required_voter_count'|'filter_completed_count'|'filter_resolution_status'> & {
+type Projection = Pick<GeneratedRow, 'room_id' | 'room_code' | 'voter_count' | 'required_voter_count'|'filter_completed_count'|'filter_resolution_status'|'decision_completed_count'> & {
   room_state: 'waiting' | 'ready';
   candidate_acquisition_status: CandidateAcquisitionStatus;
 };
@@ -45,7 +45,14 @@ export function validCandidateStatus(status: unknown, resolutionStatus: unknown,
   return status === 'pending' || (status === 'assigned' || status === 'no_candidates') &&
     roomState === 'ready' && filterCount === target && resolutionStatus === 'compatible';
 }
-const fields = ['outcome', 'room_id', 'room_code', 'room_state', 'is_creator', 'is_voter', 'voter_count', 'required_voter_count','filter_completed_count','filter_resolution_status','candidate_acquisition_status'] as const satisfies readonly (keyof GeneratedRow)[];
+export function validDecisionCount(count: unknown, target: unknown, roomState: unknown,
+  filterCount: unknown, resolutionStatus: unknown, candidateStatus: unknown): boolean {
+  return typeof count === 'number' && Number.isInteger(count) && count >= 0 &&
+    typeof target === 'number' && Number.isInteger(target) && count <= target &&
+    (count === 0 || roomState === 'ready' && filterCount === target &&
+      resolutionStatus === 'compatible' && candidateStatus === 'assigned');
+}
+const fields = ['outcome', 'room_id', 'room_code', 'room_state', 'is_creator', 'is_voter', 'voter_count', 'required_voter_count','filter_completed_count','filter_resolution_status','candidate_acquisition_status','decision_completed_count'] as const satisfies readonly (keyof GeneratedRow)[];
 function oneRow(data: unknown): Record<keyof GeneratedRow, unknown> {
   if (!Array.isArray(data) || data.length !== 1) throw new RoomContractError();
   const row: unknown = data[0];
@@ -62,6 +69,8 @@ function accepted(row: Record<keyof GeneratedRow, unknown>): void {
       row.required_voter_count,row.room_state)
     ||!validCandidateStatus(row.candidate_acquisition_status,row.filter_resolution_status,
       row.filter_completed_count,row.required_voter_count,row.room_state)
+    ||!validDecisionCount(row.decision_completed_count,row.required_voter_count,row.room_state,
+      row.filter_completed_count,row.filter_resolution_status,row.candidate_acquisition_status)
     || row.is_voter && row.voter_count === 0) {
     throw new RoomContractError();
   }
@@ -72,7 +81,7 @@ export function narrowCreateResult(data: unknown): CreateResult {
   if (!row.is_creator || !(row.outcome === 'already_created' || row.outcome === 'created' &&
     row.room_state === 'waiting' && row.voter_count === (row.is_voter ? 1 : 0)
     &&row.filter_completed_count===0&&row.filter_resolution_status==='pending'
-    &&row.candidate_acquisition_status==='pending')) throw new RoomContractError();
+    &&row.candidate_acquisition_status==='pending'&&row.decision_completed_count===0)) throw new RoomContractError();
   return row as CreateResult;
 }
 export function narrowJoinResult(data: unknown): JoinResult {

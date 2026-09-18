@@ -7,7 +7,9 @@ import { assertFilterProgress, recoverOwnFilter, submitOwnFilter } from './suppo
 import { assertResolutionTrafficZero, assertResolutionView, assertStoredResolution,
   observeResolutionTraffic } from './support/resolution-harness';
 import { verifyInvitationQr } from './support/qr-harness';
-import { candidateHarness, configureTmdb, tmdbSnapshot } from './support/candidate-harness';
+import { candidateHarness, configureTmdb, controlledCandidate, tmdbSnapshot } from './support/candidate-harness';
+import { assertDecisionReady, assertOwnDecision, installAssignedCandidatePresentation,
+  keyboardDecision, preassembleAssignedCandidate, recoverOwnDecision } from './support/decision-harness';
 
 export const membershipAnonymousBudget = Object.freeze({ G01: 1, G02: 1, G03: 3, G04: 4, G05: 2, G06: 4, G07: 4, G08: 4, G09: 3 });
 type Transport = Awaited<ReturnType<typeof realtimeBarrier>>;
@@ -40,17 +42,18 @@ async function nextRoomRead(d: SafeDiagnostics, room: RoomProjection, count: num
   const request = await d.page.waitForRequest(request => {
     const url = new URL(request.url());
     return url.pathname === '/rest/v1/rooms' && url.searchParams.get('id') === `eq.${room.id}` &&
-      url.searchParams.get('select')?.replaceAll(' ', '') === 'id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status';
+      url.searchParams.get('select')?.replaceAll(' ', '') === 'id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status,decision_completed_count';
   });
   const response = await request.response();
   expect(response?.ok() === true && await response.finished() === null).toBe(true);
   const rows = await response!.json();
   expect(Array.isArray(rows) && rows.length === 1 &&
-    Object.keys(rows[0]).sort().join(',') === 'candidate_acquisition_status,code,filter_completed_count,filter_resolution_status,id,required_voter_count,state,voter_count' &&
+    Object.keys(rows[0]).sort().join(',') === 'candidate_acquisition_status,code,decision_completed_count,filter_completed_count,filter_resolution_status,id,required_voter_count,state,voter_count' &&
     rows[0].id === room.id && rows[0].code === room.code && rows[0].voter_count === count &&
     rows[0].required_voter_count === 3 && Number.isInteger(rows[0].filter_completed_count) &&
     ['pending','assigned','no_candidates'].includes(rows[0].candidate_acquisition_status) &&
     ['pending','compatible','incompatible'].includes(rows[0].filter_resolution_status) &&
+    Number.isInteger(rows[0].decision_completed_count) && rows[0].decision_completed_count >= 0 &&
     rows[0].state === (count === 3 ? 'ready' : 'waiting')).toBe(true);
 }
 async function reload(d: SafeDiagnostics, room: RoomProjection, creator: boolean, votes: boolean, count: number, transport?: Transport) {
@@ -83,11 +86,12 @@ async function reenter(d: SafeDiagnostics, api: PublicApi, room: RoomProjection,
     return (await Promise.all((await Promise.all([send(), send()])).map(async response => {
       const rows = await response.json(), row = rows?.[0];
       return response.ok && Array.isArray(rows) && rows.length === 1 && row &&
-        Object.keys(row).sort().join(',') === 'candidate_acquisition_status,filter_completed_count,filter_resolution_status,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
+        Object.keys(row).sort().join(',') === 'candidate_acquisition_status,decision_completed_count,filter_completed_count,filter_resolution_status,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
         row.outcome === 'already_member' && row.room_id === room.id && row.room_code === room.code && row.room_state === 'ready' &&
         row.is_creator === creator && row.is_voter === votes && row.voter_count === 3 && row.required_voter_count === 3 &&
         Number.isInteger(row.filter_completed_count) && ['pending','compatible','incompatible'].includes(row.filter_resolution_status) &&
         ['pending','assigned','no_candidates'].includes(row.candidate_acquisition_status) &&
+        Number.isInteger(row.decision_completed_count) && row.decision_completed_count >= 0 && row.decision_completed_count <= 3 &&
         (row.filter_resolution_status==='pending'||row.filter_completed_count===row.required_voter_count);
     }))).every(Boolean);
   }, { api, room, creator, votes });
@@ -127,8 +131,8 @@ async function directJoin(page: Page, api: PublicApi, code: string) {
 }
 
 function isStrictFull(row: Record<string, unknown> | undefined): boolean {
-  return !!row && Object.keys(row).sort().join(',') === 'candidate_acquisition_status,filter_completed_count,filter_resolution_status,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
-    row.outcome === 'full' && ['candidate_acquisition_status', 'filter_completed_count', 'filter_resolution_status', 'is_creator', 'is_voter', 'required_voter_count', 'room_code', 'room_id', 'room_state', 'voter_count']
+  return !!row && Object.keys(row).sort().join(',') === 'candidate_acquisition_status,decision_completed_count,filter_completed_count,filter_resolution_status,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
+    row.outcome === 'full' && ['candidate_acquisition_status', 'decision_completed_count', 'filter_completed_count', 'filter_resolution_status', 'is_creator', 'is_voter', 'required_voter_count', 'room_code', 'room_id', 'room_state', 'voter_count']
       .every(key => row[key] === null);
 }
 
@@ -248,7 +252,8 @@ test('@membership G02 room creation failures preserve configuration', async ({ d
                   if (!response.ok() || !row?.room_id || !row?.room_code) throw new Error('E2E_SAFE_FAILURE');
                   committed = committedRoomSnapshot({ id: row.room_id, code: row.room_code, state: 'waiting',
                     voter_count: Number(configurations[index].creatorIsVoter), required_voter_count: configurations[index].requiredVoterCount,
-                    filter_completed_count: 0, filter_resolution_status: 'pending', candidate_acquisition_status: 'pending' });
+                    filter_completed_count: 0, filter_resolution_status: 'pending', candidate_acquisition_status: 'pending',
+                    decision_completed_count: 0 });
                 } finally { await response.dispose(); }
                 await route.abort('failed');
               } catch { interceptionFailed = true; await route.abort('failed').catch(() => {}); }
@@ -367,6 +372,7 @@ test('@membership G03 three voting members assemble through link and code', asyn
         expect((await recoverOwnFilter(voter.page, api, room)).outcome === (index === 2 ? 'locked' : 'saved')).toBe(true);
       }
       for(const d of group)await assertResolutionView(d.page,'incompatible');
+      for(const d of group)await expect(d.page.getByTestId('candidate-decision-surface')).toHaveCount(0);
       expect((await assertStoredResolution(diagnostics.page,api,room,'incompatible')).filter_completed_count===3).toBe(true);
       const completedRoom = committedRoomSnapshot(room);
       expect(completedRoom.row.filter_completed_count === 3 && completedRoom.row.movie_candidate_id === null &&
@@ -407,6 +413,7 @@ test('@membership G04 non-voting creator observes voter filter progress', async 
   await safeBody(diagnostics, () => withParticipants(browser, { baseURL, viewport }, info, 3, async voters => {
     const group = [diagnostics, ...voters];
     const candidates = await candidateHarness(group, baseURL!);
+    const presentation = await installAssignedCandidatePresentation(group.map(item => item.page), controlledCandidate);
     await configureTmdb('candidate');
     group.forEach(item => observeResolutionTraffic(item.page));
     const transport = await realtimeBarrier(diagnostics.page);
@@ -416,6 +423,7 @@ test('@membership G04 non-voting creator observes voter filter progress', async 
       for (const voter of voters) await startHost(voter.page, voter);
       const ids = [participant, ...await Promise.all(voters.map(d => ownParticipant(d.page)))];
       candidates.bind(room, ids, api);
+      presentation.bind(room);
       for (let count = 0; count < 3; count++) {
         await occupancy(diagnostics, count);
         await expect(diagnostics.page.getByText('You created this room and are not voting.', { exact: true })).toBeVisible();
@@ -434,6 +442,7 @@ test('@membership G04 non-voting creator observes voter filter progress', async 
       for (const d of group) await assertReady(d.page, d, room, false);
       expect((await recoverOwnFilter(diagnostics.page, api, room)).outcome === 'not_voter').toBe(true);
       expect((await submitOwnFilter(diagnostics.page, api, room, ['action'], 1900, 2026)).outcome === 'not_voter').toBe(true);
+      await expect(diagnostics.page.getByRole('button', { name: /want to watch/ })).toHaveCount(0);
       for (let index = 0; index < voters.length; index++) {
         const result = await submitOwnFilter(voters[index].page, api, room, index === 0 ? [] : ['drama'], 1900 + index, 2026);
         expect(result.outcome === 'saved' && result.filter_completed_count === index + 1).toBe(true);
@@ -442,7 +451,12 @@ test('@membership G04 non-voting creator observes voter filter progress', async 
         expect((await recoverOwnFilter(diagnostics.page, api, room)).outcome === 'not_voter').toBe(true);
       }
       for(const d of group)await assertResolutionView(d.page,'compatible');
+      if (committedRoomSnapshot(room).row.candidate_acquisition_status === 'pending') {
+        preassembleAssignedCandidate(room, controlledCandidate.tmdbMovieId);
+        await Promise.all(group.map(item => item.page.reload({ waitUntil: 'domcontentloaded' })));
+      }
       await candidates.available();
+      await assertDecisionReady(voters.map(item => item.page));
       expect((await assertStoredResolution(diagnostics.page,api,room,'compatible')).filter_completed_count===3).toBe(true);
       await reconnect(diagnostics, transport);
       for (let i = 0; i < group.length; i++) {
@@ -451,16 +465,30 @@ test('@membership G04 non-voting creator observes voter filter progress', async 
         await assertResolutionView(group[i].page,'compatible');
         await candidates.available([group[i].page]);
       }
+      await assertDecisionReady(voters.map(item => item.page));
+      const choices = ['yes', 'no', 'yes'] as const;
+      for (let index = 0; index < voters.length; index++)
+        await keyboardDecision(voters[index].page, choices[index]);
+      await expect(diagnostics.page.getByText('3 of 3 decisions collected.', { exact: true })).toBeVisible();
+      await expect(diagnostics.page.getByText(/Current candidate agreement:/)).toHaveCount(0);
+      await expect(diagnostics.page.getByRole('button', { name: /want to watch/ })).toHaveCount(0);
+      const observer = await recoverOwnDecision(diagnostics.page, api, room);
+      expect(observer.outcome === 'observer' && observer.my_decision === null &&
+        observer.decision_completed_count === 3 && observer.two_voter_agreement === null).toBe(true);
+      for (let index = 0; index < voters.length; index++)
+        await assertOwnDecision(voters[index].page, api, room, choices[index], 3);
+      for(const d of group)await expect(d.page.getByText(/next candidate|match|celebrat/i)).toHaveCount(0);
       const completed = committedRoomSnapshot(room);
       const provider=await tmdbSnapshot();
       expect(completed.row.filter_completed_count === 3 && completed.row.movie_candidate_id === null &&
         completed.row.candidate_acquisition_status==='assigned'&&typeof completed.row.tmdb_movie_id==='number'&&
-        completed.filters.length === 3&&provider.invalid===0&&provider.calls.discover>=1).toBe(true);
-      candidates.assertHealthy();
+        completed.filters.length === 3&&completed.row.decision_completed_count===3&&
+        provider.invalid===0&&Object.values(provider.calls).every(count=>count===0)).toBe(true);
+      candidates.assertHealthy(); presentation.assertHealthy();
       transport.assertHealthy();
       expect(group.reduce((n, d) => n + d.signupAttempts, 0) === membershipAnonymousBudget.G04).toBe(true);
-      await diagnostics.record({ scenario: 'G04', outcome: 'non-voting creator aggregate-only progress; compatible terminal; role-equal controlled candidate; reconnect/re-entry stable; private client traffic; identities4' });
-    } finally { await candidates.close(); await cleanup([transport]); }
+      await diagnostics.record({ scenario: 'G04', outcome: 'non-voting creator aggregate-only filter and 3/3 decision progress; compatible terminal; null group policy; role-equal controlled candidate; reconnect/re-entry stable; identities4' });
+    } finally { await presentation.close(); await candidates.close(); await cleanup([transport]); }
   }));
 });
 
@@ -482,6 +510,7 @@ test('@membership G05 decoded QR admission is idempotent', async ({ diagnostics,
         after.row.filter_resolution_status==='pending' &&
         after.members.some(member => member.user_id === participant) && after.members.some(member => member.user_id === voterId)).toBe(true);
       await occupancy(voter, 2); expect(await assertQr(voter, invitation) === decoded).toBe(true);
+      for(const page of pages)await expect(page.getByTestId('candidate-decision-surface')).toHaveCount(0);
       expect((await navigationJoin(voter.page, invitation)).row?.outcome === 'already_member').toBe(true);
       for (const code of [room.code.toLowerCase(), ` ${room.code} `]) expect((await directJoin(voter.page, api, code)).row?.outcome === 'already_member').toBe(true);
       stable(room, after);expect((await assertStoredResolution(voter.page,api,room,'pending')).voter_count===2).toBe(true);
@@ -583,12 +612,13 @@ test('@membership G08 authorization and room isolation', async ({ diagnostics, b
       const key = Object.keys(localStorage).find(name => /^sb-.+-auth-token$/.test(name)); const token = key ? JSON.parse(localStorage.getItem(key) ?? 'null')?.access_token : null;
       const headers = { apikey: api.publicKey, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
       const requests = [
-        fetch(`${api.origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status&id=eq.${room.id}`, { headers }),
-        fetch(`${api.origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status&code=eq.${room.code}`, { headers }),
-        fetch(`${api.origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status&id=eq.${own.id}`, { headers }),
-        fetch(`${api.origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status&code=eq.${own.code}`, { headers }),
+        fetch(`${api.origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status,decision_completed_count&id=eq.${room.id}`, { headers }),
+        fetch(`${api.origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status,decision_completed_count&code=eq.${room.code}`, { headers }),
+        fetch(`${api.origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status,decision_completed_count&id=eq.${own.id}`, { headers }),
+        fetch(`${api.origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status,decision_completed_count&code=eq.${own.code}`, { headers }),
         fetch(`${api.origin}/rest/v1/rooms?select=tmdb_movie_id&id=eq.${own.id}`, { headers }),
         fetch(`${api.origin}/rest/v1/room_members?select=*`, { headers }), fetch(`${api.origin}/rest/v1/participant_filters?select=*`, { headers }),
+        fetch(`${api.origin}/rest/v1/candidate_decisions?select=*`, { headers }),
         fetch(`${api.origin}/rest/v1/rooms?id=eq.${room.id}`, { method: 'PATCH', headers, body: JSON.stringify({ required_voter_count: 9, voter_count: 9, tmdb_movie_id: 9 }) }),
         fetch(`${api.origin}/rest/v1/room_members`, { method: 'POST', headers, body: JSON.stringify({ room_id: room.id, user_id: own.id, is_voter: true }) }),
         fetch(`${api.origin}/rest/v1/participant_filters`, { method: 'POST', headers,
@@ -598,6 +628,10 @@ test('@membership G08 authorization and room isolation', async ({ diagnostics, b
           body: JSON.stringify({ p_room_id: room.id, p_genres: ['action'], p_release_year_from: 1900, p_release_year_to: 2026 }) }),
         fetch(`${api.origin}/rest/v1/rpc/resolve_common_filters`, { method: 'POST', headers,
           body: JSON.stringify({ p_room_id: room.id }) }),
+        fetch(`${api.origin}/rest/v1/rpc/get_room_candidate_decision`, { method: 'POST', headers,
+          body: JSON.stringify({ p_room_id: room.id, p_expected_tmdb_movie_id: 9 }) }),
+        fetch(`${api.origin}/rest/v1/rpc/submit_room_candidate_decision`, { method: 'POST', headers,
+          body: JSON.stringify({ p_room_id: room.id, p_expected_tmdb_movie_id: 9, p_decision: 'yes' }) }),
         fetch(`${api.origin}/rest/v1/rpc/prepare_room_tmdb_candidate`, { method: 'POST', headers,
           body: JSON.stringify({ p_room_id: own.id, p_actor_user_id: own.id }) }),
         fetch(`${api.origin}/rest/v1/rpc/commit_room_tmdb_candidate`, { method: 'POST', headers,
@@ -606,21 +640,27 @@ test('@membership G08 authorization and room isolation', async ({ diagnostics, b
         fetch(`${api.origin}/rest/v1/rpc/commit_room_tmdb_no_candidates`, { method: 'POST', headers,
           body: JSON.stringify({ p_room_id: own.id, p_actor_user_id: own.id }) }),
       ];
-      const [foreignId, foreignCode, ownId, ownCode, privateIdentity, members, filters, roomMutation, memberMutation,
-        filterMutation, recovery, submission, resolution, prepareCandidate, commitCandidate, commitEmpty] = await Promise.all(requests);
+      const [foreignId, foreignCode, ownId, ownCode, privateIdentity, members, filters, decisions, roomMutation, memberMutation,
+        filterMutation, recovery, submission, resolution, decisionRecovery, decisionSubmission,
+        prepareCandidate, commitCandidate, commitEmpty] = await Promise.all(requests);
       return {
         foreignId: await foreignId.json(), foreignCode: await foreignCode.json(), ownId: await ownId.json(), ownCode: await ownCode.json(),
-        privateIdentityOk: privateIdentity.ok, membersOk: members.ok, filtersOk: filters.ok, roomMutationOk: roomMutation.ok,
+        privateIdentityOk: privateIdentity.ok, membersOk: members.ok, filtersOk: filters.ok, decisionsOk: decisions.ok, roomMutationOk: roomMutation.ok,
         memberMutationOk: memberMutation.ok, filterMutationOk: filterMutation.ok,
         recoveryOk: recovery.ok, recovery: (await recovery.json())?.[0], submissionOk: submission.ok, submission: (await submission.json())?.[0],
         resolutionOk:resolution.ok,resolution:(await resolution.json())?.[0],
+        decisionRecoveryOk:decisionRecovery.ok,decisionRecovery:(await decisionRecovery.json())?.[0],
+        decisionSubmissionOk:decisionSubmission.ok,decisionSubmission:(await decisionSubmission.json())?.[0],
         candidateAuthorityDenied: [prepareCandidate, commitCandidate, commitEmpty].every(response => !response.ok),
       };
     }, { api, room, own: roomB.room });
     expect(Array.isArray(denied.foreignId) && denied.foreignId.length === 0 && Array.isArray(denied.foreignCode) && denied.foreignCode.length === 0 &&
-      denied.ownId?.length === 1 && denied.ownCode?.length === 1 && !denied.privateIdentityOk && !denied.membersOk && !denied.filtersOk &&
+      denied.ownId?.length === 1 && denied.ownCode?.length === 1 && !denied.privateIdentityOk && !denied.membersOk && !denied.filtersOk && !denied.decisionsOk &&
       !denied.roomMutationOk && !denied.memberMutationOk && !denied.filterMutationOk && denied.recoveryOk && denied.submissionOk &&
       denied.recovery?.outcome === 'not_found' && denied.submission?.outcome === 'not_found' &&
+      denied.decisionRecoveryOk&&denied.decisionSubmissionOk&&denied.decisionRecovery?.outcome==='not_found'&&
+      denied.decisionSubmission?.outcome==='not_found'&&denied.decisionRecovery?.my_decision===null&&
+      denied.decisionSubmission?.my_decision===null&&
       denied.resolutionOk&&denied.resolution?.outcome==='not_found'&&denied.resolution?.filter_resolution_status===null&&
       denied.candidateAuthorityDenied && ['genres', 'release_year_from', 'release_year_to', 'filter_completed_count', 'required_voter_count', 'allowed_release_year_max']
         .every(key => denied.recovery[key] === null && denied.submission[key] === null)).toBe(true);
@@ -631,7 +671,7 @@ test('@membership G08 authorization and room isolation', async ({ diagnostics, b
     expect(await outsider.page.evaluate(values => values.every(value => !document.body.innerText.includes(value)), roomA.members.map(m => m.user_id))).toBe(true);
     assertResolutionTrafficZero(pages);
     expect([diagnostics, v1, v2, outsider].reduce((n, d) => n + d.signupAttempts, 0) === membershipAnonymousBudget.G08).toBe(true);
-    await diagnostics.record({ scenario: 'G08', outcome: 'ordinary JWT own room access; foreign room/filter recovery/submit hidden; full join strict-null; private candidate identity/authority and room/member/filter mutation denied; owner snapshots stable; candidate requests/UI0; identities4' });
+    await diagnostics.record({ scenario: 'G08', outcome: 'ordinary JWT own room access; foreign room/filter/decision recovery and submit hidden; private decision table denied; full join strict-null; owner snapshots stable; identities4' });
   }));
 });
 

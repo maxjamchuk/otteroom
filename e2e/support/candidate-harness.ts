@@ -2,7 +2,8 @@ import { expect, type Page, type Request, type Response, type Route } from '@pla
 import fs from 'node:fs';
 import { parseEnv } from 'node:util';
 import { type SafeDiagnostics, safeError } from './safe-diagnostics.ts';
-import type { PublicApi, RoomProjection } from './room-harness.ts';
+import { committedRoomSnapshot, type PublicApi, type RoomProjection } from './room-harness.ts';
+import { candidateOverlapDiagnostic, type CandidateRequestDiagnostic } from './harness-observability.ts';
 import type { TmdbStubScenario } from './tmdb-stub.ts';
 
 export const controlledCandidate = Object.freeze({ tmdbMovieId: 6006,
@@ -12,7 +13,8 @@ const endpoint = (value: string) => new URL(value).pathname === '/functions/v1/r
 
 type StubSnapshot = Readonly<{ scenario: TmdbStubScenario; calls: Readonly<{
   discover: number; details: number; configuration: number; poster: number }>; held: number;
-  released: boolean; invalid: number }>;
+  released: boolean; invalid: number; provider: Readonly<{
+    requests: number; completed: number; active: number }> }>;
 
 function controlUrl(): string {
   const value = process.env.OTTEROOM_TMDB_STUB_CONTROL_URL;
@@ -34,11 +36,136 @@ export async function tmdbSnapshot(): Promise<StubSnapshot> {
   const response = await fetch(controlUrl()); const value = await response.json();
   if (!response.ok || !value || typeof value !== 'object' || !value.calls ||
       !['discover','details','configuration','poster'].every(key => Number.isInteger(value.calls[key])) ||
-      !Number.isInteger(value.held) || !Number.isInteger(value.invalid)) throw safeError();
+      !Number.isInteger(value.held) || !Number.isInteger(value.invalid) || !value.provider ||
+      !['requests','completed','active'].every(key => Number.isInteger(value.provider[key])) ||
+      value.provider.completed + value.provider.active > value.provider.requests) throw safeError();
   return value as StubSnapshot;
 }
-export async function waitTmdbHeld(count: number) {
-  await expect.poll(async () => (await tmdbSnapshot()).held, { timeout: 15000 }).toBe(count);
+export async function installCandidateRequestOverlap(pages: Page[], room: RoomProjection,
+  diagnostics?: Pick<SafeDiagnostics, 'recordHarnessDiagnostic'>) {
+  if (pages.length < 2 || pages.length > 4 || new Set(pages).size !== pages.length ||
+      !/^[0-9a-f-]{36}$/.test(room.id)) throw safeError();
+  const minimumConcurrent = 2;
+  let held = 0, forwarding = 0, failed = false, disposed = false;
+  type Lifecycle = { sequence: number; routeObserved: true; continueSucceeded: boolean;
+    nativeResponseObserved: boolean; httpStatus: number | null; expectedAvailable: boolean;
+    requestFinished: boolean; requestFailed: CandidateRequestDiagnostic['requestFailed']; active: boolean };
+  const tracked = new Map<Request, Lifecycle>(), settled = new Set<Request>();
+  const results = new Map<Request, { status: number; outcome: 'available' }>();
+  const responseWork = new Set<Promise<void>>();
+  let release!: () => void, arrived!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const ready = new Promise<void>(resolve => { arrived = resolve; });
+  const entries = pages.map(page => ({ page, handler: async (route: Route) => {
+    const request = route.request();
+    let didForward = false;
+    try {
+      const body = request.postDataJSON();
+      if (request.method() !== 'POST' || Object.keys(body ?? {}).join(',') !== 'room_id' ||
+          body.room_id !== room.id) throw safeError();
+      const lifecycle: Lifecycle = { sequence: tracked.size + 1, routeObserved: true,
+        continueSucceeded: false, nativeResponseObserved: false, httpStatus: null,
+        expectedAvailable: false, requestFinished: false, requestFailed: 'none', active: true };
+      tracked.set(request, lifecycle); held++; if (held === minimumConcurrent) arrived(); await gate;
+      forwarding++; didForward = true; await route.continue(); lifecycle.continueSucceeded = true;
+    } catch { failed = true; arrived(); release(); await route.abort('failed').catch(() => {}); }
+    finally { if (didForward) forwarding--; }
+  }}));
+  const onResponse = (response: Response) => {
+    const request = response.request();
+    const lifecycle = tracked.get(request);
+    if (!lifecycle) return;
+    lifecycle.nativeResponseObserved = true;
+    lifecycle.httpStatus = response.status();
+    const work = (async () => {
+      try {
+        const bytes = await response.body();
+        const value = bytes.length <= 4096 ? JSON.parse(bytes.toString('utf8')) : null;
+        if (response.status() !== 200 || !strictAvailable(value)) throw safeError();
+        lifecycle.expectedAvailable = true;
+        results.set(request, { status: response.status(), outcome: 'available' });
+      } catch { if (!disposed) failed = true; }
+    })().finally(() => responseWork.delete(work));
+    responseWork.add(work);
+  };
+  const onFinished = (request: Request) => {
+    const lifecycle = tracked.get(request);
+    if (lifecycle) { lifecycle.requestFinished = true; lifecycle.active = false; settled.add(request); }
+  };
+  const onFailed = (request: Request) => {
+    const lifecycle = tracked.get(request);
+    if (lifecycle) {
+      const text = request.failure()?.errorText ?? '';
+      lifecycle.requestFailed = /abort/i.test(text) ? 'aborted' : /tim(?:e|ed)out/i.test(text) ? 'timeout' :
+        /net::|network/i.test(text) ? 'network' : 'other';
+      lifecycle.active = false; settled.add(request); failed = true;
+    }
+  };
+  for (const entry of entries) {
+    entry.page.on('response', onResponse);
+    entry.page.on('requestfinished', onFinished);
+    entry.page.on('requestfailed', onFailed);
+    await entry.page.route('**/functions/v1/room-candidate', entry.handler, { times: 1 });
+  }
+  const waitFor = (complete: () => boolean, timeout = 30000) => expect.poll(() =>
+    failed || disposed ? -1 : complete() ? 1 : 0, { timeout }).toBe(1);
+  const requestDiagnostics = (): CandidateRequestDiagnostic[] => [...tracked.values()].map(item => ({
+    sequence: `req-${item.sequence}`, routeObserved: item.routeObserved,
+    continueSucceeded: item.continueSucceeded, nativeResponseObserved: item.nativeResponseObserved,
+    httpStatus: item.httpStatus, expectedAvailable: item.expectedAvailable,
+    requestFinished: item.requestFinished, requestFailed: item.requestFailed, active: item.active,
+  }));
+  const emitDiagnostic = async () => {
+    let provider: { state: 'observed' | 'unavailable'; requests: number | null;
+      completed: number | null; active: number | null } =
+      { state: 'unavailable', requests: null, completed: null, active: null };
+    let authority: 'present' | 'absent' | 'inspection-failed' = 'inspection-failed';
+    try {
+      const snapshot = await tmdbSnapshot();
+      provider = { state: 'observed', ...snapshot.provider };
+    } catch { /* The fixed unavailable state is safe and explicit. */ }
+    try {
+      authority = committedRoomSnapshot(room).row.candidate_acquisition_status === 'assigned' ? 'present' : 'absent';
+    } catch { /* The fixed inspection-failed state is safe and explicit. */ }
+    diagnostics?.recordHarnessDiagnostic(candidateOverlapDiagnostic({ forwarding,
+      responseValidationActive: responseWork.size, failed, disposed, provider, authority,
+      requests: requestDiagnostics() }));
+  };
+  const drain = async (timeout = 30000) => {
+    try {
+      await waitFor(() => held >= minimumConcurrent && forwarding === 0 && tracked.size === settled.size &&
+        tracked.size === results.size && responseWork.size === 0, timeout);
+    } catch (error) {
+      await emitDiagnostic();
+      throw error;
+    }
+    if (failed || disposed || held < minimumConcurrent || forwarding !== 0 || tracked.size !== settled.size ||
+        tracked.size !== results.size || responseWork.size !== 0)
+      throw safeError();
+  };
+  return {
+    wait: () => Promise.race([ready, new Promise<never>((_, reject) =>
+      setTimeout(() => reject(safeError()), 15000))]).then(() => {
+      if (failed || held < minimumConcurrent) throw safeError();
+    }),
+    release: () => release(),
+    drain,
+    results: () => [...results.values()],
+    close: async () => {
+      if (disposed) return;
+      release();
+      if (!failed && held >= minimumConcurrent) await drain().catch(() => { failed = true; });
+      await expect.poll(() => forwarding, { timeout: 30000 }).toBe(0).catch(() => {});
+      await Promise.allSettled([...responseWork]);
+      disposed = true;
+      await Promise.all(entries.map(async entry => {
+        entry.page.removeListener('response', onResponse);
+        entry.page.removeListener('requestfinished', onFinished);
+        entry.page.removeListener('requestfailed', onFailed);
+        await entry.page.unroute('**/functions/v1/room-candidate', entry.handler);
+      }));
+    },
+  };
 }
 
 function strictAvailable(value: unknown): boolean {
@@ -161,6 +288,7 @@ export async function candidateHarness(participants: SafeDiagnostics[], baseURL:
     },
     async close() {
       if (disposed) return; disposed=true;
+      await Promise.allSettled([...pending]);
       for(const item of listeners){item.participant.page.removeListener('request',item.onRequest);
         item.participant.page.removeListener('response',item.onResponse);
         await item.participant.page.unroute('https://image.tmdb.org/**',item.posterRoute);}

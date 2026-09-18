@@ -1,5 +1,5 @@
 import type { AcceptedRoomResult, CandidateAcquisitionStatus, JoinResult, RoomResolutionStatus } from './contracts';
-import { RoomContractError, validCandidateStatus, validFilterCount, validResolutionStatus, validVoterCounts } from './contracts';
+import { RoomContractError, validCandidateStatus, validDecisionCount, validFilterCount, validResolutionStatus, validVoterCounts } from './contracts';
 import type { RoomProjection } from './service';
 
 export function acceptedRoomState(result: AcceptedRoomResult) {
@@ -19,6 +19,7 @@ export function acceptedRoomState(result: AcceptedRoomResult) {
     resolutionIntegrityError:false,
     candidateAcquisitionStatus:result.candidate_acquisition_status,
     candidateIntegrityError:false,
+    decisionCompletedCount:result.decision_completed_count,
   };
 }
 export type AcceptedRoomState = ReturnType<typeof acceptedRoomState>;
@@ -63,6 +64,8 @@ export function applyRoomRefetch(current: AcceptedRoomState, row: RoomProjection
       row.required_voter_count,row.state) ||
     !validCandidateStatus(row.candidate_acquisition_status,row.filter_resolution_status,
       row.filter_completed_count,row.required_voter_count,row.state) ||
+    !validDecisionCount(row.decision_completed_count,row.required_voter_count,row.state,
+      row.filter_completed_count,row.filter_resolution_status,row.candidate_acquisition_status) ||
     current.isVoter && row.voter_count === 0) throw new RoomContractError();
   // Membership is fixed: delayed authoritative reads cannot undo observed admissions.
   const voterCount=Math.max(current.voterCount,row.voter_count);
@@ -72,6 +75,7 @@ export function applyRoomRefetch(current: AcceptedRoomState, row: RoomProjection
   let resolutionIntegrityError=current.resolutionIntegrityError;
   let candidateAcquisitionStatus=current.candidateAcquisitionStatus;
   let candidateIntegrityError=current.candidateIntegrityError;
+  const decisionCompletedCount=Math.max(current.decisionCompletedCount,row.decision_completed_count);
   if(!resolutionIntegrityError&&row.filter_resolution_status!=='pending'){
     if(filterResolutionStatus==='pending')filterResolutionStatus=row.filter_resolution_status;
     else if(filterResolutionStatus!==row.filter_resolution_status)resolutionIntegrityError=true;
@@ -84,10 +88,11 @@ export function applyRoomRefetch(current: AcceptedRoomState, row: RoomProjection
     &&filterResolutionStatus===current.filterResolutionStatus
     &&resolutionIntegrityError===current.resolutionIntegrityError
     &&candidateAcquisitionStatus===current.candidateAcquisitionStatus
-    &&candidateIntegrityError===current.candidateIntegrityError)return current;
+    &&candidateIntegrityError===current.candidateIntegrityError
+    &&decisionCompletedCount===current.decisionCompletedCount)return current;
   return { ...current,state,title:state==='ready'?'Ready':'Waiting',voterCount,filterCompletedCount,
     filtersComplete:filterCompletedCount===current.requiredVoterCount,filterResolutionStatus,
-    resolutionIntegrityError,candidateAcquisitionStatus,candidateIntegrityError };
+    resolutionIntegrityError,candidateAcquisitionStatus,candidateIntegrityError,decisionCompletedCount };
 }
 export function createErrorState() {
   return { kind: 'error' as const, message: 'Unable to create your room. Please try again.' };

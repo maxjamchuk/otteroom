@@ -9,6 +9,35 @@ export type Json =
 export type Database = {
   public: {
     Tables: {
+      candidate_decisions: {
+        Row: {
+          accepted_at: string
+          decision: Database["public"]["Enums"]["candidate_decision_value"]
+          room_member_id: string
+          tmdb_movie_id: number
+        }
+        Insert: {
+          accepted_at?: string
+          decision: Database["public"]["Enums"]["candidate_decision_value"]
+          room_member_id: string
+          tmdb_movie_id: number
+        }
+        Update: {
+          accepted_at?: string
+          decision?: Database["public"]["Enums"]["candidate_decision_value"]
+          room_member_id?: string
+          tmdb_movie_id?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "candidate_decisions_room_member_id_fkey"
+            columns: ["room_member_id"]
+            isOneToOne: false
+            referencedRelation: "room_members"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       movie_candidates: {
         Row: {
           id: string
@@ -101,6 +130,7 @@ export type Database = {
           created_at: string
           creation_request_id: string
           creator_user_id: string
+          decision_completed_count: number
           filter_completed_count: number
           filter_resolution_status: Database["public"]["Enums"]["filter_resolution_status"]
           id: string
@@ -117,6 +147,7 @@ export type Database = {
           created_at?: string
           creation_request_id: string
           creator_user_id: string
+          decision_completed_count?: number
           filter_completed_count?: number
           filter_resolution_status?: Database["public"]["Enums"]["filter_resolution_status"]
           id?: string
@@ -133,6 +164,7 @@ export type Database = {
           created_at?: string
           creation_request_id?: string
           creator_user_id?: string
+          decision_completed_count?: number
           filter_completed_count?: number
           filter_resolution_status?: Database["public"]["Enums"]["filter_resolution_status"]
           id?: string
@@ -187,6 +219,7 @@ export type Database = {
         }
         Returns: {
           candidate_acquisition_status: Database["public"]["Enums"]["candidate_acquisition_status"]
+          decision_completed_count: number
           filter_completed_count: number
           filter_resolution_status: Database["public"]["Enums"]["filter_resolution_status"]
           is_creator: boolean
@@ -221,10 +254,22 @@ export type Database = {
           required_voter_count: number
         }[]
       }
+      get_room_candidate_decision: {
+        Args: { p_expected_tmdb_movie_id: number; p_room_id: string }
+        Returns: {
+          decision_completed_count: number
+          decision_set_complete: boolean
+          my_decision: Database["public"]["Enums"]["candidate_decision_value"]
+          outcome: string
+          required_voter_count: number
+          two_voter_agreement: boolean
+        }[]
+      }
       join_room: {
         Args: { p_room_code: string }
         Returns: {
           candidate_acquisition_status: Database["public"]["Enums"]["candidate_acquisition_status"]
+          decision_completed_count: number
           filter_completed_count: number
           filter_resolution_status: Database["public"]["Enums"]["filter_resolution_status"]
           is_creator: boolean
@@ -271,9 +316,25 @@ export type Database = {
           required_voter_count: number
         }[]
       }
+      submit_room_candidate_decision: {
+        Args: {
+          p_decision: Database["public"]["Enums"]["candidate_decision_value"]
+          p_expected_tmdb_movie_id: number
+          p_room_id: string
+        }
+        Returns: {
+          decision_completed_count: number
+          decision_set_complete: boolean
+          my_decision: Database["public"]["Enums"]["candidate_decision_value"]
+          outcome: string
+          required_voter_count: number
+          two_voter_agreement: boolean
+        }[]
+      }
     }
     Enums: {
       candidate_acquisition_status: "pending" | "assigned" | "no_candidates"
+      candidate_decision_value: "yes" | "no"
       filter_resolution_status: "pending" | "compatible" | "incompatible"
       participant_genre:
         | "action"
@@ -423,6 +484,7 @@ export const Constants = {
   public: {
     Enums: {
       candidate_acquisition_status: ["pending", "assigned", "no_candidates"],
+      candidate_decision_value: ["yes", "no"],
       filter_resolution_status: ["pending", "compatible", "incompatible"],
       participant_genre: [
         "action",

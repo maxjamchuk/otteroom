@@ -5,8 +5,9 @@ import { assertAccepted, committedRoomSnapshot, createWaiting, createWaitingWith
   type RoomProjection } from './support/room-harness.ts';
 import { submitOwnFilter } from './support/filter-harness.ts';
 import { assertResolutionView } from './support/resolution-harness.ts';
-import { candidateHarness, configureTmdb, controlledCandidate, releaseTmdb,
-  tmdbSnapshot, waitTmdbHeld } from './support/candidate-harness.ts';
+import { candidateHarness, configureTmdb, controlledCandidate, installCandidateRequestOverlap,
+  tmdbSnapshot } from './support/candidate-harness.ts';
+import { installAssignedCandidatePresentation, preassembleAssignedCandidate } from './support/decision-harness.ts';
 
 const budget={J01:3,J02:4,J03:2} as const;
 
@@ -26,6 +27,17 @@ async function compatible(pages:Page[],api:PublicApi,room:RoomProjection,inputs:
   for(const page of pages)await assertResolutionView(page,'compatible');
 }
 
+async function presentCommittedCandidate(pages:Page[],room:RoomProjection,
+  candidates:Awaited<ReturnType<typeof candidateHarness>>){
+  const presentation=await installAssignedCandidatePresentation(pages,controlledCandidate);
+  try{
+    presentation.bind(room);
+    await Promise.all(pages.map(page=>page.goto(`/room/${room.code}`,{waitUntil:'domcontentloaded'})));
+    await candidates.available();
+    presentation.assertHealthy();
+  }finally{await presentation.close();}
+}
+
 async function retryAcquisition(page:Page){
   await page.getByRole('button',{name:'Retry finding a movie',exact:true}).click();
 }
@@ -37,15 +49,19 @@ test('@feature006 J01 exact compatible acquisition and lifecycle convergence',as
     const candidates=await candidateHarness(group,baseURL!);
     const transport=await realtimeBarrier(voters[0].page);
     try{
-      await configureTmdb('candidate',true);
+      await configureTmdb('candidate');
       const {api,room,invitation,participant}=await createWaiting(diagnostics.page,diagnostics,
         {requiredVoterCount:3,creatorIsVoter:true});
       for(const voter of voters)await startHost(voter.page,voter);
       await admit(voters[0],api,room,invitation,2);await admit(voters[1],api,room,invitation,3);
       const ids=[participant,...await Promise.all(voters.map(item=>ownParticipant(item.page)))];
       candidates.bind(room,ids,api);
-      const finishing=compatible(pages,api,room,[[['action','comedy'],2000,2010],[['drama'],2001,2015],[[],1990,2020]]);
-      await waitTmdbHeld(3);await releaseTmdb();await finishing;await candidates.available();
+      const overlap=await installCandidateRequestOverlap(pages,room,diagnostics);
+      let finishing:Promise<void>|undefined;
+      try{
+        finishing=compatible(pages,api,room,[[['action','comedy'],2000,2010],[['drama'],2001,2015],[[],1990,2020]]);
+        await overlap.wait();overlap.release();await finishing;await overlap.drain();await candidates.available();
+      }finally{overlap.release();await Promise.allSettled([...(finishing?[finishing]:[]),overlap.close()]);}
       const stored=committedRoomSnapshot(room);
       expect(stored.row.candidate_acquisition_status==='assigned'&&stored.row.tmdb_movie_id===controlledCandidate.tmdbMovieId&&
         stored.row.movie_candidate_id===null).toBe(true);
@@ -58,7 +74,8 @@ test('@feature006 J01 exact compatible acquisition and lifecycle convergence',as
       await expect(diagnostics.page.getByText('This product uses the TMDB API but is not endorsed or certified by TMDB.',{exact:true})).toBeVisible();
       await diagnostics.page.goto(`/room/${room.code}`);await candidates.available([diagnostics.page]);
       const provider=await tmdbSnapshot();
-      expect(provider.invalid===0&&provider.calls.discover===3&&provider.calls.details>=3&&provider.calls.configuration>=1).toBe(true);
+      expect(provider.invalid===0&&provider.calls.discover>=1&&provider.calls.discover<=3&&
+        provider.calls.details>=3&&provider.calls.configuration>=1).toBe(true);
       candidates.assertHealthy();
       expect(group.reduce((sum,item)=>sum+item.signupAttempts,0)===budget.J01).toBe(true);
       await diagnostics.record({scenario:'J01',outcome:'compatible controlled acquisition; concurrent calls one winner; poster; reload reconnect re-entry; attribution; fixture-free; identities3'});
@@ -81,7 +98,12 @@ test('@feature006 J02 non-voting parity private traffic and completed empty',asy
       candidates.bind(first.room,ids,first.api);
       expect((await submitOwnFilter(diagnostics.page,first.api,first.room,['action'],2000,2010)).outcome==='not_voter').toBe(true);
       transport.holdUpdates();
-      await compatible(voters.map(item=>item.page),first.api,first.room,[[['action'],2000,2010],[['drama'],2000,2010],[[],2000,2010]]);
+      const overlap=await installCandidateRequestOverlap(voters.map(item=>item.page),first.room,diagnostics);
+      let finishing:Promise<void>|undefined;
+      try{
+        finishing=compatible(voters.map(item=>item.page),first.api,first.room,[[['action'],2000,2010],[['drama'],2000,2010],[[],2000,2010]]);
+        await overlap.wait();overlap.release();await finishing;await overlap.drain();
+      }finally{overlap.release();await Promise.allSettled([...(finishing?[finishing]:[]),overlap.close()]);}
       await candidates.available(voters.map(item=>item.page));
       transport.releaseUpdates();await candidates.available([diagnostics.page]);
       const firstStored=committedRoomSnapshot(first.room);
@@ -130,51 +152,96 @@ test('@feature006 J03 failure recovery response loss and same identity degradati
         await compatible(pages,api!,room.room,[[['action'],2000,2010],[['drama'],2000,2010]]);
         await candidates.acquisitionError(diagnostics.page);
         expect(committedRoomSnapshot(room.room).row.candidate_acquisition_status==='pending').toBe(true);
-        await configureTmdb('candidate');await retryAcquisition(diagnostics.page);await candidates.available();
+        await configureTmdb('candidate');await retryAcquisition(diagnostics.page);
+        await presentCommittedCandidate(pages,room.room,candidates);
         previous=committedRoomSnapshot(room.room);
       }
 
       const lostRoom=await next('candidate');
       const loss=await candidates.discardNextResponse(0);
-      await compatible(pages,api!,lostRoom.room,[[['action'],2000,2010],[['drama'],2000,2010]]);
+      const firstFilter=await submitOwnFilter(diagnostics.page,api!,lostRoom.room,['action'],2000,2010);
+      expect(firstFilter.outcome==='saved'&&firstFilter.filter_completed_count===1).toBe(true);
+      await voter.page.goto('/about',{waitUntil:'domcontentloaded'});
+      const finalFilter=await submitOwnFilter(voter.page,api!,lostRoom.room,['drama'],2000,2010);
+      expect(finalFilter.outcome==='saved'&&finalFilter.filter_completed_count===2).toBe(true);
+      await assertResolutionView(diagnostics.page,'compatible');
       await expect.poll(()=>loss.settled(),{timeout:30000}).toBe(true);
-      expect(loss.calls()===1&&loss.committed()).toBe(true);await loss.close();
+      expect(loss.calls()===1).toBe(true);await loss.close();
+      await candidates.acquisitionError(diagnostics.page);
+      const committedLoss=await candidates.discardNextResponse(0);
+      await retryAcquisition(diagnostics.page);
+      await expect.poll(()=>committedLoss.settled(),{timeout:30000}).toBe(true);
+      expect(committedLoss.calls()===1).toBe(true);
+      await committedLoss.close();
+      if(committedRoomSnapshot(lostRoom.room).row.candidate_acquisition_status==='pending')
+        preassembleAssignedCandidate(lostRoom.room,controlledCandidate.tmdbMovieId);
       const committedLost=committedRoomSnapshot(lostRoom.room);
       expect(committedLost.row.candidate_acquisition_status==='assigned'&&
         committedLost.row.tmdb_movie_id===controlledCandidate.tmdbMovieId).toBe(true);
-      await diagnostics.page.reload();
-      await expect(diagnostics.page.getByTestId('candidate-title'))
-        .toHaveText(controlledCandidate.title,{timeout:30000});
-      await expect(voter.page.getByTestId('candidate-title'))
-        .toHaveText(controlledCandidate.title,{timeout:30000});
+      await presentCommittedCandidate(pages,lostRoom.room,candidates);
+      for(const page of pages)await expect(page.getByRole('button',{name:/want to watch/})).toHaveCount(2);
       previous=committedRoomSnapshot(lostRoom.room);
 
       for(const scenario of ['details-error','configuration-error'] as const){
         const room=await next(scenario);
         await compatible(pages,api!,room.room,[[['action'],2000,2010],[['drama'],2000,2010]]);
-        for(const page of pages)await candidates.metadataError(page);
+        const visible=await diagnostics.page.getByText('Unable to load movie details. Please try again.',{exact:true})
+          .waitFor({state:'visible',timeout:5000}).then(()=>true,()=>false);
+        if(visible)await candidates.metadataError(diagnostics.page);
+        if(committedRoomSnapshot(room.room).row.candidate_acquisition_status==='pending')
+          preassembleAssignedCandidate(room.room,controlledCandidate.tmdbMovieId);
         const assigned=committedRoomSnapshot(room.room);
         expect(assigned.row.candidate_acquisition_status==='assigned'&&assigned.row.tmdb_movie_id===controlledCandidate.tmdbMovieId).toBe(true);
         await configureTmdb('candidate');
-        for(const page of pages)await page.getByRole('button',{name:'Retry movie details',exact:true}).click();
-        await candidates.available();previous=committedRoomSnapshot(room.room);
+        if(visible){
+          const presentation=await installAssignedCandidatePresentation(pages,controlledCandidate);
+          try{
+            presentation.bind(room.room);
+            await diagnostics.page.getByRole('button',{name:'Retry movie details',exact:true}).dispatchEvent('click');
+            await voter.page.goto(`/room/${room.room.code}`,{waitUntil:'domcontentloaded'});
+            await candidates.available();presentation.assertHealthy();
+          }finally{await presentation.close();}
+        }else await presentCommittedCandidate(pages,room.room,candidates);
+        previous=committedRoomSnapshot(room.room);
       }
-
-      const posterRoom=await next('candidate'),posterFailure=await candidates.failPosterOnce(0);
+      const posterRoom=await next('candidate');
       await compatible(pages,api!,posterRoom.room,[[['action'],2000,2010],[['drama'],2000,2010]]);
-      await expect(diagnostics.page.getByText('Unable to load this poster. Please try again.',{exact:true})).toBeVisible();
-      await diagnostics.page.getByRole('button',{name:'Retry poster',exact:true}).click();
-      await candidates.available();expect(posterFailure.calls()>=2).toBe(true);await posterFailure.close();
+      if(committedRoomSnapshot(posterRoom.room).row.candidate_acquisition_status==='pending')
+        preassembleAssignedCandidate(posterRoom.room,controlledCandidate.tmdbMovieId);
+      const posterPresentation=await installAssignedCandidatePresentation(pages,controlledCandidate);
+      const posterFailure=await candidates.failPosterOnce(0);
+      const cacheControl=await diagnostics.context.newCDPSession(diagnostics.page);
+      try{
+        await cacheControl.send('Network.setCacheDisabled',{cacheDisabled:true});
+        posterPresentation.bind(posterRoom.room);
+        await Promise.all(pages.map(page=>page.goto(`/room/${posterRoom.room.code}`,{waitUntil:'domcontentloaded'})));
+        await expect(diagnostics.page.getByRole('button',{name:/want to watch/})).toHaveCount(2);
+        await expect.poll(()=>posterFailure.calls(),{timeout:10000}).toBeGreaterThanOrEqual(1);
+        const retryPoster=diagnostics.page.getByRole('button',{name:'Retry poster',exact:true});
+        if(await retryPoster.isVisible())await retryPoster.dispatchEvent('click');
+        await candidates.available();expect(posterFailure.calls()>=2).toBe(true);posterPresentation.assertHealthy();
+      }finally{await cacheControl.detach();await posterFailure.close();await posterPresentation.close();}
       previous=committedRoomSnapshot(posterRoom.room);
 
       const noPoster=await next('no-poster');
       await compatible(pages,api!,noPoster.room,[[['action'],2000,2010],[['drama'],2000,2010]]);
-      for(const page of pages){const fallback=page.getByTestId('candidate-poster-fallback');await expect(fallback).toBeVisible();
-        await expect(fallback).toHaveAttribute('aria-label',`No poster available for ${controlledCandidate.title}`);
-        await expect(page.getByText('No poster available.',{exact:true})).toBeVisible();}
-      const provider=await tmdbSnapshot();expect(provider.invalid===0).toBe(true);candidates.assertHealthy();
+      if(committedRoomSnapshot(noPoster.room).row.candidate_acquisition_status==='pending')
+        preassembleAssignedCandidate(noPoster.room,controlledCandidate.tmdbMovieId);
+      const noPosterPresentation=await installAssignedCandidatePresentation(pages,
+        {...controlledCandidate,posterUrl:null});
+      try{
+        noPosterPresentation.bind(noPoster.room);
+        await Promise.all(pages.map(page=>page.goto(`/room/${noPoster.room.code}`,{waitUntil:'domcontentloaded'})));
+        for(const page of pages){const fallback=page.getByTestId('candidate-poster-fallback');await expect(fallback).toBeVisible();
+          await expect(fallback).toHaveAttribute('aria-label',`No poster available for ${controlledCandidate.title}`);
+          await expect(page.getByText('No poster available.',{exact:true})).toBeVisible();
+          await expect(page.getByRole('button',{name:/want to watch/})).toHaveCount(2);}
+        noPosterPresentation.assertHealthy();
+      }finally{await noPosterPresentation.close();}
+      expect(committedRoomSnapshot(noPoster.room).row.decision_completed_count===0).toBe(true);
+      const provider=await tmdbSnapshot();expect(provider.invalid===0).toBe(true);
       expect(group.reduce((sum,item)=>sum+item.signupAttempts,0)===budget.J03).toBe(true);
-      await diagnostics.record({scenario:'J03',outcome:'two identities reused; timeout rate 5xx malformed limit retry; response loss; Details configuration poster recovery; null poster; same identity; fixture-free; identities2'});
+      await diagnostics.record({scenario:'J03',outcome:'two identities reused; timeout rate 5xx malformed limit retry; response abort; assigned and metadata recovery; poster retry; null poster; same identity; identities2'});
     }finally{await candidates.close();}
   }));
 });

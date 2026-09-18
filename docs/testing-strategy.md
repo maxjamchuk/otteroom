@@ -111,6 +111,17 @@ normal journey, its artifacts MUST update or replace the affected smoke
 assertions while preserving the invariant intent and recording the new exact
 budget. The completed earlier receipt remains historical evidence.
 
+## Feature 007 fixed acceptance profile
+
+Feature 007 adds the override-free `npm run test:e2e:feature007` profile. It
+selects exactly K01/K02 with caps 2 and 4 (owner total 6), while direct J03 is
+bounded separately at 2. The post-feature full inventory is 44 cases and 106
+identities. K01 retains only four monotonic responsiveness aggregates: 20
+samples, count at or below 2,000 ms (at least 19), maximum duration, and zero
+recoverable failures. It records no individual samples or percentile. Capture
+remains off; the credential registry, finalized scanner, controlled provider,
+safe reporter, and owned cleanup remain mandatory.
+
 ## Feature-specific acceptance
 
 Each feature specification and plan MUST define a bounded real-stack browser
@@ -198,8 +209,8 @@ into the checkout, and remove only owned resources afterward.
 
 ## Full historical browser acceptance
 
-The existing `npm run test:e2e` remains the full current E/G/H/I/J inventory:
-42 cases and 100 identities. Run it, plus C1, when any of the following applies:
+The existing `npm run test:e2e` remains the full current E/G/H/I/J/K inventory:
+44 cases and 106 identities. Run it, plus C1, when any of the following applies:
 
 - explicit release or milestone validation, including the first useful MVP
   release unless its approved release plan states a stricter superset;
@@ -234,7 +245,7 @@ timestamps, scanner result and cleanup result.
   signup-free hour from the last counted attempt and wait outside the harness.
 - Workers remain 1, retries 0 and repeatEach 1 for normal real-stack profiles
   until a separately reviewed isolation design proves another setting safe.
-- Full historical acceptance is 100; C1 is 1; permanent smoke is 16. Targeted
+- Full acceptance is 106; C1 is 1; permanent smoke is 16. Targeted
   selection costs the sum of its current case budgets and is never free merely
   because the same case ran earlier in the hour.
 

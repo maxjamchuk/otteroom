@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CredentialRegistry, registerCredentials, registerPng } from './credential-registry.ts';
 import { containsCredential, DiagnosticBuffer, safeDiagnosticLocation } from './sanitize-diagnostics.ts';
+import { parseHarnessDiagnostic, type HarnessDiagnostic } from './harness-observability.ts';
 import { validPng } from '../../scripts/check-e2e-artifacts.mjs';
 
 export function validateContextOptions(options: BrowserContextOptions): void {
@@ -38,6 +39,23 @@ export function candidateDiagnostic(category: unknown, counts: unknown): Readonl
       (values.shards as number) > 100) throw safeError();
   return Object.freeze({ component: 'room-candidate', category, attempts: values.attempts,
     pages: values.pages, shards: values.shards });
+}
+
+const decisionFailureCategories = new Set([
+  'authentication', 'recovery', 'submission', 'synchronization', 'performance',
+]);
+
+export function decisionDiagnostic(category: unknown, counts: unknown): Readonly<Record<string, unknown>> {
+  if (typeof category !== 'string' || !decisionFailureCategories.has(category) || !counts ||
+      typeof counts !== 'object' || Array.isArray(counts) ||
+      Object.keys(counts).sort().join(',') !== 'attempts,recoverableFailures') throw safeError();
+  const values = counts as Record<string, unknown>;
+  if (![values.attempts, values.recoverableFailures].every(value =>
+    typeof value === 'number' && Number.isInteger(value) && value >= 0) ||
+      (values.attempts as number) > 20 ||
+      (values.recoverableFailures as number) > (values.attempts as number)) throw safeError();
+  return Object.freeze({ component: 'candidate-decision', category,
+    attempts: values.attempts, recoverableFailures: values.recoverableFailures });
 }
 
 export function inspectUiValues(values: string[], known: Iterable<string>): boolean {
@@ -218,7 +236,7 @@ export class SafeDiagnostics {
     await this.flush();
     if (this.#signups !== attempts || this.#identities.size !== identities || this.#signups > this.#signupCap) throw safeError();
     this.#info.annotations.push({ type: 'safe-auth-success', description: 'confirmed' });
-    await this.record({ component: 'anonymous-auth', status: this.#authStatus, outcome: `attempts=${attempts}; identities=${identities}; acceptance-N=100; local-limit=150` });
+    await this.record({ component: 'anonymous-auth', status: this.#authStatus, outcome: `attempts=${attempts}; identities=${identities}; acceptance-N=106; local-limit=150` });
   }
 
   stage(value: 'config' | 'capture-guards' | 'ui' | 'sanitizer' | 'scanner' | 'cleanup'): void {
@@ -245,6 +263,13 @@ export class SafeDiagnostics {
     await this.flush();
     this.#logs.add(input, this.#registry.values());
     if (this.#logs.overflowed) throw safeError();
+  }
+
+  recordHarnessDiagnostic(input: HarnessDiagnostic): void {
+    const diagnostic = parseHarnessDiagnostic(input);
+    const description = JSON.stringify(diagnostic);
+    if (Buffer.byteLength(description) > 4096) throw safeError();
+    this.#info.annotations.push({ type: 'safe-harness-diagnostic', description });
   }
 
   async #inspect() {

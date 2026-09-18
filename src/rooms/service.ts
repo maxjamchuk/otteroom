@@ -1,7 +1,7 @@
 import { bootstrapAnonymousSession } from '../auth/anonymous-session';
 import { getSupabase } from '../lib/supabase';
 import type { Database } from '../types/database.generated';
-import { isRoomId, narrowCreateResult, narrowJoinResult, validCandidateStatus, validFilterCount, validResolutionStatus, validVoterCounts } from './contracts';
+import { isRoomId, narrowCreateResult, narrowJoinResult, validCandidateStatus, validDecisionCount, validFilterCount, validResolutionStatus, validVoterCounts } from './contracts';
 import { normalizeRoomCode } from './code';
 
 export class RoomServiceError extends Error {
@@ -31,16 +31,16 @@ export async function joinRoom(code: Database['public']['Functions']['join_room'
   } catch { throw new RoomServiceError(); }
 }
 
-export type RoomProjection = Pick<Database['public']['Tables']['rooms']['Row'], 'id' | 'code' | 'voter_count' | 'required_voter_count'|'filter_completed_count'|'filter_resolution_status'|'candidate_acquisition_status'> & { state: 'waiting' | 'ready' };
+export type RoomProjection = Pick<Database['public']['Tables']['rooms']['Row'], 'id' | 'code' | 'voter_count' | 'required_voter_count'|'filter_completed_count'|'filter_resolution_status'|'candidate_acquisition_status'|'decision_completed_count'> & { state: 'waiting' | 'ready' };
 
 // The accepted RPC supplies the immutable ID; RLS independently authorizes this read.
 export async function refetchRoom(roomId: string): Promise<RoomProjection> {
   try {
     await bootstrapAnonymousSession();
-    const { data, error } = await getSupabase().from('rooms').select('id, code, state, voter_count, required_voter_count, filter_completed_count, filter_resolution_status, candidate_acquisition_status').eq('id', roomId).limit(2);
+    const { data, error } = await getSupabase().from('rooms').select('id, code, state, voter_count, required_voter_count, filter_completed_count, filter_resolution_status, candidate_acquisition_status, decision_completed_count').eq('id', roomId).limit(2);
     if (error || !Array.isArray(data) || data.length !== 1) throw new RoomServiceError();
     const row = data[0];
-    if (!row || Object.keys(row).sort().join(',') !== 'candidate_acquisition_status,code,filter_completed_count,filter_resolution_status,id,required_voter_count,state,voter_count' || !isRoomId(row.id) || row.id !== roomId ||
+    if (!row || Object.keys(row).sort().join(',') !== 'candidate_acquisition_status,code,decision_completed_count,filter_completed_count,filter_resolution_status,id,required_voter_count,state,voter_count' || !isRoomId(row.id) || row.id !== roomId ||
       typeof row.code !== 'string' || normalizeRoomCode(row.code) !== row.code ||
       (row.state !== 'waiting' && row.state !== 'ready') ||
       !validVoterCounts(row.voter_count, row.required_voter_count, row.state)
@@ -48,10 +48,13 @@ export async function refetchRoom(roomId: string): Promise<RoomProjection> {
       ||!validResolutionStatus(row.filter_resolution_status,row.filter_completed_count,
         row.required_voter_count,row.state)
       ||!validCandidateStatus(row.candidate_acquisition_status,row.filter_resolution_status,
-        row.filter_completed_count,row.required_voter_count,row.state)) throw new RoomServiceError();
+        row.filter_completed_count,row.required_voter_count,row.state)
+      ||!validDecisionCount(row.decision_completed_count,row.required_voter_count,row.state,
+        row.filter_completed_count,row.filter_resolution_status,row.candidate_acquisition_status)) throw new RoomServiceError();
     return { id: row.id, code: row.code, state: row.state, voter_count: row.voter_count,
       required_voter_count: row.required_voter_count,filter_completed_count:row.filter_completed_count,
       filter_resolution_status:row.filter_resolution_status,
-      candidate_acquisition_status:row.candidate_acquisition_status };
+      candidate_acquisition_status:row.candidate_acquisition_status,
+      decision_completed_count:row.decision_completed_count };
   } catch { throw new RoomServiceError(); }
 }

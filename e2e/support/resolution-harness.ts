@@ -1,5 +1,9 @@
 import { expect, type Page, type Request, type Route } from '@playwright/test';
-import { observeCandidateRpcZero, ownRooms, type PublicApi, type RoomProjection } from './room-harness.ts';
+import { committedRoomSnapshot, observeCandidateRpcZero, ownRooms,
+  type PublicApi, type RoomProjection } from './room-harness.ts';
+import { filterResolutionBoundaryDiagnostic,
+  type FilterResolutionBoundaryDiagnostic } from './harness-observability.ts';
+import type { SafeDiagnostics } from './safe-diagnostics.ts';
 
 export type ResolutionStatus = RoomProjection['filter_resolution_status'];
 export type ResolutionResult = {
@@ -83,6 +87,64 @@ export async function assertResolutionView(page:Page,status:ResolutionStatus|'re
     expect(observeCandidateRpcZero(page).count()).toBe(0);
   }
   expect(observeResolutionTraffic(page).tmdb()).toBe(0);
+}
+
+// H02's direct filter RPCs return when their own transactions commit. Feature
+// 005 resolution is a separate client-driven transaction after the room UPDATE
+// is refetched. Observe that native path without routing or replacing it, then
+// use the terminal browser view plus authoritative snapshot as the boundary.
+export function observeFilterResolutionBoundary(pages:Page[],room:RoomProjection,
+  expectedResolution:'compatible'|'incompatible',
+  operationPhase:FilterResolutionBoundaryDiagnostic['operationPhase'],
+  diagnostics?:Pick<SafeDiagnostics,'recordHarnessDiagnostic'>){
+  if(pages.length<2||pages.length>4||new Set(pages).size!==pages.length||
+      !/^[0-9a-f-]{36}$/.test(room.id))throw new Error('E2E_SAFE_FAILURE');
+  const tracked=new WeakSet<Request>();
+  let requests=0,responses=0,successfulResponses=0,requestFailures=0,disposed=false;
+  const entries=pages.map(page=>{
+    const onRequest=(request:Request)=>{
+      if(disposed||new URL(request.url()).pathname!=='/rest/v1/rpc/resolve_common_filters')return;
+      try{
+        const body=request.postDataJSON();
+        if(request.method()==='POST'&&Object.keys(body??{}).join(',')==='p_room_id'&&
+            body.p_room_id===room.id){tracked.add(request);requests++;}
+      }catch{/* A malformed request is owned by the existing resolution contract checks. */}
+    };
+    const onResponse=(response:import('@playwright/test').Response)=>{
+      if(disposed||!tracked.has(response.request()))return;
+      responses++;if(response.ok())successfulResponses++;
+    };
+    const onFailed=(request:Request)=>{if(!disposed&&tracked.has(request))requestFailures++;};
+    page.on('request',onRequest);page.on('response',onResponse);page.on('requestfailed',onFailed);
+    return{page,onRequest,onResponse,onFailed};
+  });
+  const diagnostic=(terminalViewObserved:boolean)=>{
+    const stored=committedRoomSnapshot(room);
+    return filterResolutionBoundaryDiagnostic({operationPhase,
+      expectedFilterCount:room.required_voter_count,
+      authoritativeFilterCount:stored.row.filter_completed_count,
+      expectedResolution,filterResolution:stored.row.filter_resolution_status,
+      terminalViewObserved,resolverRequestsObserved:requests,
+      resolverResponsesObserved:responses,resolverSuccessResponses:successfulResponses,
+      resolverRequestFailures:requestFailures});
+  };
+  return{
+    async wait(page:Page){
+      let terminalViewObserved=false;
+      try{
+        await assertResolutionView(page,expectedResolution);terminalViewObserved=true;
+        const state=diagnostic(terminalViewObserved);
+        if(state.missing.length)throw new Error('E2E_SAFE_FAILURE');
+        return state;
+      }catch(error){diagnostics?.recordHarnessDiagnostic(diagnostic(terminalViewObserved));throw error;}
+    },
+    close(){
+      if(disposed)return;disposed=true;
+      for(const entry of entries){entry.page.removeListener('request',entry.onRequest);
+        entry.page.removeListener('response',entry.onResponse);
+        entry.page.removeListener('requestfailed',entry.onFailed);}
+    },
+  };
 }
 
 export async function installResolutionPreCommitFailure(page:Page){

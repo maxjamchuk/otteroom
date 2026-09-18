@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import { expect, type Page, type Route, type Response } from '@playwright/test';
 import { test, safeBody, SafeDiagnostics } from './support/safe-diagnostics';
-import { roomSnapshot, startHost, ownRooms, assertWaiting, ownParticipant, realtimeBarrier, withParticipants, assertAccepted, createWaiting, assertReady, linkGuest, type PublicApi, type RoomProjection } from './support/room-harness';
+import { roomSnapshot, committedRoomSnapshot, startHost, ownRooms, assertWaiting, ownParticipant, realtimeBarrier, withParticipants, assertAccepted, createWaiting, assertReady, linkGuest, type PublicApi, type RoomProjection } from './support/room-harness';
 
 // Binding allocation from quickstart; later cases consume these trials, not
 // additional fixture/bootstrap identities. US3 strengthens the existing smokes
@@ -185,8 +185,10 @@ const fullMessage = 'Room Full. The voting group is already assembled.';
 async function assertRejected(response: Response, outcome: 'not_found' | 'full') {
   const rows: unknown = await response.json();
   expect(response.ok() && Array.isArray(rows) && rows.length === 1 && rows[0] &&
-    Object.keys(rows[0]).sort().join(',') === 'filter_completed_count,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
-    rows[0].outcome === outcome && ['room_id', 'room_code', 'room_state', 'is_creator', 'is_voter', 'voter_count', 'required_voter_count', 'filter_completed_count'].every(key => rows[0][key] === null)).toBe(true);
+    Object.keys(rows[0]).sort().join(',') === 'candidate_acquisition_status,decision_completed_count,filter_completed_count,filter_resolution_status,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
+    rows[0].outcome === outcome && ['room_id', 'room_code', 'room_state', 'is_creator', 'is_voter',
+      'voter_count', 'required_voter_count', 'filter_completed_count', 'filter_resolution_status',
+      'candidate_acquisition_status', 'decision_completed_count'].every(key => rows[0][key] === null)).toBe(true);
 }
 
 async function assertNoRoomDetails(page: Page, diagnostics: SafeDiagnostics, message: string) {
@@ -773,7 +775,8 @@ for (const role of ['host', 'guest'] as const) {
 // Own-session credentials stay inside the originating browser, never returned to
 // the runner. Both overlapping fetches are dispatched before awaiting either.
 async function repeatJoin(page: Page, api: PublicApi, room: RoomProjection, role: 'host' | 'guest', overlap = false) {
-  const valid = await page.evaluate(async ({ api, room, role, overlap }) => {
+  const expected = committedRoomSnapshot(room).row;
+  const valid = await page.evaluate(async ({ api, room, role, overlap, expected }) => {
     const key = Object.keys(localStorage).find(name => /^sb-.+-auth-token$/.test(name));
     const session = key ? JSON.parse(localStorage.getItem(key) ?? 'null') : null;
     if (!session?.access_token) return false;
@@ -786,11 +789,20 @@ async function repeatJoin(page: Page, api: PublicApi, room: RoomProjection, role
     return (await Promise.all(responses.map(async response => {
       const rows = await response.json();
       return response.ok && Array.isArray(rows) && rows.length === 1 &&
-        Object.keys(rows[0]).sort().join(',') === 'filter_completed_count,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
+        Object.keys(rows[0]).sort().join(',') === 'candidate_acquisition_status,decision_completed_count,filter_completed_count,filter_resolution_status,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
         rows[0].outcome === 'already_member' && rows[0].is_creator === (role === 'host') && rows[0].is_voter === true && rows[0].voter_count === 2 && rows[0].required_voter_count === 2 && Number.isInteger(rows[0].filter_completed_count) &&
+        rows[0].filter_completed_count === expected.filter_completed_count &&
+        rows[0].filter_resolution_status === expected.filter_resolution_status &&
+        rows[0].candidate_acquisition_status === expected.candidate_acquisition_status &&
+        rows[0].decision_completed_count === expected.decision_completed_count &&
         rows[0].room_id === room.id && rows[0].room_code === room.code && rows[0].room_state === 'ready';
     }))).every(Boolean);
-  }, { api, room, role, overlap });
+  }, { api, room, role, overlap, expected: {
+    filter_completed_count: expected.filter_completed_count,
+    filter_resolution_status: expected.filter_resolution_status,
+    candidate_acquisition_status: expected.candidate_acquisition_status,
+    decision_completed_count: expected.decision_completed_count,
+  } });
   expect(valid).toBe(true);
 }
 
