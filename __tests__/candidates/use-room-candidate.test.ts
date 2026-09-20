@@ -4,19 +4,24 @@ import { useRoomCandidate } from '../../src/candidates/use-room-candidate';
 import type { AcceptedRoomState } from '../../src/rooms/state';
 import type { CandidateResult } from '../../src/candidates/contracts';
 
-const mockEnsure = jest.fn();
+const mockEnsure = jest.fn(),mockCanonical=jest.fn();
+const canonicalRefetch=()=>mockCanonical();
 jest.mock('../../src/candidates/service', () => ({ ensureRoomCandidate: (id: string) => mockEnsure(id) }));
 const base: AcceptedRoomState = { kind: 'accepted', id: '11111111-1111-4111-8111-111111111111',
   code: 'ABCDEF0123', isCreator: true, isVoter: true, state: 'ready', title: 'Ready',
   voterCount: 2, requiredVoterCount: 2, filterCompletedCount: 2, filtersComplete: true,
   filterResolutionStatus: 'compatible', resolutionIntegrityError: false,
-  candidateAcquisitionStatus: 'pending', candidateIntegrityError: false, decisionCompletedCount: 0 };
-const available = { outcome: 'available', candidate: { tmdbMovieId: 7, title: 'TMDB Film',
+  candidateAcquisitionStatus: 'pending', candidateProgressionStatus: 'inactive', candidateSequence: 0,
+  candidateIntegrityError: false, decisionCompletedCount: 0 };
+const available = { outcome: 'available', candidateSequence:1,
+  candidateProgressionStatus:'collecting',candidate: { tmdbMovieId: 7, title: 'TMDB Film',
   releaseYear: 2020, posterUrl: 'https://image.tmdb.org/t/p/w500/a.jpg' } } as const;
 function deferred<T>() { let resolve!: (value:T)=>void, reject!: (value:unknown)=>void;
   const promise = new Promise<T>((yes,no)=>{resolve=yes;reject=no;}); return {promise,resolve,reject}; }
 async function mount(room: AcceptedRoomState | null = base) {
-  const hook = renderHook(({ value }: { value: AcceptedRoomState | null }) => useRoomCandidate(value),
+  mockCanonical.mockResolvedValue(room && room.candidateAcquisitionStatus==='assigned'?room:
+    room?{...room,candidateAcquisitionStatus:'assigned',candidateProgressionStatus:'collecting',candidateSequence:1}:null);
+  const hook = renderHook(({ value }: { value: AcceptedRoomState | null }) => useRoomCandidate(value,canonicalRefetch),
     { initialProps: { value: room } }); await act(async()=>{}); return hook;
 }
 beforeEach(()=>{ jest.clearAllMocks(); mockEnsure.mockResolvedValue(available); });
@@ -44,13 +49,15 @@ it.each([[true,true],[true,false],[false,true]] as const)(
 
 it('shares the exact promise through StrictMode effect replay', async()=>{
   const pending=deferred<CandidateResult>(); mockEnsure.mockReturnValue(pending.promise);
-  const hook=renderHook(()=>useRoomCandidate(base),{wrapper:StrictMode}); await act(async()=>{});
+  mockCanonical.mockResolvedValue({...base,candidateAcquisitionStatus:'assigned',
+    candidateProgressionStatus:'collecting',candidateSequence:1});
+  const hook=renderHook(()=>useRoomCandidate(base,canonicalRefetch),{wrapper:StrictMode}); await act(async()=>{});
   expect(mockEnsure).toHaveBeenCalledTimes(1); await act(async()=>pending.resolve(available));
   expect(hook.result.current.candidate?.tmdbMovieId).toBe(7);
 });
 
 it('assigned recovery requests Details through Edge while no-candidates makes no call',async()=>{
-  const assigned=await mount({...base,candidateAcquisitionStatus:'assigned'});
+  const assigned=await mount({...base,candidateAcquisitionStatus:'assigned',candidateProgressionStatus:'collecting',candidateSequence:1});
   expect(mockEnsure).toHaveBeenCalledTimes(1); expect(assigned.result.current.candidate?.tmdbMovieId).toBe(7);
   mockEnsure.mockClear(); const empty=await mount({...base,candidateAcquisitionStatus:'no_candidates'});
   expect(empty.result.current.attempt).toBe('no-candidates'); expect(mockEnsure).not.toHaveBeenCalled();
@@ -65,8 +72,9 @@ it('committed-response loss retries once and adopts the recovered terminal',asyn
 });
 
 it('metadata Retry uses Edge for assigned ID while poster Retry never does',async()=>{
-  mockEnsure.mockResolvedValueOnce({outcome:'metadata_unavailable'}).mockResolvedValueOnce(available);
-  const hook=await mount({...base,candidateAcquisitionStatus:'assigned'});
+  mockEnsure.mockResolvedValueOnce({outcome:'metadata_unavailable',candidateSequence:1,
+    candidateProgressionStatus:'collecting'}).mockResolvedValueOnce(available);
+  const hook=await mount({...base,candidateAcquisitionStatus:'assigned',candidateProgressionStatus:'collecting',candidateSequence:1});
   expect(hook.result.current.attempt).toBe('metadata-error');
   await act(async()=>hook.result.current.retry()); expect(mockEnsure).toHaveBeenCalledTimes(2);
   const calls=mockEnsure.mock.calls.length; await act(async()=>hook.result.current.onError());
@@ -90,15 +98,15 @@ it('terminal refetch clears stale acquisition error and suppresses conflict',asy
   mockEnsure.mockRejectedValueOnce(new Error('temporary'));
   const hook=await mount(); expect(hook.result.current.attempt).toBe('acquisition-error');
   mockEnsure.mockResolvedValueOnce(available);
-  await act(async()=>hook.rerender({value:{...base,candidateAcquisitionStatus:'assigned'}}));
+  await act(async()=>hook.rerender({value:{...base,candidateAcquisitionStatus:'assigned',candidateProgressionStatus:'collecting',candidateSequence:1}}));
   expect(hook.result.current.candidate?.tmdbMovieId).toBe(7);
-  await act(async()=>hook.rerender({value:{...base,candidateAcquisitionStatus:'assigned',candidateIntegrityError:true}}));
+  await act(async()=>hook.rerender({value:{...base,candidateAcquisitionStatus:'assigned',candidateProgressionStatus:'collecting',candidateSequence:1,candidateIntegrityError:true}}));
   expect(hook.result.current).toMatchObject({attempt:'integrity-error',candidate:null,posterSource:null});
 });
 
 it('fails closed when assigned recovery receives an Edge no-candidates terminal',async()=>{
   mockEnsure.mockResolvedValueOnce({outcome:'no_candidates'});
-  const hook=await mount({...base,candidateAcquisitionStatus:'assigned'});
+  const hook=await mount({...base,candidateAcquisitionStatus:'assigned',candidateProgressionStatus:'collecting',candidateSequence:1});
   expect(hook.result.current).toMatchObject({authoritativeStatus:'assigned',
     attempt:'integrity-error',candidate:null,posterSource:null});
   expect(hook.result.current.message).toMatch(/could not be verified/i);
@@ -106,8 +114,8 @@ it('fails closed when assigned recovery receives an Edge no-candidates terminal'
   expect(mockEnsure).toHaveBeenCalledTimes(1);
 });
 
-it.each([{outcome:'available',candidate:available.candidate} as const,
-  {outcome:'metadata_unavailable'} as const])(
+it.each([available,
+  {outcome:'metadata_unavailable',candidateSequence:1,candidateProgressionStatus:'collecting'} as const])(
   'ignores a retired in-flight Edge $outcome after no-candidates refetch',async result=>{
     const pending=deferred<CandidateResult>(); mockEnsure.mockReturnValueOnce(pending.promise);
     const hook=await mount();
@@ -125,7 +133,7 @@ it.each(['candidateIntegrityError','resolutionIntegrityError'] as const)(
     expect(hook.result.current.posterSource).toEqual({uri:available.candidate.posterUrl});
     const stalePosterLoad=hook.result.current.onLoad;
 
-    await act(async()=>hook.rerender({value:{...base,candidateAcquisitionStatus:'assigned',
+    await act(async()=>hook.rerender({value:{...base,candidateAcquisitionStatus:'assigned',candidateProgressionStatus:'collecting',candidateSequence:1,
       [integrityFlag]:true}}));
     expect(hook.result.current).toMatchObject({attempt:'integrity-error',candidate:null,posterSource:null});
     await act(async()=>stalePosterLoad());

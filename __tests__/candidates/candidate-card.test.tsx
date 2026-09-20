@@ -8,7 +8,8 @@ const retry=jest.fn(),onLoad=jest.fn(),onError=jest.fn();
 const candidate={tmdbMovieId:7,title:'TMDB Film',releaseYear:2020,
   posterUrl:'https://image.tmdb.org/t/p/w500/a.jpg'};
 function model(patch:Record<string,unknown>={}){
-  return ({roomId:'room',eligible:true,authoritativeStatus:'assigned',generation:1,requestAttempt:0,
+  return ({roomId:'room',eligible:true,authoritativeStatus:'assigned',progressionStatus:'collecting',
+    candidateSequence:1,generation:1,requestAttempt:0,
     imageAttempt:0,attempt:'available',status:'available',candidate,message:null,
     posterSource:{uri:candidate.posterUrl},imageKey:'1:0:0',retry,onLoad,onError,...patch}) as unknown as
     ReturnType<typeof useRoomCandidate>;
@@ -67,12 +68,14 @@ it('renders stable completed-empty meaning and new-room link without acquisition
 it.each(['assigned-to-empty','empty-to-assigned'] as const)(
   'renders only integrity failure after %s terminal conflict',direction=>{
   const start=createCandidateState('room',true,'pending',1);
-  const assigned=receiveCandidate(start,start,{outcome:'available',candidate});
+  const assigned=receiveCandidate({...start,candidateSequence:1},{...start,candidateSequence:1},
+    {outcome:'available',candidateSequence:1,candidateProgressionStatus:'collecting',candidate});
   const displayed=finishPoster(assigned,assigned,true);
   const empty=receiveCandidate(start,start,{outcome:'no_candidates'});
   const conflict=direction==='assigned-to-empty'
     ? receiveCandidate(displayed,displayed,{outcome:'no_candidates'})
-    : receiveCandidate(empty,empty,{outcome:'available',candidate});
+    : receiveCandidate(empty,empty,{outcome:'available',candidateSequence:1,
+      candidateProgressionStatus:'collecting',candidate});
   render(<CandidateCard model={model({...conflict,status:conflict.attempt,
     posterSource:null,message:'Candidate status could not be verified. Reload the room and try again.'})}/>);
   expect(screen.getByText('Candidate status could not be verified. Reload the room and try again.')).toBeVisible();

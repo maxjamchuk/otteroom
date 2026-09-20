@@ -176,7 +176,7 @@ it('Feature 006 discovery retains serial default acceptance and bounded runtime 
   const { parseInvocation } = await import('./scripts/run-e2e.mjs');
   assert.deepEqual(config.projects.find(p => p.name === 'acceptance').testMatch,
     ['room-session.spec.ts', 'generalized-room-membership-qr.spec.ts', 'participant-filters.spec.ts', 'common-filter-resolution.spec.ts',
-      'tmdb-candidate-source.spec.ts', 'swipe-decisions.spec.ts']);
+      'tmdb-candidate-source.spec.ts', 'swipe-decisions.spec.ts', 'candidate-progression.spec.ts']);
   assert.equal(config.workers, 1); assert.equal(config.repeatEach, 1); assert.equal(config.retries, 0);
   assert.equal(config.reporter[0][0], './e2e/support/safe-reporter.ts');
   for (const field of ['trace', 'video', 'screenshot']) assert.equal(config.use[field], 'off');

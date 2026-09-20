@@ -67,7 +67,7 @@ it('bounds direct J03 and rejects every identity/provider/credential override', 
       assert.throws(()=>validateInvocationEnvironment({[name]:'synthetic'}));`);
 });
 
-it('discovers the additive 44-case 106-identity inventory without browsers', () => {
+it('preserves the Feature 007 slice inside the additive 46-case 112-identity inventory without browsers', () => {
   verify(`import assert from 'node:assert/strict';import fs from 'node:fs';import ts from 'typescript';
     const files=['room-session.spec.ts','generalized-room-membership-qr.spec.ts','participant-filters.spec.ts',
       'common-filter-resolution.spec.ts','tmdb-candidate-source.spec.ts','swipe-decisions.spec.ts'];
@@ -75,9 +75,9 @@ it('discovers the additive 44-case 106-identity inventory without browsers', () 
       const ast=ts.createSourceFile(file,source,ts.ScriptTarget.Latest,true);
       const walk=node=>{if(ts.isCallExpression(node)&&node.expression.getText(ast)==='test'&&
         ts.isStringLiteral(node.arguments[0]))titles.push(node.arguments[0].text);ts.forEachChild(node,walk)};walk(ast);}
-    assert.equal(42+2,44);assert.deepEqual(titles.filter(title=>title.startsWith('@feature007 '))
+    assert.equal(42+2+2,46);assert.deepEqual(titles.filter(title=>title.startsWith('@feature007 '))
       .map(title=>title.split(' ')[1]),['K01','K02']);
-    assert.equal(100+2+4,106);`);
+    assert.equal(100+2+4+2+4,112);`);
 });
 
 it('bounds the exact failed-T063 diagnostic set at 30 identities', () => {
@@ -120,7 +120,8 @@ it('bounds the G04-only confirmation at exactly four identities', () => {
 
 it('keeps historical room projections exact and contains later candidate handoffs', () => {
   const room = fs.readFileSync('e2e/room-session.spec.ts', 'utf8');
-  const projection = 'candidate_acquisition_status,decision_completed_count,filter_completed_count,' +
+  const projection = 'candidate_acquisition_status,candidate_progression_status,candidate_sequence,' +
+    'decision_completed_count,filter_completed_count,' +
     'filter_resolution_status,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,' +
     'room_state,voter_count';
   expect(room.match(new RegExp(projection, 'g'))).toHaveLength(2);
@@ -141,12 +142,14 @@ it('waits for recovered keyboard eligibility and atomically focuses and emits En
   const end = harness.indexOf('export async function touchSwipeDecision', start);
   const helper = harness.slice(start, end);
   const enabled = helper.indexOf('await expect(button).toBeEnabled()');
-  const enter = helper.indexOf("await button.press('Enter')", enabled);
+  const response = helper.indexOf('page.waitForResponse', enabled);
+  const enter = helper.indexOf("button.press('Enter')", response);
   const confirmation = helper.indexOf('You chose ${value', enter);
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
   expect(enabled).toBeGreaterThanOrEqual(0);
-  expect(enter).toBeGreaterThan(enabled);
+  expect(response).toBeGreaterThan(enabled);
+  expect(enter).toBeGreaterThan(response);
   expect(confirmation).toBeGreaterThan(enter);
   expect(helper).not.toContain('button.focus()');
   expect(helper).not.toContain("page.keyboard.press('Enter')");

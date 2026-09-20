@@ -85,13 +85,6 @@ export function CandidateDecisionSurface({ candidate, decision }: {
   const progress = decision.projection
     ? `${decision.projection.completedCount} of ${decision.projection.requiredVoterCount} decisions collected.`
     : null;
-  const agreement = decision.projection?.decisionSetComplete &&
-    decision.projection.requiredVoterCount === 2 &&
-    decision.projection.twoVoterAgreement !== null
-    ? decision.projection.twoVoterAgreement
-      ? 'Current candidate agreement: both voters chose Yes.'
-      : 'Current candidate agreement: not both Yes.'
-    : null;
 
   return <View testID="candidate-decision-surface" onLayout={onLayout}
     accessibilityLabel="Candidate decision" style={styles.surface}>
@@ -115,7 +108,6 @@ export function CandidateDecisionSurface({ candidate, decision }: {
     </View>}
     {status && <Text testID="decision-status" accessibilityLiveRegion="polite">{status}</Text>}
     {progress && <Text testID="decision-progress" accessibilityLiveRegion="polite">{progress}</Text>}
-    {agreement && <Text testID="decision-agreement">{agreement}</Text>}
     {decision.kind === 'recoverable-error' && <Pressable accessibilityRole="button"
       accessibilityLabel="Retry decision recovery" onPress={decision.retry} style={styles.retry}>
       <Text>Retry</Text>

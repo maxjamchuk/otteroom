@@ -3,8 +3,9 @@ import { candidateMessage, createCandidateState, failCandidate, finishPoster,
 
 const candidate = Object.freeze({ tmdbMovieId: 7, title: 'TMDB Film', releaseYear: 2020,
   posterUrl: 'https://image.tmdb.org/t/p/w500/a.jpg' });
-const available = { outcome: 'available', candidate } as const;
-const acquiring = () => createCandidateState('room-a', true, 'pending', 1);
+const available = { outcome: 'available', candidateSequence:1,
+  candidateProgressionStatus:'collecting',candidate } as const;
+const acquiring = () => createCandidateState('room-a', true, 'pending', 1,1,'collecting');
 const metadata = () => receiveCandidate(acquiring(), acquiring(), available);
 
 it('starts only eligible pending acquisition and maps every authoritative start', () => {
@@ -24,6 +25,7 @@ it('adopts available identity and moves through poster loading to available', ()
 
 it('uses explicit no-poster and completed-empty terminals without Retry', () => {
   const none = receiveCandidate(acquiring(), acquiring(), { outcome: 'available',
+    candidateSequence:1,candidateProgressionStatus:'collecting',
     candidate: { ...candidate, posterUrl: null } });
   expect(none.attempt).toBe('no-poster'); expect(retryCandidate(none)).toBe(none);
   const empty = receiveCandidate(acquiring(), acquiring(), { outcome: 'no_candidates' });
@@ -35,8 +37,9 @@ it('keeps acquisition and metadata failures distinct with one request retry', ()
   const first = failCandidate(acquiring(), acquiring());
   expect(first.attempt).toBe('acquisition-error'); expect(candidateMessage(first)).toMatch(/find a movie/i);
   expect(retryCandidate(first)).toMatchObject({ attempt: 'acquiring', requestAttempt: 1 });
-  const assigned = createCandidateState('room-a', true, 'assigned', 1);
-  const failure = receiveCandidate(assigned, assigned, { outcome: 'metadata_unavailable' });
+  const assigned = createCandidateState('room-a', true, 'assigned', 1,1,'collecting');
+  const failure = receiveCandidate(assigned, assigned, { outcome: 'metadata_unavailable',
+    candidateSequence:1,candidateProgressionStatus:'collecting' });
   expect(failure.attempt).toBe('metadata-error');
   expect(retryCandidate(failure)).toMatchObject({ attempt: 'loading-metadata', requestAttempt: 1 });
 });
@@ -51,11 +54,12 @@ it('poster failure retains title/year and retries only image generation', () => 
 it('anchors immutable ID while allowing same-ID metadata refresh', () => {
   const first = metadata();
   const refreshed = receiveCandidate(first, first, { outcome: 'available', candidate: {
-    ...candidate, title: 'Current TMDB Title', releaseYear: 2021, posterUrl: null } });
+    ...candidate, title: 'Current TMDB Title', releaseYear: 2021, posterUrl: null },
+    candidateSequence:1,candidateProgressionStatus:'collecting' });
   expect(refreshed.candidate).toEqual({ tmdbMovieId: 7, title: 'Current TMDB Title',
     releaseYear: 2021, posterUrl: null });
   const conflict = receiveCandidate(refreshed, refreshed, { outcome: 'available', candidate: {
-    ...candidate, tmdbMovieId: 8 } });
+    ...candidate, tmdbMovieId: 8 },candidateSequence:1,candidateProgressionStatus:'collecting' });
   expect(conflict.attempt).toBe('integrity-error'); expect(conflict.candidate).toBeNull();
 });
 
@@ -79,7 +83,8 @@ it('fails closed when an Edge empty result contradicts an accepted assigned cand
   expect(retryCandidate(conflict)).toBe(conflict);
 });
 
-it.each([available, { outcome: 'metadata_unavailable' } as const])(
+it.each([available, { outcome: 'metadata_unavailable',candidateSequence:1,
+  candidateProgressionStatus:'collecting' } as const])(
   'fails closed when an Edge assigned result contradicts accepted no-candidates: $outcome', result => {
     const empty = receiveCandidate(acquiring(), acquiring(), { outcome: 'no_candidates' });
     const conflict = receiveCandidate(empty, empty, result);
@@ -96,7 +101,8 @@ it('allows repeated/equal Edge terminals and assigned metadata recovery', () => 
   const refreshed = receiveCandidate(displayed, displayed, available);
   expect(refreshed).toMatchObject({ authoritativeStatus: 'assigned', candidate,
     attempt: 'loading-poster' });
-  expect(receiveCandidate(displayed, displayed, { outcome: 'metadata_unavailable' })).toMatchObject({
+  expect(receiveCandidate(displayed, displayed, { outcome: 'metadata_unavailable',candidateSequence:1,
+    candidateProgressionStatus:'collecting' })).toMatchObject({
     authoritativeStatus: 'assigned', attempt: 'metadata-error', candidate,
   });
 });

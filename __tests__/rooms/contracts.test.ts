@@ -3,7 +3,7 @@ import { narrowCreateResult, narrowJoinResult, RoomContractError } from '../../s
 const accepted = { outcome: 'created', room_id: '11111111-1111-4111-8111-111111111111', room_code: 'ABCDEF0123',
   is_creator: true, is_voter: true, room_state: 'waiting', voter_count: 1, required_voter_count: 2,
   filter_completed_count: 0, filter_resolution_status: 'pending', candidate_acquisition_status: 'pending',
-  decision_completed_count: 0 } as const;
+  candidate_progression_status: 'inactive', candidate_sequence: 0, decision_completed_count: 0 } as const;
 
 it.each([[2, true], [3, true], [2, false], [3, false]] as const)('accepts explicit target%s creator-voter=%s creation', (target, voting) => {
   const row = { ...accepted, required_voter_count: target, is_voter: voting, voter_count: voting ? 1 : 0 };
@@ -36,6 +36,7 @@ it.each([
   { candidate_acquisition_status: null }, { candidate_acquisition_status: 'unknown' },
   { candidate_acquisition_status: 'assigned' }, { candidate_acquisition_status: 'no_candidates' },
   { decision_completed_count: null }, { decision_completed_count: -1 },
+  { candidate_progression_status: 'collecting' }, { candidate_sequence: 1 },
   { decision_completed_count: 1 }, { decision_completed_count: 1.5 },
   { private_field: 'unexpected' }, { participant_role: 'host' },
 ])('rejects inconsistent create field %#', patch => {
@@ -80,7 +81,9 @@ it('requires pending whenever the room is Waiting or filters are partial', () =>
 });
 it.each(['assigned','no_candidates'] as const)('accepts candidate terminal %s only at compatible Ready N/N',candidate_acquisition_status=>{
   const terminal={...accepted,outcome:'already_member',required_voter_count:3,voter_count:3,
-    room_state:'ready',filter_completed_count:3,filter_resolution_status:'compatible',candidate_acquisition_status};
+    room_state:'ready',filter_completed_count:3,filter_resolution_status:'compatible',candidate_acquisition_status,
+    candidate_progression_status:candidate_acquisition_status==='assigned'?'collecting' as const:'inactive' as const,
+    candidate_sequence:candidate_acquisition_status==='assigned'?1:0};
   expect(narrowJoinResult([terminal])).toEqual(terminal);
   for(const patch of [{room_state:'waiting'},{voter_count:2},{filter_completed_count:2},
     {filter_resolution_status:'pending'},{filter_resolution_status:'incompatible'}])
@@ -108,6 +111,7 @@ it.each(['invalid_code', 'not_found', 'full'])('requires exact eleven NULLs for 
   const rejected = { outcome, room_id: null, room_code: null, room_state: null,
     is_creator: null, is_voter: null, voter_count: null, required_voter_count: null,
     filter_completed_count: null, filter_resolution_status: null, candidate_acquisition_status: null,
+    candidate_progression_status: null, candidate_sequence: null,
     decision_completed_count: null };
   expect(narrowJoinResult([rejected])).toEqual(rejected);
   for (const field of Object.keys(rejected).filter(key => key !== 'outcome')) {

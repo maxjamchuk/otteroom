@@ -7,30 +7,50 @@ type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends
 type Assert<T extends true> = T;
 
 type _DecisionEnum = Assert<Equal<Database['public']['Enums']['candidate_decision_value'], 'yes' | 'no'>>;
+type _OccurrenceEnum = Assert<Equal<Database['public']['Enums']['candidate_occurrence_status'],
+  'collecting' | 'rejected' | 'agreed'>>;
+type _ProgressionEnum = Assert<Equal<Database['public']['Enums']['candidate_progression_status'],
+  'inactive' | 'collecting' | 'advancing' | 'agreed' | 'exhausted'>>;
 type _DecisionTableColumns = Assert<Equal<keyof Database['public']['Tables']['candidate_decisions']['Row'],
-  'room_member_id' | 'tmdb_movie_id' | 'decision' | 'accepted_at'>>;
+  'room_id' | 'room_member_id' | 'candidate_occurrence_id' | 'decision' | 'accepted_at'>>;
+type _OccurrenceTableColumns = Assert<Equal<keyof Database['public']['Tables']['room_candidate_occurrences']['Row'],
+  'id' | 'room_id' | 'sequence' | 'tmdb_movie_id' | 'status' | 'created_at' | 'resolved_at'>>;
 type _RoomDecisionColumn = Assert<Equal<Database['public']['Tables']['rooms']['Row']['decision_completed_count'], number>>;
+type _RoomProgressionColumn = Assert<Equal<Database['public']['Tables']['rooms']['Row']['candidate_progression_status'],
+  Database['public']['Enums']['candidate_progression_status']>>;
+type _RoomSequenceColumn = Assert<Equal<Database['public']['Tables']['rooms']['Row']['candidate_sequence'], number>>;
 type _CreateDecisionColumn = Assert<Equal<Database['public']['Functions']['create_room']['Returns'][number]['decision_completed_count'], number>>;
 type _JoinDecisionColumn = Assert<Equal<Database['public']['Functions']['join_room']['Returns'][number]['decision_completed_count'], number>>;
 type _GetArgs = Assert<Equal<Database['public']['Functions']['get_room_candidate_decision']['Args'], {
+  p_expected_candidate_sequence: number;
   p_expected_tmdb_movie_id: number;
   p_room_id: string;
 }>>;
 type _SubmitArgs = Assert<Equal<Database['public']['Functions']['submit_room_candidate_decision']['Args'], {
   p_decision: 'yes' | 'no';
+  p_expected_candidate_sequence: number;
   p_expected_tmdb_movie_id: number;
   p_room_id: string;
 }>>;
 type DecisionReturn = {
+  agreement_threshold: number;
+  candidate_outcome: 'collecting' | 'rejected' | 'agreed';
+  candidate_progression_status: 'inactive' | 'collecting' | 'advancing' | 'agreed' | 'exhausted';
+  candidate_sequence: number;
   decision_completed_count: number;
   decision_set_complete: boolean;
   my_decision: 'yes' | 'no';
   outcome: string;
   required_voter_count: number;
-  two_voter_agreement: boolean;
 };
 type _GetReturn = Assert<Equal<Database['public']['Functions']['get_room_candidate_decision']['Returns'][number], DecisionReturn>>;
 type _SubmitReturn = Assert<Equal<Database['public']['Functions']['submit_room_candidate_decision']['Returns'][number], DecisionReturn>>;
+type _PrepareReturn = Assert<Equal<keyof Database['public']['Functions']['prepare_room_tmdb_candidate']['Returns'][number],
+  'outcome' | 'candidate_sequence' | 'candidate_progression_status' | 'tmdb_movie_id' |
+  'release_year_from' | 'release_year_to' | 'genre_clauses_tmdb_ids' | 'excluded_tmdb_movie_ids'>>;
+type _CandidateCommitArgs = Assert<Equal<keyof Database['public']['Functions']['commit_room_tmdb_candidate']['Args'],
+  'p_room_id' | 'p_actor_user_id' | 'p_expected_candidate_sequence' | 'p_tmdb_movie_id' |
+  'p_release_year' | 'p_tmdb_genre_ids' | 'p_adult'>>;
 
 // Child assertions use only synthetic schema bytes. Never forward child output.
 function verify(source: string) {

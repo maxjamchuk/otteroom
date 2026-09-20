@@ -1,9 +1,11 @@
 import fs from 'node:fs';
 import { CandidateContractError, narrowCandidateResult } from '../../src/candidates/contracts';
 
-const transport = { outcome: 'available', candidate: { tmdb_movie_id: 7, title: 'TMDB Film',
+const transport = { outcome: 'available', candidate_sequence:1,
+  candidate_progression_status:'collecting',candidate: { tmdb_movie_id: 7, title: 'TMDB Film',
   release_year: 2020, poster_url: 'https://image.tmdb.org/t/p/w500/a.jpg' } };
-const parsed = { outcome: 'available', candidate: { tmdbMovieId: 7, title: 'TMDB Film',
+const parsed = { outcome: 'available',candidateSequence:1,
+  candidateProgressionStatus:'collecting', candidate: { tmdbMovieId: 7, title: 'TMDB Film',
   releaseYear: 2020, posterUrl: 'https://image.tmdb.org/t/p/w500/a.jpg' } };
 
 it('accepts the exact available response and maps transport names once', () => {
@@ -12,7 +14,7 @@ it('accepts the exact available response and maps transport names once', () => {
   expect(Object.isFrozen((narrowCandidateResult(transport) as typeof parsed).candidate)).toBe(true);
 });
 
-it.each(['not_found','not_ready','no_candidates','metadata_unavailable'] as const)(
+it.each(['not_found','not_ready','no_candidates','refresh_required'] as const)(
   'accepts exact field-free %s business outcome', outcome => {
     expect(narrowCandidateResult({ outcome })).toEqual({ outcome });
   });
@@ -33,6 +35,15 @@ it.each([
 ])('rejects invalid candidate field %#', patch => {
   expect(() => narrowCandidateResult({ ...transport, candidate: { ...transport.candidate, ...patch } }))
     .toThrow(CandidateContractError);
+});
+
+it('accepts sequence-aware metadata and exhaustion outcomes',()=>{
+  expect(narrowCandidateResult({outcome:'metadata_unavailable',candidate_sequence:2,
+    candidate_progression_status:'agreed'})).toEqual({outcome:'metadata_unavailable',
+      candidateSequence:2,candidateProgressionStatus:'agreed'});
+  expect(narrowCandidateResult({outcome:'exhausted',candidate_sequence:2,
+    candidate_progression_status:'exhausted'})).toEqual({outcome:'exhausted',
+      candidateSequence:2,candidateProgressionStatus:'exhausted'});
 });
 
 it('accepts confirmed no-poster and exposes only a fixed safe error', () => {

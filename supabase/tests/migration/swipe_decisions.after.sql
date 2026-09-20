@@ -13,8 +13,10 @@ create temporary table expected_candidates as select value row from jsonb_array_
 
 select pg_temp.require(not exists(
   select 1 from expected_rooms e join public.rooms r on r.id=(e.row->>'id')::uuid
-  where ((to_jsonb(r)-'decision_completed_count')||jsonb_build_object('row_xmin',r.xmin::text))<>e.row
-) and (select count(*)=8 from public.rooms where decision_completed_count=0));
+  where (to_jsonb(r)-'decision_completed_count'-'candidate_progression_status'-'candidate_sequence')<>(e.row-'row_xmin')
+) and (select count(*)=8 from public.rooms where decision_completed_count=0)
+ and (select count(*)=4 from public.rooms where candidate_progression_status='collecting' and candidate_sequence=1)
+ and (select count(*)=4 from public.rooms where candidate_progression_status='inactive' and candidate_sequence=0));
 select pg_temp.require(not exists(
   select 1 from expected_members e join public.room_members m on m.id=(e.row->>'id')::uuid
   where (to_jsonb(m)||jsonb_build_object('row_xmin',m.xmin::text))<>e.row));
@@ -41,21 +43,23 @@ select pg_temp.require(not has_table_privilege('authenticated','public.candidate
   and not has_column_privilege('authenticated','public.rooms','tmdb_movie_id','select'));
 select pg_temp.require((select bool_and(pg_get_userbyid(proowner)='postgres' and prosecdef
   and proconfig=array['search_path=""']) from pg_proc where oid in(
-  'public.get_room_candidate_decision(uuid,bigint)'::regprocedure,
-  'public.submit_room_candidate_decision(uuid,bigint,public.candidate_decision_value)'::regprocedure)));
+  'public.get_room_candidate_decision(uuid,integer,bigint)'::regprocedure,
+  'public.submit_room_candidate_decision(uuid,integer,bigint,public.candidate_decision_value)'::regprocedure)));
 
 -- Existing member re-entry returns the new zero watermark without mutating the room.
 set local role authenticated;
 select set_config('request.jwt.claims','{"sub":"f7000000-0000-4000-8000-000000000004","role":"authenticated"}',true);
 select pg_temp.require((select outcome='already_member' and decision_completed_count=0
+  and candidate_progression_status='collecting' and candidate_sequence=1
   from public.join_room('F710000004')));
 select pg_temp.require((select outcome='not_decided' and decision_completed_count=0
-  from public.get_room_candidate_decision('f7100000-0000-4000-8000-000000000004',7104)));
+  from public.get_room_candidate_decision('f7100000-0000-4000-8000-000000000004',1,7104)));
 reset role;
 
 delete from public.rooms;
 delete from auth.users where id::text like 'f7000000-0000-4000-8000-%';
 select pg_temp.require(not exists(select 1 from public.rooms)
   and not exists(select 1 from public.candidate_decisions)
+  and not exists(select 1 from public.room_candidate_occurrences)
   and not exists(select 1 from auth.users));
 commit;

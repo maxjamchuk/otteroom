@@ -19,6 +19,8 @@ type State = {
 
 const candidate = Object.freeze({ id: 6006, adult: false, genre_ids: [18, 28],
   title: 'Controlled Constellation', release_date: '2005-06-07', poster_path: '/controlled.png' });
+const successor = Object.freeze({ ...candidate, id: 6007, title: 'Controlled Aurora',
+  release_date: '2006-07-08', poster_path: '/controlled-successor.png' });
 const decoys = Object.freeze([
   { ...candidate, id: 6001, adult: true },
   { ...candidate, id: 6002, genre_ids: [28] },
@@ -121,15 +123,20 @@ export async function startTmdbStub(providerToken: string) {
         if (state.scenario === 'malformed') { response.writeHead(200, { 'content-type': 'application/json' }); response.end('{'); return; }
         const page = Number(url.searchParams.get('page'));
         if (state.scenario === 'limit') { json(response, 200, { page, total_pages: 101, total_results: 2020, results: [] }); return; }
-        const results = state.scenario === 'empty' ? [] : [...decoys, candidate];
+        // Returning the prior and successor identities in stable order lets the
+        // Edge search prove that server-derived exclusions skip history.
+        const results = state.scenario === 'empty' ? [] : [...decoys, candidate, successor];
         json(response, 200, { page, total_pages: 1, total_results: results.length, results }); return;
       }
       if (/^\/3\/movie\/\d+$/.test(url.pathname) && request.method === 'GET') {
         state.calls.details++;
         if (url.searchParams.get('language') !== 'en-US') { state.invalid++; json(response, 422, {}); return; }
         if (state.scenario === 'details-error') { json(response, 503, { status_code: 9 }); return; }
-        json(response, 200, { id: candidate.id, title: candidate.title, release_date: candidate.release_date,
-          poster_path: state.scenario === 'no-poster' ? null : candidate.poster_path }); return;
+        const id = Number(url.pathname.split('/').at(-1));
+        const selected = id === successor.id ? successor : id === candidate.id ? candidate : null;
+        if (!selected) { state.invalid++; json(response, 404, { status_code: 34 }); return; }
+        json(response, 200, { id: selected.id, title: selected.title, release_date: selected.release_date,
+          poster_path: state.scenario === 'no-poster' ? null : selected.poster_path }); return;
       }
       if (url.pathname === '/3/configuration' && request.method === 'GET') {
         state.calls.configuration++;

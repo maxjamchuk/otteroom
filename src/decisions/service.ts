@@ -12,13 +12,17 @@ export class DecisionServiceError extends Error {
   }
 }
 
-export async function getCandidateDecision(roomId: string, expectedTmdbMovieId: number) {
+export async function getCandidateDecision(roomId: string, expectedCandidateSequence: number,
+  expectedTmdbMovieId: number) {
   try {
-    if (!isRoomId(roomId) || !Number.isSafeInteger(expectedTmdbMovieId) || expectedTmdbMovieId <= 0)
+    if (!isRoomId(roomId) || !Number.isSafeInteger(expectedCandidateSequence) ||
+        expectedCandidateSequence <= 0 || !Number.isSafeInteger(expectedTmdbMovieId) ||
+        expectedTmdbMovieId <= 0)
       throw new DecisionServiceError();
     await bootstrapAnonymousSession();
     const args: Database['public']['Functions']['get_room_candidate_decision']['Args'] = {
       p_room_id: roomId,
+      p_expected_candidate_sequence: expectedCandidateSequence,
       p_expected_tmdb_movie_id: expectedTmdbMovieId,
     };
     const { data, error } = await getSupabase().rpc('get_room_candidate_decision', args);
@@ -29,14 +33,16 @@ export async function getCandidateDecision(roomId: string, expectedTmdbMovieId: 
   }
 }
 
-export async function submitCandidateDecision(roomId: string, expectedTmdbMovieId: number,
-  value: CandidateDecision) {
+export async function submitCandidateDecision(roomId: string, expectedCandidateSequence: number,
+  expectedTmdbMovieId: number, value: CandidateDecision) {
   try {
-    if (!isRoomId(roomId) || !Number.isSafeInteger(expectedTmdbMovieId) || expectedTmdbMovieId <= 0 ||
+    if (!isRoomId(roomId) || !Number.isSafeInteger(expectedCandidateSequence) ||
+        expectedCandidateSequence <= 0 || !Number.isSafeInteger(expectedTmdbMovieId) || expectedTmdbMovieId <= 0 ||
         (value !== 'yes' && value !== 'no')) throw new DecisionServiceError();
     await bootstrapAnonymousSession();
     const args: Database['public']['Functions']['submit_room_candidate_decision']['Args'] = {
       p_room_id: roomId,
+      p_expected_candidate_sequence: expectedCandidateSequence,
       p_expected_tmdb_movie_id: expectedTmdbMovieId,
       p_decision: value,
     };

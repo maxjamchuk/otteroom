@@ -236,7 +236,7 @@ export class SafeDiagnostics {
     await this.flush();
     if (this.#signups !== attempts || this.#identities.size !== identities || this.#signups > this.#signupCap) throw safeError();
     this.#info.annotations.push({ type: 'safe-auth-success', description: 'confirmed' });
-    await this.record({ component: 'anonymous-auth', status: this.#authStatus, outcome: `attempts=${attempts}; identities=${identities}; acceptance-N=106; local-limit=150` });
+    await this.record({ component: 'anonymous-auth', status: this.#authStatus, outcome: `attempts=${attempts}; identities=${identities}; acceptance-N=112; local-limit=150` });
   }
 
   stage(value: 'config' | 'capture-guards' | 'ui' | 'sanitizer' | 'scanner' | 'cleanup'): void {

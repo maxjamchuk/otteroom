@@ -95,13 +95,14 @@ try {
       and not exists(select 1 from private.room_filter_resolutions)
       and not exists(select 1 from private.room_filter_resolution_genre_clauses)
       and (select count(*)=19 from private.tmdb_movie_genres)
-      and not exists(select 1 from public.rooms where candidate_acquisition_status<>'pending' or tmdb_movie_id is not null or decision_completed_count<>0)
+      and not exists(select 1 from public.rooms where candidate_acquisition_status<>'pending' or tmdb_movie_id is not null or decision_completed_count<>0 or candidate_progression_status<>'inactive' or candidate_sequence<>0)
       and not exists(select 1 from public.candidate_decisions)
+      and not exists(select 1 from public.room_candidate_occurrences)
       and to_regprocedure('public.get_my_participant_filter(uuid)') is not null
       and to_regprocedure('public.resolve_common_filters(uuid)') is not null
       and to_regprocedure('public.prepare_room_tmdb_candidate(uuid,uuid)') is not null
-      and to_regprocedure('public.commit_room_tmdb_candidate(uuid,uuid,bigint,smallint,integer[],boolean)') is not null
-      and to_regprocedure('public.commit_room_tmdb_no_candidates(uuid,uuid)') is not null;`});
+      and to_regprocedure('public.commit_room_tmdb_candidate(uuid,uuid,integer,bigint,smallint,integer[],boolean)') is not null
+      and to_regprocedure('public.commit_room_tmdb_no_candidates(uuid,uuid,integer)') is not null;`});
     if(empty.trim()!=='t')fail();receipt('latest-reset=true owned-fixtures=0');
   }catch{receipt('cleanup=FAIL');process.exitCode=1;}}
   if(locked){try{await fs.unlink(lock);}catch{receipt('lock-cleanup=FAIL');process.exitCode=1;}}

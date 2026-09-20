@@ -80,12 +80,13 @@ select results_eq(
         and privilege_type='SELECT' order by array_position(array[
           'id','code','state','voter_count','required_voter_count',
           'filter_completed_count','filter_resolution_status','candidate_acquisition_status',
-          'decision_completed_count'],column_name::text)$$,
+          'candidate_progression_status','candidate_sequence','decision_completed_count'],column_name::text)$$,
   $$values ('id'::text),('code'::text),('state'::text),('voter_count'::text),
             ('required_voter_count'::text),('filter_completed_count'::text),
             ('filter_resolution_status'::text),('candidate_acquisition_status'::text),
+            ('candidate_progression_status'::text),('candidate_sequence'::text),
             ('decision_completed_count'::text)$$,
-  'authenticated room projection grant is exactly nine safe columns');
+  'authenticated room projection grant is exactly eleven safe columns');
 select ok(not exists(select 1 from information_schema.columns where table_schema='private'
     and table_name in('room_filter_resolutions','room_filter_resolution_genre_clauses')
     and (column_name like '%member%' or column_name like '%user%' or column_name like '%filter_id%'

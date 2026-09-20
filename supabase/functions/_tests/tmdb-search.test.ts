@@ -36,6 +36,20 @@ Deno.test('search deduplicates movie evaluation without changing traversal', asy
   assertEquals(validations, 1);
 });
 
+Deno.test('server exclusions skip repeated identities and preserve first eligible traversal',async()=>{
+  const second={...eligible,id:8,title:'Next'};
+  const fetch:FetchLike=()=>response(page(1,1,[eligible,second]));
+  const winner=await searchTmdbCandidate({...context,excludedTmdbMovieIds:[7]},
+    {fetch,token:'secret',baseUrl:'https://example.test/3'});
+  assertEquals(winner.kind==='match'?winner.movie.id:null,8);
+  const empty=await searchTmdbCandidate({...context,excludedTmdbMovieIds:[7,8]},
+    {fetch,token:'secret',baseUrl:'https://example.test/3'});
+  assertEquals(empty.kind,'completed_empty');
+  const invalid=await searchTmdbCandidate({...context,excludedTmdbMovieIds:[0]},
+    {fetch,token:'secret',baseUrl:'https://example.test/3'});
+  assertEquals(invalid,{kind:'search_incomplete',reason:'internal'});
+});
+
 Deno.test('overflow bisects whole dates without gap/overlap and visits oldest shard first', async () => {
   const dates: string[] = [];
   const fetch: FetchLike = (input) => { const url = new URL(String(input));

@@ -4,7 +4,7 @@ import { narrowCreateResult, narrowJoinResult } from '../../src/rooms/contracts'
 const row = { outcome: 'created', room_id: '11111111-1111-4111-8111-111111111111', room_code: 'ABCDEF0123',
   is_creator: true, is_voter: true, room_state: 'waiting', voter_count: 1, required_voter_count: 3,
   filter_completed_count: 0, filter_resolution_status: 'pending', candidate_acquisition_status: 'pending',
-  decision_completed_count: 0 } as const;
+  candidate_progression_status: 'inactive', candidate_sequence: 0, decision_completed_count: 0 } as const;
 it.each([[true,true],[true,false],[false,true]] as const)('projects independent creator=%s/voter=%s with actual counts', (is_creator,is_voter) => {
   for(const voter_count of [is_voter?1:0,2,3]) {
     const room_state=voter_count===3?'ready':'waiting';
@@ -13,7 +13,7 @@ it.each([[true,true],[true,false],[false,true]] as const)('projects independent 
       isCreator:is_creator,isVoter:is_voter,state:room_state,title:room_state==='ready'?'Ready':'Waiting',voterCount:voter_count,requiredVoterCount:3,
       filterCompletedCount:0,filtersComplete:false,filterResolutionStatus:'pending',
       resolutionIntegrityError:false,candidateAcquisitionStatus:'pending',candidateIntegrityError:false,
-      decisionCompletedCount:0});
+      candidateProgressionStatus:'inactive',candidateSequence:0,decisionCompletedCount:0});
   }
 });
 it('create failure contains only generic retry presentation, never a room/invitation', () => {
@@ -24,7 +24,7 @@ it.each([
   ['not_found', 'not-found', 'Room not found. Check your invitation.'],
   ['full', 'full', 'Room Full. The voting group is already assembled.'],
 ])('maps %s with no room projection', (outcome, kind, message) => {
-  const result = narrowJoinResult([{ outcome, room_id: null, room_code: null, room_state: null, is_creator:null,is_voter:null,voter_count:null,required_voter_count:null,filter_completed_count:null,filter_resolution_status:null,candidate_acquisition_status:null,decision_completed_count:null }]);
+  const result = narrowJoinResult([{ outcome, room_id: null, room_code: null, room_state: null, is_creator:null,is_voter:null,voter_count:null,required_voter_count:null,filter_completed_count:null,filter_resolution_status:null,candidate_acquisition_status:null,candidate_progression_status:null,candidate_sequence:null,decision_completed_count:null }]);
   expect(joinRoomState(result)).toEqual({ kind, message });
 });
 it('distinguishes local malformed input from generic infrastructure failure', () => {
@@ -32,7 +32,7 @@ it('distinguishes local malformed input from generic infrastructure failure', ()
   expect(joinErrorState()).toEqual({ kind: 'error', message: 'Unable to open this room. Please try again.' });
 });
 const waiting=acceptedRoomState(narrowCreateResult([row]));
-const projection=(count:number)=>({id:row.room_id,code:row.room_code,state:count===3?'ready' as const:'waiting' as const,voter_count:count,required_voter_count:3,filter_completed_count:0,filter_resolution_status:'pending' as const,candidate_acquisition_status:'pending' as const,decision_completed_count:0});
+const projection=(count:number)=>({id:row.room_id,code:row.room_code,state:count===3?'ready' as const:'waiting' as const,voter_count:count,required_voter_count:3,filter_completed_count:0,filter_resolution_status:'pending' as const,candidate_acquisition_status:'pending' as const,candidate_progression_status:'inactive' as const,candidate_sequence:0,decision_completed_count:0});
 it('advances intermediate Waiting monotonically, retaining immutable flags and target',()=>{
   const middle=applyRoomRefetch(waiting,projection(2));
   expect(middle).toEqual({...waiting,voterCount:2});
@@ -60,15 +60,20 @@ describe('candidate terminal watermark',()=>{
 describe('decision completion watermark',()=>{
   const assigned={...waiting,state:'ready' as const,title:'Ready',voterCount:3,
     filterCompletedCount:3,filtersComplete:true,filterResolutionStatus:'compatible' as const,
-    candidateAcquisitionStatus:'assigned' as const};
+    candidateAcquisitionStatus:'assigned' as const,candidateProgressionStatus:'collecting' as const,
+    candidateSequence:1};
   const assignedProjection={...projection(3),filter_completed_count:3,
-    filter_resolution_status:'compatible' as const,candidate_acquisition_status:'assigned' as const};
+    filter_resolution_status:'compatible' as const,candidate_acquisition_status:'assigned' as const,
+    candidate_progression_status:'collecting' as const,candidate_sequence:1};
   it('merges valid current-candidate progress monotonically',()=>{
     const one=applyRoomRefetch(assigned,{...assignedProjection,decision_completed_count:1});
-    const complete=applyRoomRefetch(one,{...assignedProjection,decision_completed_count:3});
+    const two=applyRoomRefetch(one,{...assignedProjection,decision_completed_count:2});
+    const complete=applyRoomRefetch(two,{...assignedProjection,decision_completed_count:3,
+      candidate_progression_status:'agreed'});
     expect(one.decisionCompletedCount).toBe(1);
+    expect(two.decisionCompletedCount).toBe(2);
     expect(complete.decisionCompletedCount).toBe(3);
-    expect(applyRoomRefetch(complete,{...assignedProjection,decision_completed_count:2})).toBe(complete);
+    expect(applyRoomRefetch(two,{...assignedProjection,decision_completed_count:1})).toBe(two);
   });
   it.each([-1,4,1.5])('rejects invalid count %s',decision_completed_count=>{
     expect(()=>applyRoomRefetch(assigned,{...assignedProjection,decision_completed_count})).toThrow();
@@ -126,5 +131,54 @@ describe('resolution watermark',()=>{
     expect(applyRoomResolutionStatus(conflict,'compatible')).toBe(conflict);
     expect(applyRoomRefetch(conflict,{...projection(3),filter_completed_count:3,
       filter_resolution_status:'compatible'})).toBe(conflict);
+  });
+});
+
+describe('candidate progression reachability lattice',()=>{
+  const compatible={...waiting,state:'ready' as const,title:'Ready',voterCount:3,
+    filterCompletedCount:3,filtersComplete:true,filterResolutionStatus:'compatible' as const};
+  const read=(candidate_progression_status:'inactive'|'collecting'|'advancing'|'agreed'|'exhausted',
+    candidate_sequence:number,decision_completed_count:number)=>({id:row.room_id,code:row.room_code,
+      state:'ready' as const,voter_count:3,required_voter_count:3,filter_completed_count:3,
+      filter_resolution_status:'compatible' as const,candidate_progression_status,candidate_sequence,
+      decision_completed_count,candidate_acquisition_status:candidate_progression_status==='collecting'||
+        candidate_progression_status==='agreed'?'assigned' as const:
+        candidate_progression_status==='exhausted'?'no_candidates' as const:'pending' as const});
+
+  it('adopts P0 to E0 or first collecting and ignores their reverse stale P0',()=>{
+    const e0=applyRoomRefetch(compatible,read('inactive',0,0));
+    expect(e0.candidateAcquisitionStatus).toBe('pending');
+    const empty=applyRoomRefetch(e0,{...read('inactive',0,0),candidate_acquisition_status:'no_candidates'});
+    expect(empty.candidateAcquisitionStatus).toBe('no_candidates');
+    const c1=applyRoomRefetch(compatible,read('collecting',1,0));
+    expect(c1).toMatchObject({candidateProgressionStatus:'collecting',candidateSequence:1,
+      decisionCompletedCount:0});
+    expect(applyRoomRefetch(c1,read('inactive',0,0))).toBe(c1);
+  });
+
+  it('replaces counts within an occurrence and across a successor instead of using global max',()=>{
+    const c1=applyRoomRefetch(compatible,read('collecting',1,0));
+    const c1two=applyRoomRefetch(c1,read('collecting',1,2));
+    const advancing=applyRoomRefetch(c1two,read('advancing',1,0));
+    const c2=applyRoomRefetch(advancing,read('collecting',2,0));
+    expect(c1two.decisionCompletedCount).toBe(2);
+    expect(advancing.decisionCompletedCount).toBe(0);
+    expect(c2).toMatchObject({candidateSequence:2,decisionCompletedCount:0});
+    expect(applyRoomRefetch(c2,read('collecting',1,2))).toBe(c2);
+  });
+
+  it('adopts missed advancing, exhaustion, terminals, and multi-sequence forward jumps',()=>{
+    const c1=applyRoomRefetch(compatible,read('collecting',1,1));
+    expect(applyRoomRefetch(c1,read('exhausted',1,0)).candidateProgressionStatus).toBe('exhausted');
+    expect(applyRoomRefetch(c1,read('agreed',1,3)).candidateProgressionStatus).toBe('agreed');
+    expect(applyRoomRefetch(c1,read('collecting',4,0))).toMatchObject({candidateSequence:4,
+      decisionCompletedCount:0});
+  });
+
+  it('fails closed for incomparable lower terminals versus newer authority',()=>{
+    const empty={...compatible,candidateAcquisitionStatus:'no_candidates' as const};
+    expect(()=>applyRoomRefetch(empty,read('collecting',2,0))).toThrow();
+    const agreed=applyRoomRefetch(compatible,read('agreed',1,3));
+    expect(()=>applyRoomRefetch(agreed,read('collecting',2,0))).toThrow();
   });
 });

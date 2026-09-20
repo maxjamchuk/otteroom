@@ -100,7 +100,8 @@ describe('credential-safe diagnostics boundaries', () => {
       emit(name, value) { for (const handler of this.events.get(name) ?? []) handler(value); } });
     const room = id => ({ id, code: 'ABCDEF0123', state: 'ready', voter_count: 2,
       required_voter_count: 2, filter_completed_count: 2, filter_resolution_status: 'compatible',
-      candidate_acquisition_status: 'pending', decision_completed_count: 0 });
+      candidate_acquisition_status: 'pending', candidate_progression_status: 'inactive',
+      candidate_sequence: 0, decision_completed_count: 0 });
     const firstRoom = room('11111111-1111-4111-8111-111111111111');
     const secondRoom = room('22222222-2222-4222-8222-222222222222');
     const isolatedPages = [makePage(), makePage()];
@@ -121,7 +122,8 @@ describe('credential-safe diagnostics boundaries', () => {
     const pages = [makePage(), makePage(), makePage()];
     const overlap = await installCandidateRequestOverlap(pages, firstRoom);
     let forwarded = 0;
-    const candidate = { outcome: 'available', candidate: { tmdb_movie_id: 6006,
+    const candidate = { outcome: 'available', candidate_sequence: 1,
+      candidate_progression_status: 'collecting', candidate: { tmdb_movie_id: 6006,
       title: 'Controlled Constellation', release_year: 2005,
       poster_url: 'https://image.tmdb.org/t/p/w500/controlled.png' } };
     const call = page => {
@@ -310,6 +312,554 @@ describe('credential-safe diagnostics boundaries', () => {
     try { fs.writeFileSync(path.join(directory, 'summary.json'), JSON.stringify([receipt]));
       assert.equal(scanArtifacts(directory).ok, true); }
     finally { fs.rmSync(directory, { recursive: true }); }
+  `));
+  it('distinguishes every candidate terminal and health guard with bounded private-free receipts', () => verify(prelude + `
+    const { candidateTerminalGuardDiagnostic, candidateHealthGuardDiagnostic,
+      parseHarnessDiagnostic } = await import('./e2e/support/harness-observability.ts');
+    const { safeResult } = await import('./e2e/support/safe-reporter.ts');
+    const { scanArtifacts } = await import('./scripts/check-e2e-artifacts.mjs');
+    const terminal = guard => candidateTerminalGuardDiagnostic({ guard, expected: 'exhausted',
+      acquisitionStatus: guard === 'acquisition-status' ? 'pending' : 'no_candidates',
+      progressionStatus: guard === 'progression-status' ? 'advancing' : 'exhausted',
+      candidateSequence: guard === 'candidate-sequence' ? 0 : 1,
+      decisionCount: guard === 'decision-count' ? 1 : 0,
+      bindingPresent: guard !== 'binding-present', snapshotReadable: guard !== 'snapshot-readable',
+      acquisitionMatches: guard !== 'acquisition-status',
+      progressionMatches: guard !== 'progression-status', sequenceMatches: guard !== 'candidate-sequence',
+      decisionsZero: guard !== 'decision-count', terminalKindMatches: guard !== 'terminal-kind' });
+    const terminalGuards = ['binding-present','snapshot-readable','acquisition-status',
+      'progression-status','candidate-sequence','decision-count','terminal-kind'];
+    assert.deepEqual(terminalGuards.map(guard => terminal(guard).guard), terminalGuards);
+    const health = guard => candidateHealthGuardDiagnostic({ guard, participants: 2, requests: 7,
+      responses: 5, errors: 1, invalid: 1, directProvider: 0, fixture: 0,
+      responseValidationActive: 0, httpStatus: 200, responseOutcome: 'exhausted',
+      responseReadStage: 'contract-checked', responseFailure: 'contract',
+      exceptionCategory: 'none', bodyBytesObtained: true, bodyLength: 83,
+      jsonDecoded: true, requestFinished: true, requestFailed: false,
+      pageAlive: true, contextAlive: true,
+      failed: true, disposed: false, bindingPresent: true });
+    const healthGuards = ['request-origin','request-method','request-shape','request-room',
+      'request-subject','response-body','response-size','response-json','response-contract',
+      'not-disposed','binding-present','invalid-zero','direct-provider-zero','fixture-zero'];
+    assert.deepEqual(healthGuards.map(guard => health(guard).guard), healthGuards);
+    for (const diagnostic of [...terminalGuards.map(terminal), ...healthGuards.map(health)])
+      assert.deepEqual(parseHarnessDiagnostic(diagnostic), diagnostic);
+    for (const privateField of ['authorization','cookie','access_token','my_decision','room_id'])
+      assert.throws(() => parseHarnessDiagnostic({ ...health('response-contract'),
+        [privateField]: sentinel() }), /E2E_SAFE_FAILURE/);
+    const annotations = [...terminalGuards.map(terminal), ...healthGuards.map(health)].slice(0, 4)
+      .map(value => ({ type: 'safe-harness-diagnostic', description: JSON.stringify(value) }));
+    const receipt = safeResult({ title: '@feature008 L01 exact-two candidate progression lifecycle' },
+      { status: 'failed', annotations });
+    assert.equal(receipt.harnessDiagnostics.length, 4);
+    assert.equal(/authorization|cookie|access_token|my_decision|decision_value|room_id/.test(
+      JSON.stringify(receipt.harnessDiagnostics)), false);
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'otteroom-candidate-guard-'));
+    try { fs.writeFileSync(path.join(directory, 'summary.json'), JSON.stringify(receipt));
+      assert.deepEqual(scanArtifacts(directory).findings, []); }
+    finally { fs.rmSync(directory, { recursive: true }); }
+  `));
+  it('drains initial-assembly candidate validation before invitation navigation', () => verify(prelude + `
+    const { parseEnv } = await import('node:util');
+    const { candidateHarness, classifyCandidateResponseReadFailure } =
+      await import('./e2e/support/candidate-harness.ts');
+    const { navigateInvitationAfterCandidateResponses } =
+      await import('./e2e/support/progression-harness.ts');
+    const events = () => new Map();
+    const makePage = () => ({ routes: [], events: events(), closed: false,
+      async route(match, handler) { this.routes.push({ match, handler }); },
+      async unroute(match, handler) { this.routes = this.routes.filter(item =>
+        item.match !== match || item.handler !== handler); },
+      on(name, handler) { if (!this.events.has(name)) this.events.set(name, new Set());
+        this.events.get(name).add(handler); },
+      removeListener(name, handler) { this.events.get(name)?.delete(handler); },
+      emit(name, value) { for (const handler of this.events.get(name) ?? []) handler(value); },
+      isClosed() { return this.closed; },
+      context() { return { pages: () => [this], browser: () => ({ isConnected: () => true }) }; } });
+    const local = process.env.EXPO_PUBLIC_SUPABASE_URL ? process.env :
+      parseEnv(fs.readFileSync('.env.local','utf8'));
+    const origin = new URL(local.EXPO_PUBLIC_SUPABASE_URL).origin;
+    const room = id => ({ id, code: 'ABCDEF0123', state: 'ready', voter_count: 2,
+      required_voter_count: 2, filter_completed_count: 2, filter_resolution_status: 'compatible',
+      candidate_acquisition_status: 'assigned', candidate_progression_status: 'collecting',
+      candidate_sequence: 1, decision_completed_count: 0 });
+    const ids = ['22222222-2222-4222-8222-222222222222',
+      '33333333-3333-4333-8333-333333333333'];
+    const token = id => 'x.' + Buffer.from(JSON.stringify({ sub: id })).toString('base64url') + '.x';
+    const candidate = { outcome: 'available', candidate_sequence: 1,
+      candidate_progression_status: 'collecting', candidate: { tmdb_movie_id: 6006,
+        title: 'Controlled Constellation', release_year: 2005,
+        poster_url: 'https://image.tmdb.org/t/p/w500/controlled.png' } };
+    const turn = () => new Promise(resolve => setImmediate(resolve));
+    const setup = async id => {
+      const pages = [makePage(), makePage()], captured = [];
+      const participants = pages.map(page => ({ page,
+        recordHarnessDiagnostic: value => captured.push(value) }));
+      const harness = await candidateHarness(participants, 'http://127.0.0.1:8081');
+      harness.bind(room(id), ids, { origin, publicKey: 'public' });
+      return { pages, captured, harness };
+    };
+    const request = (id, index = 0) => ({ url: () => origin + '/functions/v1/room-candidate',
+      method: () => 'POST', postDataJSON: () => ({ room_id: id }),
+      headers: () => ({ authorization: 'Bearer ' + token(ids[index]) }) });
+
+    const legacy = await setup('11111111-1111-4111-8111-111111111111');
+    const legacyRequest = request('11111111-1111-4111-8111-111111111111');
+    let releaseLegacy, navigated = false;
+    const legacyOrder = ['candidate-response-captured'];
+    const legacyGate = new Promise(resolve => { releaseLegacy = resolve; });
+    legacy.pages[0].emit('request', legacyRequest);
+    legacy.pages[0].emit('response', { url: legacyRequest.url, request: () => legacyRequest,
+      status: () => 200, ok: () => true, body: async () => { legacyOrder.push('body-requested'); await legacyGate;
+        if (navigated) throw new Error('Protocol error: response body was navigated away from');
+        return Buffer.from(JSON.stringify(candidate)); } });
+    await turn(); legacyOrder.push('initial-assembly'); navigated = true;
+    legacyOrder.push('invitation-navigation'); legacy.pages[0].emit('requestfinished', legacyRequest); releaseLegacy();
+    await assert.rejects(() => legacy.harness.drainResponses(), /E2E_SAFE_FAILURE/);
+    legacyOrder.push('validation-failed');
+    assert.deepEqual(legacyOrder, ['candidate-response-captured', 'body-requested',
+      'initial-assembly', 'invitation-navigation', 'validation-failed']);
+    assert.equal(legacy.captured.length, 1);
+    assert.deepEqual({ guard: legacy.captured[0].guard, status: legacy.captured[0].httpStatus,
+      stage: legacy.captured[0].responseReadStage, failure: legacy.captured[0].responseFailure,
+      exception: legacy.captured[0].exceptionCategory, bytes: legacy.captured[0].bodyBytesObtained,
+      length: legacy.captured[0].bodyLength, json: legacy.captured[0].jsonDecoded,
+      finished: legacy.captured[0].requestFinished, page: legacy.captured[0].pageAlive,
+      context: legacy.captured[0].contextAlive },
+      { guard: 'response-body', status: 200, stage: 'body-requested', failure: 'navigation',
+        exception: 'protocol', bytes: false, length: null, json: false,
+        finished: true, page: true, context: true });
+    await legacy.harness.close();
+
+    const fixed = await setup('44444444-4444-4444-8444-444444444444');
+    const fixedRequest = request('44444444-4444-4444-8444-444444444444');
+    let releaseFixed, navigatedFixed = false;
+    const fixedOrder = ['candidate-response-captured'];
+    const fixedGate = new Promise(resolve => { releaseFixed = resolve; });
+    fixed.pages[0].emit('request', fixedRequest);
+    fixed.pages[0].emit('response', { url: fixedRequest.url, request: () => fixedRequest,
+      status: () => 200, ok: () => true,
+      body: async () => { fixedOrder.push('body-requested'); await fixedGate;
+        fixedOrder.push('body-obtained'); return Buffer.from(JSON.stringify(candidate)); } });
+    fixedOrder.push('initial-assembly');
+    fixed.pages[0].goto = async value => {
+      assert.equal(value, 'http://127.0.0.1:8081/room/ABCDEF0123');
+      assert.equal(fixed.harness.stats[0].responses, 1); navigatedFixed = true;
+      fixedOrder.push('invitation-navigation'); return { status: () => 200 };
+    };
+    const admission = navigateInvitationAfterCandidateResponses(fixed.harness, fixed.pages[0],
+      'http://127.0.0.1:8081/room/ABCDEF0123');
+    await turn(); assert.equal(navigatedFixed, false);
+    fixed.pages[0].emit('requestfinished', fixedRequest); releaseFixed(); await admission;
+    assert.equal(navigatedFixed, true); assert.deepEqual(fixedOrder,
+      ['candidate-response-captured', 'body-requested', 'initial-assembly',
+        'body-obtained', 'invitation-navigation']);
+    assert.deepEqual(fixed.captured, []);
+    assert.doesNotThrow(() => fixed.harness.assertHealthy());
+    await fixed.harness.close();
+    assert.deepEqual(classifyCandidateResponseReadFailure(
+      new Error('Response body is not available for a response that was navigated away from.')),
+      { responseFailure: 'navigation', exceptionCategory: 'protocol' });
+  `));
+  it('guards retained-session home navigation and reproduces the exact bypass safely', () => verify(prelude + `
+    const { parseEnv } = await import('node:util');
+    const { candidateHarness } = await import('./e2e/support/candidate-harness.ts');
+    const { createWaitingWithSession, navigateAfterResponseValidation } =
+      await import('./e2e/support/room-harness.ts');
+    const { scanArtifacts } = await import('./scripts/check-e2e-artifacts.mjs');
+    const events = () => new Map();
+    const makePage = participant => ({ routes: [], events: events(), closed: false,
+      async route(match, handler) { this.routes.push({ match, handler }); },
+      async unroute(match, handler) { this.routes = this.routes.filter(item =>
+        item.match !== match || item.handler !== handler); },
+      on(name, handler) { if (!this.events.has(name)) this.events.set(name, new Set());
+        this.events.get(name).add(handler); },
+      removeListener(name, handler) { this.events.get(name)?.delete(handler); },
+      emit(name, value) { for (const handler of this.events.get(name) ?? []) handler(value); },
+      isClosed() { return this.closed; },
+      context() { return { pages: () => [this], browser: () => ({ isConnected: () => true }) }; },
+      async evaluate() { order.push('retained-session-participant'); return participant; },
+      async goto(value) { assert.equal(value, '/'); navigated = true; order.push('home-navigation');
+        throw new Error('STOP_AFTER_HOME_NAVIGATION'); } });
+    const local = process.env.EXPO_PUBLIC_SUPABASE_URL ? process.env :
+      parseEnv(fs.readFileSync('.env.local','utf8'));
+    const origin = new URL(local.EXPO_PUBLIC_SUPABASE_URL).origin;
+    const ids = ['22222222-2222-4222-8222-222222222222',
+      '33333333-3333-4333-8333-333333333333'];
+    const roomId = '11111111-1111-4111-8111-111111111111';
+    const room = { id: roomId, code: 'ABCDEF0123', state: 'ready', voter_count: 2,
+      required_voter_count: 2, filter_completed_count: 2, filter_resolution_status: 'compatible',
+      candidate_acquisition_status: 'assigned', candidate_progression_status: 'collecting',
+      candidate_sequence: 1, decision_completed_count: 0 };
+    const previous = { row: { ...room, creation_request_id: randomUUID() } };
+    const candidate = { outcome: 'available', candidate_sequence: 1,
+      candidate_progression_status: 'collecting', candidate: { tmdb_movie_id: 6006,
+        title: 'Controlled Constellation', release_year: 2005,
+        poster_url: 'https://image.tmdb.org/t/p/w500/controlled.png' } };
+    const token = id => 'x.' + Buffer.from(JSON.stringify({ sub: id })).toString('base64url') + '.x';
+    const request = { url: () => origin + '/functions/v1/room-candidate', method: () => 'POST',
+      postDataJSON: () => ({ room_id: roomId }),
+      headers: () => ({ authorization: 'Bearer ' + token(ids[0]) }) };
+    const turn = () => new Promise(resolve => setImmediate(resolve));
+    let release, navigated = false;
+    const order = ['outer-drain'];
+    const gate = new Promise(resolve => { release = resolve; });
+    const captured = [], pages = [makePage(ids[0]), makePage(ids[1])];
+    const diagnostics = { page: pages[0], recordHarnessDiagnostic: value => captured.push(value),
+      async assertAuthAccounting() {
+        order.push('retained-session-auth-accounting');
+        pages[0].emit('request', request); order.push('candidate-response-captured');
+        pages[0].emit('response', { url: request.url, request: () => request,
+          status: () => 200, ok: () => true, body: async () => {
+            order.push('body-requested'); await gate;
+            if (navigated) throw new Error('Protocol error: response body was navigated away from');
+            order.push('body-obtained'); return Buffer.from(JSON.stringify(candidate)); } });
+        await turn();
+      } };
+    const participants = pages.map(page => ({ page, recordHarnessDiagnostic: value => captured.push(value) }));
+    const harness = await candidateHarness(participants, 'http://127.0.0.1:8081');
+    harness.bind(room, ids, { origin, publicKey: 'public' });
+    await harness.drainResponses();
+    await assert.rejects(() => createWaitingWithSession(pages[0], diagnostics,
+      { origin, publicKey: 'public' }, previous), /STOP_AFTER_HOME_NAVIGATION/);
+    pages[0].emit('requestfinished', request); release();
+    await assert.rejects(() => harness.drainResponses(), /E2E_SAFE_FAILURE/);
+    order.push('validation-failed');
+    assert.deepEqual(order, ['outer-drain', 'retained-session-auth-accounting',
+      'candidate-response-captured', 'body-requested', 'retained-session-participant',
+      'home-navigation', 'validation-failed']);
+    assert.equal(captured.length, 1);
+    assert.deepEqual({ guard: captured[0].guard, status: captured[0].httpStatus,
+      stage: captured[0].responseReadStage, failure: captured[0].responseFailure,
+      exception: captured[0].exceptionCategory, bytes: captured[0].bodyBytesObtained,
+      json: captured[0].jsonDecoded, finished: captured[0].requestFinished,
+      page: captured[0].pageAlive, context: captured[0].contextAlive },
+      { guard: 'response-body', status: 200, stage: 'body-requested', failure: 'navigation',
+        exception: 'protocol', bytes: false, json: false, finished: true, page: true, context: true });
+    assert.equal(JSON.stringify(captured).includes(roomId), false);
+    assert.equal(JSON.stringify(captured).includes(token(ids[0])), false);
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'otteroom-retained-navigation-'));
+    try { fs.writeFileSync(path.join(directory, 'summary.json'), JSON.stringify(captured));
+      assert.deepEqual(scanArtifacts(directory).findings, []); }
+    finally { fs.rmSync(directory, { recursive: true }); }
+    await harness.close();
+
+    const fixedRoomId = '44444444-4444-4444-8444-444444444444';
+    const fixedRoom = { ...room, id: fixedRoomId };
+    const fixedRequest = { ...request, postDataJSON: () => ({ room_id: fixedRoomId }) };
+    let releaseFixed, fixedNavigated = false;
+    const fixedOrder = ['outer-drain'];
+    const fixedGate = new Promise(resolve => { releaseFixed = resolve; });
+    const fixedPage = participant => ({ routes: [], events: events(), closed: false,
+      async route(match, handler) { this.routes.push({ match, handler }); },
+      async unroute(match, handler) { this.routes = this.routes.filter(item =>
+        item.match !== match || item.handler !== handler); },
+      on(name, handler) { if (!this.events.has(name)) this.events.set(name, new Set());
+        this.events.get(name).add(handler); },
+      removeListener(name, handler) { this.events.get(name)?.delete(handler); },
+      emit(name, value) { for (const handler of this.events.get(name) ?? []) handler(value); },
+      isClosed() { return this.closed; },
+      context() { return { pages: () => [this], browser: () => ({ isConnected: () => true }) }; },
+      async evaluate() { fixedOrder.push('retained-session-participant'); return participant; },
+      async goto(value) { assert.equal(value, '/'); fixedNavigated = true;
+        fixedOrder.push('home-navigation'); throw new Error('STOP_AFTER_HOME_NAVIGATION'); } });
+    const fixedCaptured = [], fixedPages = [fixedPage(ids[0]), fixedPage(ids[1])];
+    const fixedDiagnostics = { page: fixedPages[0],
+      recordHarnessDiagnostic: value => fixedCaptured.push(value),
+      async assertAuthAccounting() {
+        fixedOrder.push('retained-session-auth-accounting');
+        fixedPages[0].emit('request', fixedRequest); fixedOrder.push('candidate-response-captured');
+        fixedPages[0].emit('response', { url: fixedRequest.url, request: () => fixedRequest,
+          status: () => 200, ok: () => true, body: async () => {
+            fixedOrder.push('body-requested'); await fixedGate; fixedOrder.push('body-obtained');
+            return Buffer.from(JSON.stringify(candidate)); } });
+        await turn();
+      } };
+    const fixedParticipants = fixedPages.map(page => ({ page,
+      recordHarnessDiagnostic: value => fixedCaptured.push(value) }));
+    const fixedHarness = await candidateHarness(fixedParticipants, 'http://127.0.0.1:8081');
+    fixedHarness.bind(fixedRoom, ids, { origin, publicKey: 'public' });
+    await fixedHarness.drainResponses();
+    const fixedTransition = createWaitingWithSession(fixedPages[0], fixedDiagnostics,
+      { origin, publicKey: 'public' }, { row: { ...fixedRoom, creation_request_id: randomUUID() } },
+      undefined, fixedHarness).catch(error => error);
+    await turn();
+    assert.equal(fixedNavigated, false);
+    fixedPages[0].emit('requestfinished', fixedRequest); releaseFixed();
+    assert.match((await fixedTransition).message, /STOP_AFTER_HOME_NAVIGATION/);
+    assert.equal(fixedNavigated, true);
+    assert.deepEqual(fixedOrder, ['outer-drain', 'retained-session-auth-accounting',
+      'candidate-response-captured', 'body-requested', 'retained-session-participant',
+      'body-obtained', 'home-navigation']);
+    assert.deepEqual(fixedCaptured, []);
+    assert.doesNotThrow(() => fixedHarness.assertHealthy());
+    let alreadyDrainedNavigation = 0;
+    assert.equal(await navigateAfterResponseValidation(fixedHarness, fixedPages, async () => {
+      alreadyDrainedNavigation++; return 'navigated'; }), 'navigated');
+    assert.equal(alreadyDrainedNavigation, 1);
+    await fixedHarness.close();
+  `));
+  it('reproduces request 13 at the post-loss second reload boundary', () => verify(prelude + `
+    const { parseEnv } = await import('node:util');
+    const { candidateHarness } = await import('./e2e/support/candidate-harness.ts');
+    const { reloadPagesAfterCandidateResponses } =
+      await import('./e2e/support/progression-harness.ts');
+    const { scanArtifacts } = await import('./scripts/check-e2e-artifacts.mjs');
+    const events = () => new Map();
+    const makePage = () => ({ routes: [], events: events(), closed: false, onReload: async () => ({}),
+      async route(match, handler) { this.routes.push({ match, handler }); },
+      async unroute(match, handler) { this.routes = this.routes.filter(item =>
+        item.match !== match || item.handler !== handler); },
+      on(name, handler) { if (!this.events.has(name)) this.events.set(name, new Set());
+        this.events.get(name).add(handler); },
+      removeListener(name, handler) { this.events.get(name)?.delete(handler); },
+      emit(name, value) { for (const handler of this.events.get(name) ?? []) handler(value); },
+      isClosed() { return this.closed; },
+      context() { return { pages: () => [this], browser: () => ({ isConnected: () => true }) }; },
+      async reload(options) { assert.deepEqual(options, { waitUntil: 'domcontentloaded' });
+        return this.onReload(); } });
+    const local = process.env.EXPO_PUBLIC_SUPABASE_URL ? process.env :
+      parseEnv(fs.readFileSync('.env.local','utf8'));
+    const origin = new URL(local.EXPO_PUBLIC_SUPABASE_URL).origin;
+    const roomId = '11111111-1111-4111-8111-111111111111';
+    const ids = ['22222222-2222-4222-8222-222222222222',
+      '33333333-3333-4333-8333-333333333333'];
+    const token = id => 'x.' + Buffer.from(JSON.stringify({ sub: id })).toString('base64url') + '.x';
+    let requestOrdinal = 0;
+    const request = (index = 0) => ({ ordinal: ++requestOrdinal,
+      url: () => origin + '/functions/v1/room-candidate', method: () => 'POST',
+      postDataJSON: () => ({ room_id: roomId }),
+      headers: () => ({ authorization: 'Bearer ' + token(ids[index]) }) });
+    const candidate = { outcome: 'available', candidate_sequence: 2,
+      candidate_progression_status: 'collecting', candidate: { tmdb_movie_id: 6007,
+        title: 'Controlled Aurora', release_year: 2006,
+        poster_url: 'https://image.tmdb.org/t/p/w500/controlled-successor.png' } };
+    const room = { id: roomId, code: 'ABCDEF0123', state: 'ready', voter_count: 2,
+      required_voter_count: 2, filter_completed_count: 2, filter_resolution_status: 'compatible',
+      candidate_acquisition_status: 'assigned', candidate_progression_status: 'collecting',
+      candidate_sequence: 2, decision_completed_count: 0 };
+    const turn = () => new Promise(resolve => setImmediate(resolve));
+    const pages = [makePage(), makePage()], captured = [];
+    const harness = await candidateHarness(pages.map(page => ({ page,
+      recordHarnessDiagnostic: value => captured.push(value) })), 'http://127.0.0.1:8081');
+    harness.bind(room, ids, { origin, publicKey: 'public' });
+
+    for (let count = 0; count < 11; count++) {
+      const index = count % 2, current = request(index);
+      pages[index].emit('request', current);
+      pages[index].emit('response', { url: current.url, request: () => current,
+        status: () => 200, ok: () => true,
+        body: async () => Buffer.from(JSON.stringify(candidate)) });
+      pages[index].emit('requestfinished', current);
+      await harness.drainResponses();
+    }
+    const loss = await harness.discardNextResponse(1);
+    const consumed = request(1); pages[1].emit('request', consumed);
+    const lossRoute = pages[1].routes.findLast(item => String(item.match).includes('/functions/v1/room-candidate'));
+    await lossRoute.handler({ request: () => consumed, fetch: async () => {
+      pages[1].emit('response', { url: consumed.url, request: () => consumed,
+        status: () => 200, ok: () => true, body: async () => Buffer.from(JSON.stringify(candidate)) });
+      return { ok: () => true, body: async () => Buffer.from(JSON.stringify(candidate)),
+        dispose: async () => {} }; }, abort: async () => pages[1].emit('requestfailed', consumed) });
+    assert.equal(loss.committed(), true); await loss.close();
+    assert.deepEqual({ requests: harness.stats.reduce((sum, value) => sum + value.requests, 0),
+      responses: harness.stats.reduce((sum, value) => sum + value.responses, 0) },
+      { requests: 12, responses: 11 });
+
+    const delayed = request(0), order = ['required-request-observed'];
+    pages[0].emit('request', delayed);
+    let release, navigated = false;
+    const gate = new Promise(resolve => { release = resolve; });
+    pages[0].onReload = async () => {
+      order.push('second-reload-started');
+      pages[0].emit('response', { url: delayed.url, request: () => delayed,
+        status: () => 200, ok: () => true, body: async () => {
+          order.push('body-requested'); await gate;
+          if (navigated) throw new Error('Protocol error: response body was navigated away from');
+          return Buffer.from(JSON.stringify(candidate)); } });
+      await turn(); navigated = true; order.push('document-replaced');
+      pages[0].emit('requestfinished', delayed); release(); return {};
+    };
+    // Faithful extraction of the former response-only drain: no response had
+    // been captured yet, so it observed an empty validation set and returned.
+    await Promise.resolve(); order.push('outer-drain-returned');
+    await Promise.all(pages.map(page => page.reload({ waitUntil: 'domcontentloaded' })));
+    await assert.rejects(() => harness.drainResponses(), /E2E_SAFE_FAILURE/);
+    order.push('validation-failed');
+    assert.deepEqual(order, ['required-request-observed', 'outer-drain-returned',
+      'second-reload-started', 'body-requested', 'document-replaced', 'validation-failed']);
+    assert.equal(captured.length, 1);
+    assert.deepEqual({ guard: captured[0].guard, requests: captured[0].requests,
+      responses: captured[0].responses, invalid: captured[0].invalid,
+      status: captured[0].httpStatus, stage: captured[0].responseReadStage,
+      failure: captured[0].responseFailure, exception: captured[0].exceptionCategory,
+      bytes: captured[0].bodyBytesObtained, json: captured[0].jsonDecoded,
+      finished: captured[0].requestFinished, page: captured[0].pageAlive,
+      context: captured[0].contextAlive },
+      { guard: 'response-body', requests: 13, responses: 11, invalid: 1,
+        status: 200, stage: 'body-requested', failure: 'navigation', exception: 'protocol',
+        bytes: false, json: false, finished: true, page: true, context: true });
+    assert.equal(JSON.stringify(captured).includes(roomId), false);
+    assert.equal(JSON.stringify(captured).includes(token(ids[0])), false);
+    await harness.close();
+
+    const fixedPages = [makePage(), makePage()], fixedCaptured = [];
+    const fixedHarness = await candidateHarness(fixedPages.map(page => ({ page,
+      recordHarnessDiagnostic: value => fixedCaptured.push(value) })), 'http://127.0.0.1:8081');
+    fixedHarness.bind(room, ids, { origin, publicKey: 'public' });
+    const fixedRequest = request(0), fixedOrder = [];
+    let fixedReloads = 0;
+    for (const page of fixedPages) page.onReload = async () => {
+      fixedReloads++; fixedOrder.push('reload'); return {};
+    };
+    const fixedTransition = reloadPagesAfterCandidateResponses(fixedHarness, fixedPages);
+    setImmediate(() => { fixedOrder.push('required-request-observed');
+      fixedPages[0].emit('request', fixedRequest); });
+    await turn();
+    assert.equal(fixedReloads, 0);
+    let releaseFixed;
+    const fixedGate = new Promise(resolve => { releaseFixed = resolve; });
+    fixedPages[0].emit('response', { url: fixedRequest.url, request: () => fixedRequest,
+      status: () => 200, ok: () => true, body: async () => {
+        fixedOrder.push('body-requested'); await fixedGate; fixedOrder.push('body-obtained');
+        return Buffer.from(JSON.stringify(candidate)); } });
+    await turn(); assert.equal(fixedReloads, 0);
+    fixedPages[0].emit('requestfinished', fixedRequest); releaseFixed();
+    await fixedTransition;
+    assert.equal(fixedReloads, 2);
+    assert.deepEqual(fixedOrder, ['required-request-observed', 'body-requested',
+      'body-obtained', 'reload', 'reload']);
+    assert.deepEqual(fixedCaptured, []);
+    assert.doesNotThrow(() => fixedHarness.assertHealthy());
+    await reloadPagesAfterCandidateResponses(fixedHarness, fixedPages);
+    assert.equal(fixedReloads, 4);
+    await fixedHarness.close();
+
+    const emptyPages = [makePage(), makePage()], emptyCaptured = [];
+    const emptyHarness = await candidateHarness(emptyPages.map(page => ({ page,
+      recordHarnessDiagnostic: value => emptyCaptured.push(value) })), 'http://127.0.0.1:8081');
+    emptyHarness.bind(room, ids, { origin, publicKey: 'public' });
+    let emptyReloads = 0;
+    for (const page of emptyPages) page.onReload = async () => { emptyReloads++; return {}; };
+    await reloadPagesAfterCandidateResponses(emptyHarness, emptyPages);
+    assert.equal(emptyReloads, 2); assert.deepEqual(emptyCaptured, []);
+    await emptyHarness.close();
+
+    const racingPages = [makePage(), makePage()], racingCaptured = [];
+    const racingHarness = await candidateHarness(racingPages.map(page => ({ page,
+      recordHarnessDiagnostic: value => racingCaptured.push(value) })), 'http://127.0.0.1:8081');
+    racingHarness.bind(room, ids, { origin, publicKey: 'public' });
+    const retired = request(0);
+    let racingReloads = 0, fallbacks = 0, aborts = 0;
+    racingPages[0].onReload = async () => {
+      racingReloads++; racingPages[0].emit('request', retired);
+      const boundary = racingPages[0].routes.find(item =>
+        String(item.match).includes('/functions/v1/room-candidate'));
+      await boundary.handler({ request: () => retired, fallback: async () => { fallbacks++; },
+        abort: async () => { aborts++; racingPages[0].emit('requestfailed', retired); } });
+      return {};
+    };
+    racingPages[1].onReload = async () => { racingReloads++; return {}; };
+    await reloadPagesAfterCandidateResponses(racingHarness, racingPages);
+    await racingHarness.drainResponses();
+    assert.deepEqual({ racingReloads, fallbacks, aborts },
+      { racingReloads: 2, fallbacks: 0, aborts: 1 });
+    assert.deepEqual(racingCaptured, []);
+    assert.doesNotThrow(() => racingHarness.assertHealthy());
+    await racingHarness.close();
+
+    const failedPages = [makePage(), makePage()], failedCaptured = [];
+    const failedHarness = await candidateHarness(failedPages.map(page => ({ page,
+      recordHarnessDiagnostic: value => failedCaptured.push(value) })), 'http://127.0.0.1:8081');
+    failedHarness.bind(room, ids, { origin, publicKey: 'public' });
+    const failedRequest = request(0); failedPages[0].emit('request', failedRequest);
+    let failedReloads = 0;
+    for (const page of failedPages) page.onReload = async () => { failedReloads++; return {}; };
+    const rejectedTransition = reloadPagesAfterCandidateResponses(failedHarness, failedPages);
+    await turn(); assert.equal(failedReloads, 0);
+    failedPages[0].emit('response', { url: failedRequest.url, request: () => failedRequest,
+      status: () => 200, ok: () => true,
+      body: async () => { throw new Error('network loading failed'); } });
+    failedPages[0].emit('requestfinished', failedRequest);
+    await assert.rejects(() => rejectedTransition, /E2E_SAFE_FAILURE/);
+    assert.equal(failedReloads, 0); assert.equal(failedCaptured.length, 1);
+    assert.deepEqual({ guard: failedCaptured[0].guard, status: failedCaptured[0].httpStatus,
+      stage: failedCaptured[0].responseReadStage, failure: failedCaptured[0].responseFailure,
+      bytes: failedCaptured[0].bodyBytesObtained, json: failedCaptured[0].jsonDecoded },
+      { guard: 'response-body', status: 200, stage: 'body-requested', failure: 'network',
+        bytes: false, json: false });
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'otteroom-request-drain-'));
+    try { fs.writeFileSync(path.join(directory, 'summary.json'), JSON.stringify(failedCaptured));
+      assert.deepEqual(scanArtifacts(directory).findings, []); }
+    finally { fs.rmSync(directory, { recursive: true }); }
+    await failedHarness.close();
+
+    const unavailablePages = [makePage(), makePage()], unavailableCaptured = [];
+    const unavailableHarness = await candidateHarness(unavailablePages.map(page => ({ page,
+      recordHarnessDiagnostic: value => unavailableCaptured.push(value) })), 'http://127.0.0.1:8081');
+    unavailableHarness.bind(room, ids, { origin, publicKey: 'public' });
+    const unavailableRequest = request(0); unavailablePages[0].emit('request', unavailableRequest);
+    let unavailableReloads = 0;
+    for (const page of unavailablePages) page.onReload = async () => { unavailableReloads++; return {}; };
+    const unavailableTransition = reloadPagesAfterCandidateResponses(
+      unavailableHarness, unavailablePages);
+    await turn(); assert.equal(unavailableReloads, 0);
+    unavailablePages[0].emit('requestfailed', unavailableRequest);
+    await assert.rejects(() => unavailableTransition, /E2E_SAFE_FAILURE/);
+    assert.equal(unavailableReloads, 0); assert.equal(unavailableCaptured.length, 1);
+    assert.deepEqual({ guard: unavailableCaptured[0].guard,
+      status: unavailableCaptured[0].httpStatus,
+      stage: unavailableCaptured[0].responseReadStage,
+      failure: unavailableCaptured[0].responseFailure,
+      failed: unavailableCaptured[0].requestFailed,
+      bytes: unavailableCaptured[0].bodyBytesObtained,
+      json: unavailableCaptured[0].jsonDecoded },
+      { guard: 'response-body', status: null, stage: 'not-started', failure: 'network',
+        failed: true, bytes: false, json: false });
+    await unavailableHarness.close();
+  `));
+  it('does not misclassify an intentionally consumed candidate response as a health failure', () => verify(prelude + `
+    const { parseEnv } = await import('node:util');
+    const { candidateHarness } = await import('./e2e/support/candidate-harness.ts');
+    const events = () => new Map();
+    const makePage = () => ({ routes: [], events: events(),
+      async route(match, handler) { this.routes.push({ match, handler }); },
+      async unroute(match, handler) { this.routes = this.routes.filter(item =>
+        item.match !== match || item.handler !== handler); },
+      on(name, handler) { if (!this.events.has(name)) this.events.set(name, new Set());
+        this.events.get(name).add(handler); },
+      removeListener(name, handler) { this.events.get(name)?.delete(handler); },
+      emit(name, value) { for (const handler of this.events.get(name) ?? []) handler(value); } });
+    const pages = [makePage(), makePage()], captured = [];
+    const participants = pages.map(page => ({ page,
+      recordHarnessDiagnostic: value => captured.push(value) }));
+    const local = process.env.EXPO_PUBLIC_SUPABASE_URL ? process.env :
+      parseEnv(fs.readFileSync('.env.local','utf8'));
+    const origin = new URL(local.EXPO_PUBLIC_SUPABASE_URL).origin;
+    const harness = await candidateHarness(participants, 'http://127.0.0.1:8081');
+    const room = { id: '11111111-1111-4111-8111-111111111111', code: 'ABCDEF0123',
+      state: 'ready', voter_count: 2, required_voter_count: 2, filter_completed_count: 2,
+      filter_resolution_status: 'compatible', candidate_acquisition_status: 'assigned',
+      candidate_progression_status: 'collecting', candidate_sequence: 1,
+      decision_completed_count: 0 };
+    harness.bind(room, ['22222222-2222-4222-8222-222222222222',
+      '33333333-3333-4333-8333-333333333333'], { origin, publicKey: 'public' });
+    const loss = await harness.discardNextResponse(1);
+    const entry = pages[1].routes.findLast(item => String(item.match).includes('/functions/v1/room-candidate'));
+    const request = { url: () => origin + '/functions/v1/room-candidate', method: () => 'POST',
+      postDataJSON: () => ({ room_id: room.id }), headers: () => ({}) };
+    const candidate = { outcome: 'available', candidate_sequence: 2,
+      candidate_progression_status: 'collecting', candidate: { tmdb_movie_id: 6007,
+        title: 'Controlled Aurora', release_year: 2006,
+        poster_url: 'https://image.tmdb.org/t/p/w500/controlled-successor.png' } };
+    await entry.handler({ request: () => request, fetch: async () => {
+      pages[1].emit('response', { url: request.url, request: () => request, status: () => 200,
+        ok: () => true, body: async () => { throw new Error('disposed response'); } });
+      return { ok: () => true, body: async () => Buffer.from(JSON.stringify(candidate)),
+        dispose: async () => {} }; }, abort: async () => {} });
+    assert.equal(loss.committed(), true); assert.equal(loss.settled(), true);
+    assert.doesNotThrow(() => harness.assertHealthy()); assert.deepEqual(captured, []);
+    await loss.close(); await harness.close();
   `));
   it('rejects unsafe QR subtrees and clears every decoded RGBA buffer on failure', () => verify(prelude + `
     const { assertSafeQrMarkup, decodeQrRgba } = await import('./e2e/support/qr-harness.ts');
@@ -648,7 +1198,7 @@ it('explicitly discovers H01–H03, I01–I03 and J01–J03 with fixed safe labe
   const { safeDiagnosticLocation } = await import('./e2e/support/sanitize-diagnostics.ts');
   assert.deepEqual(config.projects.find(p => p.name === 'acceptance').testMatch,
     ['room-session.spec.ts', 'generalized-room-membership-qr.spec.ts', 'participant-filters.spec.ts', 'common-filter-resolution.spec.ts',
-      'tmdb-candidate-source.spec.ts', 'swipe-decisions.spec.ts']);
+      'tmdb-candidate-source.spec.ts', 'swipe-decisions.spec.ts', 'candidate-progression.spec.ts']);
   const titles = ['@filters H01 validates private owned filters and editable saved state',
     '@filters H02 recovers filters through failures and lost acknowledgements',
     '@filters H03 serializes final completion and freezes every filter'];
@@ -676,7 +1226,8 @@ it('explicitly discovers H01–H03, I01–I03 and J01–J03 with fixed safe labe
     assert.equal(result.scenario, 'candidate'); assert.equal(result.browserCase, title.split(' ')[1]);
     assert.equal(result.location, 'e2e/tmdb-candidate-source.spec.ts:12:3');
   }
-  for (const file of ['participant-filters.spec', 'common-filter-resolution.spec', 'support/filter-harness', 'support/room-harness', 'support/resolution-harness'])
+  for (const file of ['participant-filters.spec', 'common-filter-resolution.spec', 'candidate-progression.spec',
+    'support/filter-harness', 'support/room-harness', 'support/resolution-harness', 'support/progression-harness'])
     assert.equal(safeDiagnosticLocation('E2E_SAFE_FAILURE at e2e/' + file + '.ts:12:3'), 'e2e/' + file + '.ts:12:3');
   for (const title of ['@filters H00 future', '@filters H04 future', '@resolution I00 future', '@resolution I04 future',
     '@candidate F01 retired', '@feature006 J04 future', '@filters ' + sentinel(), '@resolution ' + sentinel()]) {
@@ -684,8 +1235,8 @@ it('explicitly discovers H01–H03, I01–I03 and J01–J03 with fixed safe labe
     assert.equal(result.scenario, 'unclassified'); assert.equal(result.browserCase, 'none');
   }
   assert.equal(safeDiagnosticLocation('e2e/arbitrary.ts:12:3'), undefined);
-  assert.equal(/acceptance[ -]N=106/.test(fs.readFileSync('scripts/run-e2e.mjs', 'utf8')), true);
-  assert.equal(/acceptance[ -]N=106/.test(fs.readFileSync('e2e/support/safe-diagnostics.ts', 'utf8')), true);
+  assert.equal(/acceptance[ -]N=112/.test(fs.readFileSync('scripts/run-e2e.mjs', 'utf8')), true);
+  assert.equal(/acceptance[ -]N=112/.test(fs.readFileSync('e2e/support/safe-diagnostics.ts', 'utf8')), true);
   const runner = fs.readFileSync('scripts/run-e2e.mjs', 'utf8');
   assert.equal(runner.includes("'H01'"), true);
   assert.equal(runner.includes("'filters'"), true);
@@ -743,14 +1294,15 @@ it('Realtime dispatch accounting distinguishes a late prior response from a new 
     await connect(browser);
     serverMessage(JSON.stringify([null, null, 'realtime:room:' + id, 'system',
       { extension: 'postgres_changes', status: 'ok', message: 'Subscribed to PostgreSQL' }]));
-    const url = 'http://127.0.0.1:55321/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status,decision_completed_count&id=eq.' + id;
+    const url = 'http://127.0.0.1:55321/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status,candidate_progression_status,candidate_sequence,decision_completed_count&id=eq.' + id;
     const request = { url: () => url }; page.emit('request', request);
     const delayed = new Promise(resolve => { finish = resolve; });
     page.emit('response', { request: () => request, url: () => url, ok: () => true, body: async () => Buffer.from(JSON.stringify(await delayed)) });
     assert.equal(transport.stats.readRequests, 1); assert.equal(transport.stats.reads, 0);
     const before = { ...transport.stats };
     finish([{ id, code: 'ABCDEF0123', state: 'waiting', voter_count: 2, required_voter_count: 3, filter_completed_count: 0,
-      filter_resolution_status: 'pending', candidate_acquisition_status: 'pending', decision_completed_count: 0 }]);
+      filter_resolution_status: 'pending', candidate_acquisition_status: 'pending',
+      candidate_progression_status: 'inactive', candidate_sequence: 0, decision_completed_count: 0 }]);
     await transport.wait('reads', 1);
     assert.equal(transport.stats.readRequests, before.readRequests);
     assert.notEqual(transport.stats.reads, before.reads);
@@ -773,7 +1325,7 @@ const realtimePrelude = prelude + `
   const system = JSON.stringify([null, null, 'realtime:room:' + id, 'system',
     { extension: 'postgres_changes', status: 'ok', message: 'Subscribed to PostgreSQL' }]);
   serverMessage(system);
-  const url = 'http://127.0.0.1:55321/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status,decision_completed_count&id=eq.' + id;
+  const url = 'http://127.0.0.1:55321/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status,candidate_progression_status,candidate_sequence,decision_completed_count&id=eq.' + id;
   const request = { url: () => url };
   const turn = () => new Promise(resolve => setImmediate(resolve));
 `;
@@ -819,7 +1371,8 @@ it.each(['retired-body', 'active-body', 'retired-malformed', 'retired-valid'])('
     if ('${trial}'.endsWith('body')) reject(Error('synthetic unavailable body'));
     else finish(Buffer.from('${trial}' === 'retired-malformed' ? '{}' : JSON.stringify([
       { id, code: 'ABCDEF0123', state: 'waiting', voter_count: 2, required_voter_count: 3, filter_completed_count: 0,
-        filter_resolution_status: 'pending', candidate_acquisition_status: 'pending', decision_completed_count: 0 }])));
+        filter_resolution_status: 'pending', candidate_acquisition_status: 'pending',
+        candidate_progression_status: 'inactive', candidate_sequence: 0, decision_completed_count: 0 }])));
     await turn();
     if (['active-body', 'retired-malformed'].includes('${trial}')) assert.throws(() => transport.assertHealthy());
     else {

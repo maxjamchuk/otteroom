@@ -141,6 +141,20 @@ export function useRoomSubscription(accepted: AcceptedRoomState | null) {
       return { ...previous, room };
     });
   }, [accepted]);
+  const synchronizeRoom = useCallback(async (): Promise<AcceptedRoomState | null> => {
+    if (!accepted) return null;
+    const lifecycle = generation.current;
+    const row = await refetchRoom(accepted.id);
+    if (generation.current !== lifecycle) return null;
+    const watermark = lastAccepted.current?.source === accepted
+      ? lastAccepted.current.room : accepted;
+    const room = applyRoomRefetch(watermark, row);
+    lastAccepted.current = { source: accepted, room };
+    retryFlight.current = false;
+    setView(previous => ({ source: accepted, room,
+      error: previous.source === accepted ? previous.error : false, retrying: false }));
+    return room;
+  }, [accepted]);
   return { room: visible.room, error: visible.error, retrying: visible.retrying, retry,
-    observeFilterProgress, observeResolutionStatus };
+    synchronizeRoom, observeFilterProgress, observeResolutionStatus };
 }

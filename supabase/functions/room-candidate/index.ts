@@ -21,41 +21,84 @@ function parsePreflight(value: unknown): PreflightResult {
   value = singleton(value);
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('internal');
   const row = value as Record<string, unknown>;
-  if (!exactObject(row, ['outcome','tmdb_movie_id','release_year_from','release_year_to',
-      'genre_clauses_tmdb_ids'])) throw new Error('internal');
+  if (!exactObject(row, ['outcome','candidate_sequence','candidate_progression_status',
+      'tmdb_movie_id','release_year_from','release_year_to','genre_clauses_tmdb_ids',
+      'excluded_tmdb_movie_ids'])) throw new Error('internal');
   if (row.outcome === 'acquire') {
-    if (row.tmdb_movie_id !== null) throw new Error('internal');
+    if (row.tmdb_movie_id !== null || !Number.isSafeInteger(row.candidate_sequence) ||
+        (row.candidate_sequence as number) < 0 ||
+        !(row.candidate_progression_status === 'inactive' && row.candidate_sequence === 0 ||
+          row.candidate_progression_status === 'advancing' && (row.candidate_sequence as number) > 0) ||
+        !Array.isArray(row.excluded_tmdb_movie_ids) ||
+        !row.excluded_tmdb_movie_ids.every(positiveInteger) ||
+        new Set(row.excluded_tmdb_movie_ids).size !== row.excluded_tmdb_movie_ids.length)
+      throw new Error('internal');
     const constraint = parseConstraint({ release_year_from: row.release_year_from,
       release_year_to: row.release_year_to, genre_clauses_tmdb_ids: row.genre_clauses_tmdb_ids });
-    return { outcome: 'acquire', release_year_from: constraint.releaseYearFrom,
-      release_year_to: constraint.releaseYearTo, genre_clauses_tmdb_ids: constraint.clauses };
+    return { outcome: 'acquire', candidate_sequence: row.candidate_sequence as number,
+      candidate_progression_status: row.candidate_progression_status,
+      release_year_from: constraint.releaseYearFrom, release_year_to: constraint.releaseYearTo,
+      genre_clauses_tmdb_ids: constraint.clauses,
+      excluded_tmdb_movie_ids: Object.freeze([...(row.excluded_tmdb_movie_ids as number[])]) };
   }
-  if (row.outcome === 'assigned' && positiveInteger(row.tmdb_movie_id) &&
-      row.release_year_from === null && row.release_year_to === null && row.genre_clauses_tmdb_ids === null)
-    return { outcome: 'assigned', tmdb_movie_id: row.tmdb_movie_id };
-  if ((row.outcome === 'not_found' || row.outcome === 'not_ready' || row.outcome === 'no_candidates') &&
+  if (row.outcome === 'assigned' && positiveInteger(row.candidate_sequence) &&
+      (row.candidate_progression_status === 'collecting' || row.candidate_progression_status === 'agreed') &&
+      positiveInteger(row.tmdb_movie_id) && row.release_year_from === null &&
+      row.release_year_to === null && row.genre_clauses_tmdb_ids === null &&
+      row.excluded_tmdb_movie_ids === null)
+    return { outcome: 'assigned', candidate_sequence: row.candidate_sequence,
+      candidate_progression_status: row.candidate_progression_status, tmdb_movie_id: row.tmdb_movie_id };
+  if (row.outcome === 'no_candidates' && row.candidate_sequence === 0 &&
+      row.candidate_progression_status === 'inactive' && row.tmdb_movie_id === null &&
+      row.release_year_from === null && row.release_year_to === null &&
+      row.genre_clauses_tmdb_ids === null && row.excluded_tmdb_movie_ids === null)
+    return { outcome: 'no_candidates', candidate_sequence: 0,
+      candidate_progression_status: 'inactive' };
+  if (row.outcome === 'exhausted' && positiveInteger(row.candidate_sequence) &&
+      row.candidate_progression_status === 'exhausted' && row.tmdb_movie_id === null &&
+      row.release_year_from === null && row.release_year_to === null &&
+      row.genre_clauses_tmdb_ids === null && row.excluded_tmdb_movie_ids === null)
+    return { outcome: 'exhausted', candidate_sequence: row.candidate_sequence,
+      candidate_progression_status: 'exhausted' };
+  if ((row.outcome === 'not_found' || row.outcome === 'not_ready') &&
+      row.candidate_sequence === null && row.candidate_progression_status === null &&
       row.tmdb_movie_id === null && row.release_year_from === null &&
-      row.release_year_to === null && row.genre_clauses_tmdb_ids === null)
+      row.release_year_to === null && row.genre_clauses_tmdb_ids === null &&
+      row.excluded_tmdb_movie_ids === null)
     return { outcome: row.outcome };
   throw new Error('internal');
 }
 
 function parseCommit(value: unknown): CommitResult {
   value = singleton(value);
-  if (!exactObject(value, ['outcome','tmdb_movie_id'])) throw new Error('internal');
-  if (value.outcome === 'assigned' && positiveInteger(value.tmdb_movie_id))
-    return { outcome: 'assigned', tmdb_movie_id: value.tmdb_movie_id };
-  if (value.outcome === 'no_candidates' && value.tmdb_movie_id === null)
-    return { outcome: 'no_candidates', tmdb_movie_id: null };
+  if (!exactObject(value, ['outcome','candidate_sequence','candidate_progression_status','tmdb_movie_id']))
+    throw new Error('internal');
+  if (value.outcome === 'assigned' && positiveInteger(value.candidate_sequence) &&
+      (value.candidate_progression_status === 'collecting' || value.candidate_progression_status === 'agreed') &&
+      positiveInteger(value.tmdb_movie_id)) return value as CommitResult;
+  if (value.outcome === 'no_candidates' && value.candidate_sequence === 0 &&
+      value.candidate_progression_status === 'inactive' && value.tmdb_movie_id === null)
+    return value as CommitResult;
+  if (value.outcome === 'exhausted' && positiveInteger(value.candidate_sequence) &&
+      value.candidate_progression_status === 'exhausted' && value.tmdb_movie_id === null)
+    return value as CommitResult;
+  if ((value.outcome === 'refresh_required' || value.outcome === 'not_found' ||
+      value.outcome === 'not_ready') && value.candidate_sequence === null &&
+      value.candidate_progression_status === null && value.tmdb_movie_id === null)
+    return value as CommitResult;
   throw new Error('internal');
 }
 
-function presentationResponse(candidate: CandidatePresentation): Response {
-  return json(200, { outcome: 'available', candidate: { tmdb_movie_id: candidate.tmdbMovieId,
+function presentationResponse(candidate: CandidatePresentation, sequence: number,
+  progression: 'collecting' | 'agreed'): Response {
+  return json(200, { outcome: 'available', candidate_sequence: sequence,
+    candidate_progression_status: progression,
+    candidate: { tmdb_movie_id: candidate.tmdbMovieId,
     title: candidate.title, release_year: candidate.releaseYear, poster_url: candidate.posterUrl } });
 }
 
-async function metadata(dependencies: EdgeDependencies, id: number): Promise<Response> {
+async function metadata(dependencies: EdgeDependencies, id: number, sequence: number,
+  progression: 'collecting' | 'agreed'): Promise<Response> {
   try {
     const candidate = await dependencies.details(id);
     if (candidate.posterUrl !== null) {
@@ -66,8 +109,9 @@ async function metadata(dependencies: EdgeDependencies, id: number): Promise<Res
         !candidate.title || candidate.title.trim() !== candidate.title ||
         !Number.isInteger(candidate.releaseYear) || candidate.releaseYear < 1888 ||
         candidate.releaseYear > 9999) throw new Error('internal');
-    return presentationResponse(candidate);
-  } catch { return json(200, { outcome: 'metadata_unavailable' }); }
+    return presentationResponse(candidate, sequence, progression);
+  } catch { return json(200, { outcome: 'metadata_unavailable', candidate_sequence: sequence,
+    candidate_progression_status: progression }); }
 }
 
 function parseBody(value: unknown): string | null {
@@ -93,12 +137,17 @@ export function createRoomCandidateHandler(dependencies: EdgeDependencies) {
       const preflight = parsePreflight(await dependencies.rpc('prepare_room_tmdb_candidate', {
         p_room_id: roomId, p_actor_user_id: actor,
       }));
-      if (preflight.outcome === 'not_found' || preflight.outcome === 'not_ready' ||
-          preflight.outcome === 'no_candidates') return json(200, { outcome: preflight.outcome });
-      if (preflight.outcome === 'assigned') return await metadata(dependencies, preflight.tmdb_movie_id);
+      if (preflight.outcome === 'not_found' || preflight.outcome === 'not_ready')
+        return json(200, { outcome: preflight.outcome });
+      if (preflight.outcome === 'no_candidates') return json(200, { outcome: 'no_candidates' });
+      if (preflight.outcome === 'exhausted') return json(200, { outcome: 'exhausted',
+        candidate_sequence: preflight.candidate_sequence, candidate_progression_status: 'exhausted' });
+      if (preflight.outcome === 'assigned') return await metadata(dependencies,
+        preflight.tmdb_movie_id, preflight.candidate_sequence, preflight.candidate_progression_status);
 
       const constraint: CandidateConstraint = { releaseYearFrom: preflight.release_year_from,
-        releaseYearTo: preflight.release_year_to, clauses: preflight.genre_clauses_tmdb_ids };
+        releaseYearTo: preflight.release_year_to, clauses: preflight.genre_clauses_tmdb_ids,
+        excludedTmdbMovieIds: preflight.excluded_tmdb_movie_ids };
       const search = await dependencies.search(constraint);
       if (search.kind === 'search_incomplete') {
         dependencies.log?.('discover', search.reason,
@@ -109,16 +158,24 @@ export function createRoomCandidateHandler(dependencies: EdgeDependencies) {
       if (search.kind === 'completed_empty') {
         committed = parseCommit(await dependencies.rpc('commit_room_tmdb_no_candidates', {
           p_room_id: roomId, p_actor_user_id: actor,
+          p_expected_candidate_sequence: preflight.candidate_sequence,
         }));
       } else {
         committed = parseCommit(await dependencies.rpc('commit_room_tmdb_candidate', {
-          p_room_id: roomId, p_actor_user_id: actor, p_tmdb_movie_id: search.movie.id,
+          p_room_id: roomId, p_actor_user_id: actor,
+          p_expected_candidate_sequence: preflight.candidate_sequence,
+          p_tmdb_movie_id: search.movie.id,
           p_release_year: Number(search.movie.releaseDate.slice(0, 4)),
           p_tmdb_genre_ids: [...search.movie.genreIds], p_adult: search.movie.adult,
         }));
       }
+      if (committed.outcome === 'not_found' || committed.outcome === 'not_ready' ||
+          committed.outcome === 'refresh_required') return json(200, { outcome: committed.outcome });
       if (committed.outcome === 'no_candidates') return json(200, { outcome: 'no_candidates' });
-      return await metadata(dependencies, committed.tmdb_movie_id!);
+      if (committed.outcome === 'exhausted') return json(200, { outcome: 'exhausted',
+        candidate_sequence: committed.candidate_sequence, candidate_progression_status: 'exhausted' });
+      return await metadata(dependencies, committed.tmdb_movie_id!, committed.candidate_sequence!,
+        committed.candidate_progression_status as 'collecting' | 'agreed');
     } catch {
       dependencies.log?.('operation', 'internal', (dependencies.now?.() ?? performance.now()) - start);
       return json(503, { error: 'candidate_acquisition_unavailable' });

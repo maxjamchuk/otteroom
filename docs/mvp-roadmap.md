@@ -1,7 +1,7 @@
 # Otteroom MVP Roadmap
 
 **Status:** Normative current sequencing and directional feature decomposition.
-Established 2026-09-10. Features 001–007 are COMPLETE; Features 008–009 are PLANNED.
+Established 2026-09-10. Features 001–008 are COMPLETE; Feature 009 is PLANNED.
 
 ## Authority and feature boundaries
 
@@ -38,7 +38,7 @@ roadmap does not authorize implementing the whole MVP at once.
 | 005 | Common Filter Resolution | COMPLETE | Resolve compatible candidate constraints across the assembled voting group |
 | 006 | TMDB Candidate Source | COMPLETE | Real eligible TMDB candidates with stable room assignment |
 | 007 | Swipe Decisions | COMPLETE | Independent, persistent right/left decisions per voter and candidate |
-| 008 | Candidate Progression | PLANNED | Recoverable progression governed by resolved agreement semantics; stop advancing on agreement |
+| 008 | Candidate Progression | COMPLETE | Recoverable progression governed by resolved agreement semantics; stop advancing on agreement |
 | 009 | Match | PLANNED | Authoritative shared choice and match experience using the established agreement rule; first useful MVP boundary |
 
 The current order is **001 → 002 → 003 → 004 → 005 → 006 → 007 → 008 → 009**.
@@ -246,17 +246,15 @@ larger-group agreement policy or match UX. The exact implementation commit is
 preserved in `test-results/t065-candidate.bundle` because the validation
 workspace Git metadata was read-only.
 
-### 008 — Candidate Progression
+### 008 — Candidate Progression — COMPLETE
 
 **Goal:** After the required decisions for the current candidate are resolved,
 advance the room to another eligible TMDB candidate when appropriate.
 
-**Product decision point:** The agreement threshold/policy for more than two
-voters must be resolved **before or during Feature 008 specification**, before
-any dependent progression rule is approved. This roadmap chooses no
-larger-group rule. The decision must be explicit in the relevant specification,
-rather than inferred from the original host/guest model. For two voters, both
-swiping right constitutes agreement.
+**Resolved product decision:** Feature 008 defines the fixed agreement threshold
+as two yes decisions for two voters and `(2 * N + 2) div 3` for `N >= 3`. The
+rule is evaluated only after all fixed voters decide; it is not configurable
+and does not introduce early resolution.
 
 Expected product result:
 
@@ -289,11 +287,11 @@ Expected product result:
 - The match screen presents current movie metadata from TMDB.
 - Reload/reconnect preserves the match; no participant receives a contradictory one.
 
-Feature 009 consumes the agreement semantics established before or during 008
-specification; it is not the first feature to determine whether agreement
-happened. It owns the authoritative matched `tmdb_movie_id`, convergence, match
-presentation and recovery. The two-voter rule remains both swiping right; the
-exact larger-group policy is left for the mandatory 008 decision point above.
+Feature 009 consumes the agreement semantics established by completed Feature
+008; it is not the first feature to determine whether agreement happened. It
+owns the authoritative matched `tmdb_movie_id`, convergence, match presentation
+and recovery. The two-voter and larger-group rules remain the fixed Feature 008
+policy above.
 
 ## First useful MVP boundary
 

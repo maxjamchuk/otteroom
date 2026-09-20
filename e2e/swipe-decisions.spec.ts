@@ -8,7 +8,6 @@ import { assertResolutionView } from './support/resolution-harness.ts';
 import { candidateHarness, configureTmdb, controlledCandidate, tmdbSnapshot } from './support/candidate-harness.ts';
 import { assertDecisionReady, assertOwnDecision, assertSameCandidate, boundedCandidateIdentity, cancelledTouchSwipe,
   ControlledDecisionPerformance, decisionRealtimeBarrier, installDecisionOverlap,
-  installAssignedCandidatePresentation,
   installDecisionPrecommitFailure, installDecisionResponseLoss, keyboardDecision,
   preassembleAssignedCandidate, preassembleDecisionRooms, recoverOwnDecision,
   submitOwnDecision,
@@ -38,11 +37,10 @@ async function submitFaultDecision(page: Page) {
   await yes.dispatchEvent('click');
 }
 
-async function makeAssignedRoom({ host, voters, candidates, presentation, api, previous, configuration }: {
+async function makeAssignedRoom({ host, voters, candidates, api, previous, configuration }: {
   host: SafeDiagnostics;
   voters: SafeDiagnostics[];
   candidates: Awaited<ReturnType<typeof candidateHarness>>;
-  presentation: Awaited<ReturnType<typeof installAssignedCandidatePresentation>>;
   api?: PublicApi;
   previous?: ReturnType<typeof committedRoomSnapshot>;
   configuration: CreationConfiguration;
@@ -55,7 +53,6 @@ async function makeAssignedRoom({ host, voters, candidates, presentation, api, p
   const group = [host, ...voters];
   const identities = await Promise.all(group.map(item => ownParticipant(item.page)));
   if (previous) candidates.rebind(created.room); else candidates.bind(created.room, identities, created.api);
-  presentation.bind(created.room);
   const votingPages = configuration.creatorIsVoter ? group.map(item => item.page) : voters.map(item => item.page);
   for (let index = 0; index < votingPages.length; index++) {
     const result = await submitOwnFilter(votingPages[index], created.api, created.room,
@@ -79,7 +76,6 @@ test('@feature007 K01 exact-two immutable decision lifecycle', async ({ diagnost
     const group = [diagnostics, voter], pages = group.map(item => item.page);
     for (const page of pages) { page.setDefaultTimeout(15000); page.setDefaultNavigationTimeout(15000); }
     const candidates = await candidateHarness(group, baseURL!);
-    const presentation = await installAssignedCandidatePresentation(pages, controlledCandidate);
     const timing = new ControlledDecisionPerformance(info);
     let previous: ReturnType<typeof committedRoomSnapshot> | undefined;
     let api: PublicApi | undefined;
@@ -88,7 +84,7 @@ test('@feature007 K01 exact-two immutable decision lifecycle', async ({ diagnost
       await startHost(voter.page, voter);
 
       // Fault and lifecycle trial is outside the controlled no-fault timing set.
-      const lifecycle = await makeAssignedRoom({ host: diagnostics, voters: [voter], candidates, presentation,
+      const lifecycle = await makeAssignedRoom({ host: diagnostics, voters: [voter], candidates,
         configuration: { requiredVoterCount: 2, creatorIsVoter: true } });
       api = lifecycle.api; previous = committedRoomSnapshot(lifecycle.room);
       await cancelledTouchSwipe(voter.page);
@@ -114,9 +110,9 @@ test('@feature007 K01 exact-two immutable decision lifecycle', async ({ diagnost
       await keyboardDecision(voter.page, 'no');
       await assertOwnDecision(diagnostics.page, api, lifecycle.room, 'yes', 2);
       await assertOwnDecision(voter.page, api, lifecycle.room, 'no', 2);
-      await Promise.all(pages.map(page => page.reload({ waitUntil: 'domcontentloaded' })));
-      await candidates.available();
-      await expect(diagnostics.page.getByText('Current candidate agreement: not both Yes.', { exact: true })).toBeVisible();
+      await candidates.successorAvailable();
+      await expect(diagnostics.page.getByText(/Current candidate agreement:/)).toHaveCount(0);
+      expect(committedRoomSnapshot(lifecycle.room).row.candidate_sequence).toBe(2);
 
       // Ten assigned rooms, exactly two serial first-decision timings per room.
       const rooms = preassembleDecisionRooms(lifecycle.room, 10, controlledCandidate.tmdbMovieId);
@@ -126,7 +122,7 @@ test('@feature007 K01 exact-two immutable decision lifecycle', async ({ diagnost
         ['no','yes'], ['yes','no'], ['no','no'], ['yes','yes'], ['no','yes'],
       ];
       for (let index = 0; index < rooms.length; index++) {
-        const room = rooms[index]; candidates.rebind(room); presentation.bind(room);
+        const room = rooms[index]; candidates.rebind(room);
         await Promise.all(pages.map(page => page.goto(`/room/${room.code}`, { waitUntil: 'domcontentloaded' })));
         await candidates.available(pages);
         await assertDecisionReady(pages);
@@ -136,23 +132,27 @@ test('@feature007 K01 exact-two immutable decision lifecycle', async ({ diagnost
         const voterStart = globalThis.performance.now();
         await keyboardDecision(voter.page, combinations[index][1]);
         timing.record(globalThis.performance.now() - voterStart, true);
-        const host = await assertOwnDecision(diagnostics.page, api!, room, combinations[index][0], 2);
-        const guest = await assertOwnDecision(voter.page, api!, room, combinations[index][1], 2);
-        expect(host.my_decision).toBe(combinations[index][0]);
-        expect(guest.my_decision).toBe(combinations[index][1]);
-        await expect(diagnostics.page.getByText('2 of 2 decisions collected.', { exact: true })).toBeVisible();
         const agreed = combinations[index][0] === 'yes' && combinations[index][1] === 'yes';
-        await expect(diagnostics.page.getByText(agreed
-          ? 'Current candidate agreement: both voters chose Yes.'
-          : 'Current candidate agreement: not both Yes.', { exact: true })).toBeVisible();
-        expect(boundedCandidateIdentity(room)).toBe(controlledCandidate.tmdbMovieId);
+        if (agreed) {
+          const host = await assertOwnDecision(diagnostics.page, api!, room, combinations[index][0], 2);
+          const guest = await assertOwnDecision(voter.page, api!, room, combinations[index][1], 2);
+          expect(host.candidate_outcome === 'agreed' && guest.candidate_progression_status === 'agreed').toBe(true);
+          await expect(diagnostics.page.getByText('2 of 2 decisions collected.', { exact: true })).toBeVisible();
+          expect(boundedCandidateIdentity(room)).toBe(controlledCandidate.tmdbMovieId);
+        } else {
+          await candidates.successorAvailable();
+          const current = committedRoomSnapshot(room).row;
+          expect(current.candidate_sequence === 2 && current.decision_completed_count === 0 &&
+            current.candidate_progression_status === 'collecting').toBe(true);
+        }
+        await expect(diagnostics.page.getByText(/Current candidate agreement:/)).toHaveCount(0);
       }
       const receipt = timing.receipt();
       expect(receipt.samples === 20 && receipt.passing >= 19 && receipt.recoverableFailures === 0).toBe(true);
-      const provider = await tmdbSnapshot(); expect(provider.invalid).toBe(0); candidates.assertHealthy(); presentation.assertHealthy();
+      const provider = await tmdbSnapshot(); expect(provider.invalid).toBe(0); candidates.assertHealthy();
       expect(group.reduce((sum, item) => sum + item.signupAttempts, 0)).toBe(budget.K01);
       await diagnostics.record({ scenario: 'K01', outcome: 'exact-two lifecycle and aggregate timing passed; identities2' });
-    } finally { await presentation.close(); await candidates.close(); }
+    } finally { await candidates.close(); }
   }));
 });
 
@@ -162,12 +162,11 @@ test('@feature007 K02 larger-room aggregate-only decision convergence', async ({
     const group = [diagnostics, ...voters], pages = group.map(item => item.page);
     for (const page of pages) { page.setDefaultTimeout(15000); page.setDefaultNavigationTimeout(15000); }
     const candidates = await candidateHarness(group, baseURL!);
-    const presentation = await installAssignedCandidatePresentation(pages, controlledCandidate);
     const transport = await decisionRealtimeBarrier(diagnostics.page);
     try {
       await configureTmdb('candidate');
       for (const voter of voters) await startHost(voter.page, voter);
-      const created = await makeAssignedRoom({ host: diagnostics, voters, candidates, presentation,
+      const created = await makeAssignedRoom({ host: diagnostics, voters, candidates,
         configuration: { requiredVoterCount: 3, creatorIsVoter: false } });
       await expect(diagnostics.page.getByRole('button', { name: /want to watch/ })).toHaveCount(0);
       expect((await recoverOwnDecision(diagnostics.page, created.api, created.room)).outcome).toBe('observer');
@@ -189,12 +188,13 @@ test('@feature007 K02 larger-room aggregate-only decision convergence', async ({
       const observer = await recoverOwnDecision(diagnostics.page, created.api, created.room);
       expect(observer.my_decision === null && observer.decision_completed_count === 3 &&
         observer.required_voter_count === 3 && observer.decision_set_complete === true &&
-        observer.two_voter_agreement === null).toBe(true);
+        observer.agreement_threshold === 2 && observer.candidate_outcome === 'agreed' &&
+        observer.candidate_progression_status === 'agreed').toBe(true);
       expect(committedRoomSnapshot(created.room).row.decision_completed_count).toBe(3);
       expect(boundedCandidateIdentity(created.room)).toBe(controlledCandidate.tmdbMovieId);
-      transport.assertHealthy(); candidates.assertHealthy(); presentation.assertHealthy();
+      transport.assertHealthy(); candidates.assertHealthy();
       expect(group.reduce((sum, item) => sum + item.signupAttempts, 0)).toBe(budget.K02);
       await diagnostics.record({ scenario: 'K02', outcome: 'larger-room aggregate-only convergence; identities4' });
-    } finally { await presentation.close(); await candidates.close(); await transport.close(); }
+    } finally { await candidates.close(); await transport.close(); }
   }));
 });

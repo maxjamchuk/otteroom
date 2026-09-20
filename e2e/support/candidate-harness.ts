@@ -1,15 +1,72 @@
-import { expect, type Page, type Request, type Response, type Route } from '@playwright/test';
+import { expect, type Frame, type Page, type Request, type Response, type Route } from '@playwright/test';
 import fs from 'node:fs';
 import { parseEnv } from 'node:util';
 import { type SafeDiagnostics, safeError } from './safe-diagnostics.ts';
 import { committedRoomSnapshot, type PublicApi, type RoomProjection } from './room-harness.ts';
-import { candidateOverlapDiagnostic, type CandidateRequestDiagnostic } from './harness-observability.ts';
+import { candidateHealthGuardDiagnostic, candidateOverlapDiagnostic,
+  candidateTerminalGuardDiagnostic, type CandidateHealthGuard,
+  type CandidateHealthGuardDiagnostic, type CandidateRequestDiagnostic,
+  type CandidateResponseExceptionCategory, type CandidateResponseFailure,
+  type CandidateResponseReadStage,
+  type CandidateTerminalGuard } from './harness-observability.ts';
 import type { TmdbStubScenario } from './tmdb-stub.ts';
 
 export const controlledCandidate = Object.freeze({ tmdbMovieId: 6006,
   title: 'Controlled Constellation', releaseYear: 2005 });
+export const controlledSuccessor = Object.freeze({ tmdbMovieId: 6007,
+  title: 'Controlled Aurora', releaseYear: 2006 });
 const posterPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
 const endpoint = (value: string) => new URL(value).pathname === '/functions/v1/room-candidate';
+const initialEmptyCopy = 'No eligible movie was observed during the completed search.';
+const exhaustedCopy = 'No further eligible movies were found for this selection.';
+
+type CandidateTerminalProjection = Pick<RoomProjection, 'candidate_acquisition_status' |
+  'candidate_progression_status' | 'candidate_sequence' | 'decision_completed_count'>;
+
+type CandidateTerminalKind = 'initial-empty' | 'exhausted';
+
+export function candidateTerminalExpectation(room: CandidateTerminalProjection) {
+  if (room.candidate_acquisition_status === 'no_candidates' &&
+      room.candidate_progression_status === 'inactive' && room.candidate_sequence === 0 &&
+      room.decision_completed_count === 0)
+    return { kind: 'initial-empty', copy: initialEmptyCopy } as const;
+  if (room.candidate_acquisition_status === 'no_candidates' &&
+      room.candidate_progression_status === 'exhausted' &&
+      Number.isInteger(room.candidate_sequence) && room.candidate_sequence > 0 &&
+      room.decision_completed_count === 0)
+    return { kind: 'exhausted', copy: exhaustedCopy } as const;
+  throw safeError();
+}
+
+function terminalGuard(expected: CandidateTerminalKind, room: CandidateTerminalProjection):
+  CandidateTerminalGuard | null {
+  if (room.candidate_acquisition_status !== 'no_candidates') return 'acquisition-status';
+  if (room.candidate_progression_status !==
+      (expected === 'initial-empty' ? 'inactive' : 'exhausted')) return 'progression-status';
+  if (expected === 'initial-empty' ? room.candidate_sequence !== 0 :
+      !Number.isInteger(room.candidate_sequence) || room.candidate_sequence <= 0)
+    return 'candidate-sequence';
+  if (room.decision_completed_count !== 0) return 'decision-count';
+  return null;
+}
+
+function terminalDiagnostic(guard: CandidateTerminalGuard, expected: CandidateTerminalKind,
+  room: CandidateTerminalProjection | null, bindingPresent: boolean, snapshotReadable: boolean) {
+  const acquisitionMatches = room?.candidate_acquisition_status === 'no_candidates';
+  const progressionMatches = room?.candidate_progression_status ===
+    (expected === 'initial-empty' ? 'inactive' : 'exhausted');
+  const sequenceMatches = !!room && (expected === 'initial-empty' ? room.candidate_sequence === 0 :
+    Number.isInteger(room.candidate_sequence) && room.candidate_sequence > 0);
+  const decisionsZero = room?.decision_completed_count === 0;
+  return candidateTerminalGuardDiagnostic({ guard, expected,
+    acquisitionStatus: room?.candidate_acquisition_status ?? 'unavailable',
+    progressionStatus: room?.candidate_progression_status ?? 'unavailable',
+    candidateSequence: Number.isInteger(room?.candidate_sequence) ? room!.candidate_sequence : null,
+    decisionCount: Number.isInteger(room?.decision_completed_count) ? room!.decision_completed_count : null,
+    bindingPresent, snapshotReadable, acquisitionMatches, progressionMatches, sequenceMatches,
+    decisionsZero, terminalKindMatches: acquisitionMatches && progressionMatches &&
+      sequenceMatches && decisionsZero && guard !== 'terminal-kind' });
+}
 
 type StubSnapshot = Readonly<{ scenario: TmdbStubScenario; calls: Readonly<{
   discover: number; details: number; configuration: number; poster: number }>; held: number;
@@ -170,13 +227,63 @@ export async function installCandidateRequestOverlap(pages: Page[], room: RoomPr
 
 function strictAvailable(value: unknown): boolean {
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
-      Object.keys(value).sort().join(',') !== 'candidate,outcome') return false;
+      Object.keys(value).sort().join(',') !== 'candidate,candidate_progression_status,candidate_sequence,outcome') return false;
   const row = value as Record<string, any>;
-  return row.outcome === 'available' && row.candidate && !Array.isArray(row.candidate) &&
+  const expected = [controlledCandidate, controlledSuccessor].find(item => item.tmdbMovieId === row.candidate?.tmdb_movie_id);
+  const posterMatches = expected === controlledCandidate
+    ? /^https:\/\/image\.tmdb\.org\/t\/p\/w\d+\/controlled\.png$/.test(row.candidate?.poster_url)
+    : /^https:\/\/image\.tmdb\.org\/t\/p\/w\d+\/controlled-successor\.png$/.test(row.candidate?.poster_url);
+  return row.outcome === 'available' && Number.isSafeInteger(row.candidate_sequence) && row.candidate_sequence > 0 &&
+    ['collecting','agreed'].includes(row.candidate_progression_status) && !!expected && row.candidate && !Array.isArray(row.candidate) &&
     Object.keys(row.candidate).sort().join(',') === 'poster_url,release_year,title,tmdb_movie_id' &&
-    row.candidate.tmdb_movie_id === controlledCandidate.tmdbMovieId &&
-    row.candidate.title === controlledCandidate.title && row.candidate.release_year === controlledCandidate.releaseYear &&
-    (row.candidate.poster_url === null || /^https:\/\/image\.tmdb\.org\/t\/p\/w\d+\/controlled\.png$/.test(row.candidate.poster_url));
+    row.candidate.title === expected.title && row.candidate.release_year === expected.releaseYear &&
+    (row.candidate.poster_url === null || posterMatches);
+}
+
+type CandidateResponseReadState = {
+  responseReadStage: CandidateResponseReadStage;
+  responseFailure: CandidateResponseFailure;
+  exceptionCategory: CandidateResponseExceptionCategory;
+  bodyBytesObtained: boolean;
+  bodyLength: number | null;
+  jsonDecoded: boolean;
+  requestFinished: boolean;
+  requestFailed: boolean;
+  pageAlive: boolean;
+  contextAlive: boolean;
+};
+
+const unreadResponseState = (): CandidateResponseReadState => ({
+  responseReadStage: 'not-started', responseFailure: 'none', exceptionCategory: 'none',
+  bodyBytesObtained: false, bodyLength: null, jsonDecoded: false,
+  requestFinished: false, requestFailed: false, pageAlive: true, contextAlive: true,
+});
+
+export function classifyCandidateResponseReadFailure(error: unknown): Pick<CandidateResponseReadState,
+  'responseFailure' | 'exceptionCategory'> {
+  const name = error instanceof Error ? error.name.toLowerCase() : '';
+  const message = error instanceof Error ? error.message.toLowerCase() : '';
+  if (/navigated away|no data found for resource|no resource with given identifier/.test(message))
+    return { responseFailure: 'navigation', exceptionCategory: 'protocol' };
+  if (/target.*closed|page.*closed|context.*closed|browser.*closed/.test(message))
+    return { responseFailure: 'target-closed', exceptionCategory: 'target-closed' };
+  if (/disposed/.test(message))
+    return { responseFailure: 'disposed', exceptionCategory: 'generic-error' };
+  if (/network|loading failed|connection.*closed/.test(message))
+    return { responseFailure: 'network', exceptionCategory: 'generic-error' };
+  return { responseFailure: 'other', exceptionCategory: error instanceof Error
+    ? name.includes('protocol') ? 'protocol' : 'generic-error' : 'non-error' };
+}
+
+function contextIsAlive(page: Page): boolean {
+  try {
+    if (typeof page.isClosed === 'function' && page.isClosed()) return false;
+    if (typeof page.context !== 'function') return true;
+    const context = page.context();
+    if (typeof context.pages === 'function' && !context.pages().includes(page)) return false;
+    const browser = typeof context.browser === 'function' ? context.browser() : null;
+    return !browser || typeof browser.isConnected !== 'function' || browser.isConnected();
+  } catch { return false; }
 }
 
 export async function candidateHarness(participants: SafeDiagnostics[], baseURL: string) {
@@ -187,9 +294,44 @@ export async function candidateHarness(participants: SafeDiagnostics[], baseURL:
   if (![apiOrigin,appOrigin].every(origin => ['127.0.0.1','localhost','[::1]'].includes(new URL(origin).hostname))) throw safeError();
   let binding: { room: RoomProjection; ids: string[]; api: PublicApi } | null = null;
   let failed = false, disposed = false;
+  let failureGuard: CandidateHealthGuard | null = null;
+  let failureStatus: number | null = null;
+  let failureOutcome: CandidateHealthGuardDiagnostic['responseOutcome'] = 'unreadable';
+  let failureReadState = unreadResponseState();
+  const intentionallyConsumed = new WeakSet<Request>();
+  const requestLifecycle = new WeakMap<Request, { finished: boolean; failed: boolean;
+    settle: () => void }>();
+  const requestSettlements = new Map<Request, Promise<void>>();
+  const failedRequests = new Map<Request, number>();
+  let requestEpoch = 0;
+  let replacement: { phase: 'draining' | 'navigating'; pendingCommits: Set<Page> } | null = null;
   const stats = participants.map(() => ({ requests: 0, responses: 0, errors: 0, posters: 0,
     directTmdbApi: 0, fixture: 0, invalid: 0 }));
   const pending = new Set<Promise<void>>();
+  const fail = (index: number, guard: CandidateHealthGuard, status: number | null = null,
+    outcome: CandidateHealthGuardDiagnostic['responseOutcome'] = 'unreadable',
+    readState: CandidateResponseReadState = unreadResponseState()) => {
+    stats[index].invalid++; failed = true;
+    if (!failureGuard) {
+      failureGuard = guard; failureStatus = status; failureOutcome = outcome;
+      failureReadState = { ...readState };
+    }
+  };
+  const healthDiagnostic = (guard: CandidateHealthGuard) => candidateHealthGuardDiagnostic({
+    guard, participants: participants.length,
+    requests: stats.reduce((sum, value) => sum + value.requests, 0),
+    responses: stats.reduce((sum, value) => sum + value.responses, 0),
+    errors: stats.reduce((sum, value) => sum + value.errors, 0),
+    invalid: stats.reduce((sum, value) => sum + value.invalid, 0),
+    directProvider: stats.reduce((sum, value) => sum + value.directTmdbApi, 0),
+    fixture: stats.reduce((sum, value) => sum + value.fixture, 0),
+    responseValidationActive: pending.size, httpStatus: failureStatus,
+    responseOutcome: failureOutcome, ...failureReadState,
+    failed, disposed, bindingPresent: binding !== null,
+  });
+  const emitHealthFailure = (guard: CandidateHealthGuard) => {
+    participants[0].recordHarnessDiagnostic(healthDiagnostic(guard));
+  };
   const listeners = participants.map((participant,index) => {
     const onRequest = (request: Request) => {
       if (disposed) return;
@@ -197,30 +339,78 @@ export async function candidateHarness(participants: SafeDiagnostics[], baseURL:
       if (url.hostname === 'api.themoviedb.org') stats[index].directTmdbApi++;
       if (/cardboard-comet|pebble-bay-lanterns|cloud-tram-four|clockwork-orchard|movie_candidates|ensure_room_candidate/i.test(request.url())) stats[index].fixture++;
       if (!endpoint(request.url())) return;
+      requestEpoch++;
       stats[index].requests++;
+      let settle!: () => void;
+      const settlement = new Promise<void>(resolve => { settle = resolve; });
+      requestLifecycle.set(request, { finished: false, failed: false, settle });
+      requestSettlements.set(request, settlement);
       try {
-        if (!binding || url.origin !== apiOrigin || request.method() !== 'POST' ||
-            Object.keys(request.postDataJSON() ?? {}).join(',') !== 'room_id' ||
-            request.postDataJSON().room_id !== binding.room.id) throw safeError();
+        if (url.origin !== apiOrigin) return fail(index, 'request-origin');
+        if (request.method() !== 'POST') return fail(index, 'request-method');
+        const body = request.postDataJSON();
+        if (Object.keys(body ?? {}).join(',') !== 'room_id') return fail(index, 'request-shape');
+        if (!binding || body.room_id !== binding.room.id) return fail(index, 'request-room');
         const bearer = request.headers().authorization?.match(/^Bearer (.+)$/)?.[1];
         const subject = bearer ? JSON.parse(Buffer.from(bearer.split('.')[1], 'base64url').toString()).sub : null;
-        if (subject !== binding.ids[index]) throw safeError();
-      } catch { stats[index].invalid++; failed = true; }
+        if (subject !== binding.ids[index]) return fail(index, 'request-subject');
+      } catch { fail(index, 'request-subject'); }
     };
     const onResponse = (response: Response) => {
       if (!endpoint(response.url())) return;
+      const request = response.request();
+      if (intentionallyConsumed.has(request)) return;
       const work = (async () => {
-        try {
-          const bytes = await response.body();
-          if (bytes.length > 4096) throw safeError();
-          const value = JSON.parse(bytes.toString('utf8'));
-          if (response.ok()) {
-            if (!(strictAvailable(value) || value?.outcome === 'no_candidates' && Object.keys(value).length === 1 ||
-                value?.outcome === 'metadata_unavailable' && Object.keys(value).length === 1 ||
-                value?.outcome === 'not_ready' && Object.keys(value).length === 1)) throw safeError();
-          } else if (!(response.status() === 503 && JSON.stringify(value) === '{"error":"candidate_acquisition_unavailable"}')) throw safeError();
-          stats[index][response.ok() ? 'responses' : 'errors']++;
-        } catch { if (!disposed) { stats[index].invalid++; failed = true; } }
+        const state = unreadResponseState();
+        const snapshotLifecycle = () => {
+          const lifecycle = requestLifecycle.get(request);
+          state.requestFinished = state.bodyBytesObtained || lifecycle?.finished === true;
+          state.requestFailed = lifecycle?.failed ?? false;
+          state.pageAlive = typeof participant.page.isClosed !== 'function' || !participant.page.isClosed();
+          state.contextAlive = contextIsAlive(participant.page);
+        };
+        state.responseReadStage = 'body-requested';
+        let bytes: Buffer;
+        try { bytes = await response.body(); }
+        catch (error) {
+          Object.assign(state, classifyCandidateResponseReadFailure(error)); snapshotLifecycle();
+          if (!disposed) fail(index, 'response-body', response.status(), 'unreadable', state);
+          return;
+        }
+        state.responseReadStage = 'body-obtained'; state.bodyBytesObtained = true;
+        state.bodyLength = Math.min(bytes.length, 4097); snapshotLifecycle();
+        if (bytes.length > 4096) {
+          state.responseFailure = 'oversize';
+          fail(index, 'response-size', response.status(), 'unreadable', state); return;
+        }
+        if (bytes.length === 0) {
+          state.responseFailure = 'empty-body';
+          fail(index, 'response-json', response.status(), 'unreadable', state); return;
+        }
+        let value: any;
+        try { value = JSON.parse(bytes.toString('utf8')); }
+        catch {
+          state.responseFailure = 'malformed-json';
+          if (!disposed) fail(index, 'response-json', response.status(), 'unreadable', state);
+          return;
+        }
+        state.responseReadStage = 'json-decoded'; state.jsonDecoded = true;
+        const outcome: CandidateHealthGuardDiagnostic['responseOutcome'] =
+          response.status() === 503 && value?.error === 'candidate_acquisition_unavailable'
+            ? 'candidate_acquisition_unavailable'
+            : ['available','exhausted','metadata_unavailable','not_ready','not_found','no_candidates',
+              'refresh_required'].includes(value?.outcome) ? value.outcome : 'unknown';
+        const valid = response.ok() ? strictAvailable(value) ||
+          value?.outcome === 'exhausted' && Object.keys(value).sort().join(',') === 'candidate_progression_status,candidate_sequence,outcome' ||
+          value?.outcome === 'metadata_unavailable' && Object.keys(value).sort().join(',') === 'candidate_progression_status,candidate_sequence,outcome' ||
+          ['not_ready','not_found','no_candidates','refresh_required'].includes(value?.outcome) && Object.keys(value).length === 1
+          : response.status() === 503 && JSON.stringify(value) === '{"error":"candidate_acquisition_unavailable"}';
+        state.responseReadStage = 'contract-checked';
+        if (!valid) {
+          state.responseFailure = 'contract';
+          fail(index, 'response-contract', response.status(), outcome, state); return;
+        }
+        stats[index][response.ok() ? 'responses' : 'errors']++;
       })().finally(() => pending.delete(work));
       pending.add(work);
     };
@@ -228,10 +418,36 @@ export async function candidateHarness(participants: SafeDiagnostics[], baseURL:
       stats[index].posters++;
       await route.fulfill({ status: 200, contentType: 'image/png', body: posterPng });
     };
+    const onRequestFinished = (request: Request) => {
+      const lifecycle = requestLifecycle.get(request);
+      if (lifecycle && !lifecycle.finished && !lifecycle.failed) {
+        lifecycle.finished = true; requestSettlements.delete(request); lifecycle.settle();
+      }
+    };
+    const onRequestFailed = (request: Request) => {
+      const lifecycle = requestLifecycle.get(request);
+      if (lifecycle && !lifecycle.finished && !lifecycle.failed) {
+        lifecycle.failed = true; requestSettlements.delete(request); lifecycle.settle();
+        if (!intentionallyConsumed.has(request)) failedRequests.set(request, index);
+      }
+    };
     participant.page.on('request',onRequest); participant.page.on('response',onResponse);
-    return { participant, onRequest, onResponse, posterRoute };
+    participant.page.on('requestfinished', onRequestFinished);
+    participant.page.on('requestfailed', onRequestFailed);
+    return { participant, onRequest, onResponse, onRequestFinished, onRequestFailed, posterRoute };
   });
+  const replacementRoutes = participants.map(participant => ({ participant, handler: async (route: Route) => {
+    const request = route.request();
+    if (replacement?.phase === 'navigating' && replacement.pendingCommits.has(participant.page)) {
+      intentionallyConsumed.add(request);
+      await route.abort('aborted');
+      return;
+    }
+    await route.fallback();
+  } }));
   for (const item of listeners) await item.participant.page.route('https://image.tmdb.org/**', item.posterRoute);
+  for (const item of replacementRoutes)
+    await item.participant.page.route('**/functions/v1/room-candidate', item.handler);
   return {
     stats,
     bind(room: RoomProjection, ids: string[], api: PublicApi) {
@@ -252,9 +468,51 @@ export async function candidateHarness(participants: SafeDiagnostics[], baseURL:
           controlledCandidate.tmdbMovieId)).toBe(true);
       }
     },
-    async noCandidates(pages: Page[] = participants.map(item => item.page)) {
+    async successorAvailable(pages: Page[] = participants.map(item => item.page)) {
       for (const page of pages) {
-        await expect(page.getByText('No eligible movie was observed during the completed search.',{exact:true})).toBeVisible();
+        await expect(page.getByRole('heading',{name:controlledSuccessor.title,exact:true}))
+          .toBeVisible({timeout:30000});
+        await expect(page.getByTestId('candidate-year')).toHaveText(String(controlledSuccessor.releaseYear));
+      }
+    },
+    async noCandidates(pages: Page[] = participants.map(item => item.page)) {
+      const expected = 'initial-empty';
+      if (!binding) { participants[0].recordHarnessDiagnostic(terminalDiagnostic(
+        'binding-present', expected, null, false, false)); throw safeError(); }
+      let room: CandidateTerminalProjection;
+      try { room = committedRoomSnapshot(binding.room).row; }
+      catch { participants[0].recordHarnessDiagnostic(terminalDiagnostic(
+        'snapshot-readable', expected, null, true, false)); throw safeError(); }
+      const guard = terminalGuard(expected, room);
+      if (guard) { participants[0].recordHarnessDiagnostic(terminalDiagnostic(
+        guard, expected, room, true, true)); throw safeError(); }
+      const expectation = candidateTerminalExpectation(room);
+      if (expectation.kind !== expected) { participants[0].recordHarnessDiagnostic(terminalDiagnostic(
+        'terminal-kind', expected, room, true, true)); throw safeError(); }
+      for (const page of pages) {
+        await expect(page.getByTestId('candidate-status')).toHaveText(expectation.copy);
+        await expect(page.getByTestId('candidate-progression-status')).toHaveCount(0);
+        await expect(page.getByRole('link',{name:'Create a new room',exact:true})).toHaveAttribute('href','/');
+        await expect(page.getByRole('button',{name:/Retry finding a movie/})).toHaveCount(0);
+      }
+    },
+    async exhausted(pages: Page[] = participants.map(item => item.page)) {
+      const expected = 'exhausted';
+      if (!binding) { participants[0].recordHarnessDiagnostic(terminalDiagnostic(
+        'binding-present', expected, null, false, false)); throw safeError(); }
+      let room: CandidateTerminalProjection;
+      try { room = committedRoomSnapshot(binding.room).row; }
+      catch { participants[0].recordHarnessDiagnostic(terminalDiagnostic(
+        'snapshot-readable', expected, null, true, false)); throw safeError(); }
+      const guard = terminalGuard(expected, room);
+      if (guard) { participants[0].recordHarnessDiagnostic(terminalDiagnostic(
+        guard, expected, room, true, true)); throw safeError(); }
+      const expectation = candidateTerminalExpectation(room);
+      if (expectation.kind !== expected) { participants[0].recordHarnessDiagnostic(terminalDiagnostic(
+        'terminal-kind', expected, room, true, true)); throw safeError(); }
+      for (const page of pages) {
+        await expect(page.getByTestId('candidate-status')).toHaveText(expectation.copy);
+        await expect(page.getByTestId('candidate-progression-status')).toHaveText(expectation.copy);
         await expect(page.getByRole('link',{name:'Create a new room',exact:true})).toHaveAttribute('href','/');
         await expect(page.getByRole('button',{name:/Retry finding a movie/})).toHaveCount(0);
       }
@@ -276,23 +534,97 @@ export async function candidateHarness(participants: SafeDiagnostics[], baseURL:
     },
     async discardNextResponse(index: number) {
       let committed=false,calls=0,settled=false;
-      const route=async(value:Route)=>{calls++;try{const response=await value.fetch({maxRetries:0,maxRedirects:0,timeout:30000});
-        try{const bytes=await response.body();committed=response.ok()&&strictAvailable(JSON.parse(bytes.toString('utf8')));}
-        finally{await response.dispose();}await value.abort('failed');}finally{settled=true;}};
+      const route=async(value:Route)=>{calls++;intentionallyConsumed.add(value.request());let diagnosed=false;
+        try{const response=await value.fetch({maxRetries:0,maxRedirects:0,timeout:30000});
+          try{const state=unreadResponseState();state.responseReadStage='body-requested';
+            state.pageAlive=typeof participants[index].page.isClosed!=='function'||!participants[index].page.isClosed();
+            state.contextAlive=contextIsAlive(participants[index].page);
+            let bytes:Buffer;try{bytes=await response.body();}catch(error){diagnosed=true;
+              Object.assign(state,classifyCandidateResponseReadFailure(error));
+              fail(index,'response-body',response.status(),'unreadable',state);emitHealthFailure('response-body');return;}
+            state.responseReadStage='body-obtained';state.bodyBytesObtained=true;
+            state.bodyLength=Math.min(bytes.length,4097);state.requestFinished=true;
+            if(bytes.length>4096){diagnosed=true;state.responseFailure='oversize';
+              fail(index,'response-size',response.status(),'unreadable',state);
+              emitHealthFailure('response-size');return;}
+            if(bytes.length===0){diagnosed=true;state.responseFailure='empty-body';
+              fail(index,'response-json',response.status(),'unreadable',state);emitHealthFailure('response-json');return;}
+            let parsed:any;try{parsed=JSON.parse(bytes.toString('utf8'));}catch{diagnosed=true;
+              state.responseFailure='malformed-json';fail(index,'response-json',response.status(),'unreadable',state);
+              emitHealthFailure('response-json');return;}
+            state.responseReadStage='json-decoded';state.jsonDecoded=true;
+            committed=response.ok()&&strictAvailable(parsed);
+            if(!committed){diagnosed=true;const outcome:CandidateHealthGuardDiagnostic['responseOutcome']=
+                ['available','exhausted','metadata_unavailable','not_ready','not_found','no_candidates',
+                  'refresh_required'].includes(parsed?.outcome)?parsed.outcome:'unknown';
+              state.responseReadStage='contract-checked';state.responseFailure='contract';
+              fail(index,'response-contract',response.status(),outcome,state);emitHealthFailure('response-contract');}}
+          finally{await response.dispose();}await value.abort('failed');
+        }catch(error){if(!diagnosed&&!disposed){const state={...unreadResponseState(),
+            ...classifyCandidateResponseReadFailure(error),pageAlive:typeof participants[index].page.isClosed!=='function'||
+              !participants[index].page.isClosed(),contextAlive:contextIsAlive(participants[index].page)};
+            fail(index,'response-body',null,'unreadable',state);emitHealthFailure('response-body');}}
+        finally{settled=true;}};
       await participants[index].page.route('**/functions/v1/room-candidate',route,{times:1});
       return { calls:()=>calls, committed:()=>committed, settled:()=>settled,
         close:()=>participants[index].page.unroute('**/functions/v1/room-candidate',route) };
     },
+    async drainResponses() {
+      let observedEpoch: number;
+      do {
+        observedEpoch = requestEpoch;
+        await Promise.allSettled([...requestSettlements.values(), ...pending]);
+        await new Promise<void>(resolve => setImmediate(resolve));
+      } while (requestSettlements.size > 0 || pending.size > 0 || requestEpoch !== observedEpoch);
+      if (!failed && failedRequests.size > 0) {
+        const [, index] = failedRequests.entries().next().value!;
+        const state = unreadResponseState();
+        state.responseFailure = 'network'; state.exceptionCategory = 'generic-error';
+        state.requestFailed = true;
+        state.pageAlive = typeof participants[index].page.isClosed !== 'function' ||
+          !participants[index].page.isClosed();
+        state.contextAlive = contextIsAlive(participants[index].page);
+        fail(index, 'response-body', null, 'unreadable', state);
+      }
+      if (failed && failureGuard) { emitHealthFailure(failureGuard); throw safeError(); }
+    },
+    async replaceDocuments<T>(pages: readonly Page[], navigate: () => Promise<T>): Promise<T> {
+      if (replacement || pages.length < 1 || pages.length > participants.length ||
+          new Set(pages).size !== pages.length || pages.some(page =>
+            !participants.some(participant => participant.page === page))) throw safeError();
+      const pendingCommits = new Set(pages);
+      replacement = { phase: 'draining', pendingCommits };
+      const navigations = pages.map(page => ({ page, handler: (frame: Frame) => {
+        if (frame === page.mainFrame()) pendingCommits.delete(page);
+      } }));
+      for (const item of navigations) item.page.on('framenavigated', item.handler);
+      try {
+        await this.drainResponses();
+        replacement.phase = 'navigating';
+        return await navigate();
+      } finally {
+        for (const item of navigations) item.page.removeListener('framenavigated', item.handler);
+        replacement = null;
+      }
+    },
     assertHealthy() {
-      if (failed || disposed || !binding || stats.some(value => value.invalid || value.directTmdbApi || value.fixture)) throw safeError();
+      const guard = failureGuard ?? (disposed ? 'not-disposed' : !binding ? 'binding-present' :
+        stats.some(value => value.invalid) ? 'invalid-zero' :
+          stats.some(value => value.directTmdbApi) ? 'direct-provider-zero' :
+            stats.some(value => value.fixture) ? 'fixture-zero' : null);
+      if (failed || guard) { emitHealthFailure(guard ?? 'invalid-zero'); throw safeError(); }
     },
     async close() {
       if (disposed) return; disposed=true;
       await Promise.allSettled([...pending]);
       for(const item of listeners){item.participant.page.removeListener('request',item.onRequest);
         item.participant.page.removeListener('response',item.onResponse);
+        item.participant.page.removeListener('requestfinished', item.onRequestFinished);
+        item.participant.page.removeListener('requestfailed', item.onRequestFailed);
         await item.participant.page.unroute('https://image.tmdb.org/**',item.posterRoute);}
-      pending.clear(); binding=null;
+      await Promise.all(replacementRoutes.map(item => item.participant.page.unroute(
+        '**/functions/v1/room-candidate', item.handler)));
+      pending.clear(); requestSettlements.clear(); failedRequests.clear(); binding=null;
     },
   };
 }

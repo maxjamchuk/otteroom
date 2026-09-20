@@ -122,6 +122,23 @@ recoverable failures. It records no individual samples or percentile. Capture
 remains off; the credential registry, finalized scanner, controlled provider,
 safe reporter, and owned cleanup remain mandatory.
 
+## Feature 008 fixed acceptance profile
+
+Feature 008 adds the override-free `npm run test:e2e:feature008` profile. It
+selects exactly L01 (2 identities) and L02 (4 identities), for owner total 6.
+L03 remains embedded in L01, and L02 reuses its four case-owned identities
+across its three-voter and four-voter room subflows; neither adds a case or an
+identity. The full inventory is therefore 46 cases/112 identities. Including
+C1, the current full-checkpoint formula is `1 + 112 = 113`. Capture remains off;
+the controlled provider, credential registry, finalized scanner, safe reporter,
+and owned cleanup remain mandatory.
+
+Feature 008 charged blocks remain separately admitted: normal/run one is
+`1 + 16 + 6 = 23`, the additional repeatability run is `16 + 6 = 22`, their
+cumulative budget is `23 + 22 = 45`, and the fresh-checkout C1 plus smoke block
+is `1 + 16 = 17`. The preserved pre-feature full checkpoint was
+`1 + 106 = 107`; the current full checkpoint is `1 + 112 = 113`.
+
 ## Feature-specific acceptance
 
 Each feature specification and plan MUST define a bounded real-stack browser
@@ -179,15 +196,18 @@ automatically repeat them.
 
 ## Repeatability
 
-Repeatability runs C1 once, then runs the **current feature acceptance plus the
+Repeatability runs C1 once and runs the **current feature acceptance plus the
 permanent smoke** twice from unchanged source and stack, with fresh case contexts
-for each run. Selected historical regression runs once as part of the normal
-gate and is not mechanically repeated.
+for each execution. Selected historical regression runs once as part of the
+normal gate and is not mechanically repeated.
 
-The first current-feature-plus-smoke execution SHOULD also be the normal feature
-checkpoint; do not add an uncounted preliminary full run. A suite-level clean DB
-reset and `db:types:check` may occur between runs. It does not recover Auth quota.
-If quota is insufficient, wait outside every test/application harness.
+The normal feature checkpoint MUST be repeatability run one; it already charges
+C1, targeted selection, and the first owner-plus-smoke execution. To complete
+repeatability after that checkpoint, charge and run only one additional
+owner-plus-smoke execution with fresh case contexts. Do not rerun C1 or the
+normal/first execution. A suite-level clean DB reset and `db:types:check` may
+occur between runs. It does not recover Auth quota. If quota is insufficient,
+wait outside every test/application harness.
 
 ## Fresh checkout
 
@@ -209,8 +229,8 @@ into the checkout, and remove only owned resources afterward.
 
 ## Full historical browser acceptance
 
-The existing `npm run test:e2e` remains the full current E/G/H/I/J/K inventory:
-44 cases and 106 identities. Run it, plus C1, when any of the following applies:
+The existing `npm run test:e2e` remains the full current E/G/H/I/J/K/L inventory:
+46 cases and 112 identities. Run it, plus C1, when any of the following applies:
 
 - explicit release or milestone validation, including the first useful MVP
   release unless its approved release plan states a stricter superset;
@@ -225,7 +245,7 @@ The existing `npm run test:e2e` remains the full current E/G/H/I/J/K inventory:
 
 An additive, fail-closed profile selector that leaves full discovery, context
 lifecycle, safety controls and case code unchanged requires static/unit coverage
-of that selector, not an otherwise unmotivated 100-identity rerun. Any change to
+of that selector, not an otherwise unmotivated 112-identity rerun. Any change to
 the underlying execution or safety semantics does require the full gate.
 
 ## R02 accounting
@@ -234,7 +254,9 @@ For every browser block, record the exact source, profile/case selection,
 configured maximum, actual signup attempts, successful identities, relevant
 timestamps, scanner result and cleanup result.
 
-- Reserve the sum of case maxima plus C1 before starting. Both attempts and
+- Reserve the sum of the case maxima actually scheduled in that block. Add C1
+  only when that block schedules C1 (the normal/run-one and fresh-checkout
+  blocks, not the additional repeatability execution). Both attempts and
   successful identities are reported; every dispatched attempt consumes the
   rolling allowance even if the run later fails.
 - Count targeted, partial, failed and manual runs in addition to planned gates.
@@ -245,19 +267,21 @@ timestamps, scanner result and cleanup result.
   signup-free hour from the last counted attempt and wait outside the harness.
 - Workers remain 1, retries 0 and repeatEach 1 for normal real-stack profiles
   until a separately reviewed isolation design proves another setting safe.
-- Full acceptance is 106; C1 is 1; permanent smoke is 16. Targeted
-  selection costs the sum of its current case budgets and is never free merely
-  because the same case ran earlier in the hour.
+- Current full acceptance is 112; the preserved pre-Feature-008 baseline was
+  106; C1 is 1; permanent smoke is 16. Targeted selection costs the sum of its current case budgets and is never
+  free merely because the same case ran earlier in the hour.
 
 Let `F` be current-feature identities and `T` the once-only targeted historical
 selection. The normal formulas are:
 
 | Gate | Identity budget |
 | --- | ---: |
-| Normal feature checkpoint | `1 + 16 + F + T` |
-| Repeatability block | `1 + 2 × (16 + F) + T` |
+| Normal feature checkpoint / repeatability run one | `1 + 16 + F + T` |
+| Additional repeatability run after normal | `16 + F` |
+| Cumulative normal plus repeatability | `1 + 2 × (16 + F) + T` |
 | Fresh checkout | `1 + 16 = 17` |
-| Explicit full historical checkpoint | `1 + 100 = 101` |
+| Preserved pre-Feature-008 full baseline | `1 + 106 = 107` |
+| Explicit current full historical checkpoint | `1 + 112 = 113` |
 
 To keep a normal checkpoint at or below 50, `F + T` must be at most 33. To keep
 it at or below 30, `F + T` must be at most 13.
@@ -288,13 +312,15 @@ historical case (`T = 0`) gives this projection:
 | Gate | Feature 004 policy | Feature 005 projected policy |
 | --- | ---: | ---: |
 | Normal checkpoint including C1 | 83 | `1 + 16 + 9 = 26` |
-| Repeatability | 165 | `1 + 2 × (16 + 9) = 51` |
+| Additional repeatability run after normal | 82 | `16 + 9 = 25` |
+| Cumulative normal plus repeatability | 165 | `26 + 25 = 1 + 2 × (16 + 9) = 51` |
 | Fresh checkout | 83 | `1 + 16 = 17` |
-| Repeatability plus fresh checkout | 248 | `51 + 17 = 68` |
+| Cumulative repeatability plus fresh checkout | 248 | `51 + 17 = 68` |
 
 If impact review selects historical cases, add `T` once to the normal and
-repeatability figures. These projected blocks fit comfortably within one fresh
-150-identity window, but actual prior usage must still be admitted and recorded.
+cumulative-repeatability figures, never to the additional repeat execution.
+These projected blocks fit comfortably within one fresh 150-identity window, but
+actual prior usage must still be admitted and recorded.
 
 ## Constitution check
 

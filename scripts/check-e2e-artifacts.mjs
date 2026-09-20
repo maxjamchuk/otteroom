@@ -9,6 +9,7 @@ const forbidden = /(?:^|[-_.])(?:trace|har|storage[-_.]?state|cookies?|sessions?
 const textTypes = new Set(['.txt', '.json', '.md']);
 const feature006Private = /(?:tmdb_movie_id|movie_candidate_id|genre_clauses_tmdb_ids|release_year_(?:from|to)|p_actor_user_id|tmdb_api_read_access_token|supabase_service_role_key|upstream_(?:payload|request|response)|(?:request|response)_(?:body|headers?))/i;
 const feature007Private = /(?:candidate_decisions|(?:get|submit)_room_candidate_decision|room_member_id|member_id|room_id|(?:my_decision|decision_value)\s*[=:]\s*(?:yes|no)|decision_(?:request|response|rpc)_payload)/i;
+const feature008Private = /(?:room_candidate_occurrences|candidate_occurrence_id|occurrence_(?:id|history)|excluded_tmdb_movie_ids|private_exclusions|progression_(?:request|response|rpc)_payload|raw_(?:progression|decision|rpc)_payload|internal_tmdb_id)/i;
 
 function crc32(bytes) {
   let crc = 0xffffffff;
@@ -63,6 +64,7 @@ export function scanArtifacts(directory, { registry } = {}) {
     if (containsCredential(text, known())) fail(file, 'credential-content');
     if (feature006Private.test(text)) fail(file, 'feature006-private-content');
     if (feature007Private.test(text)) fail(file, 'feature007-private-content');
+    if (feature008Private.test(text)) fail(file, 'feature008-private-content');
   }
   function inspectJson(value, file, depth = 0) {
     if (depth > 12) { fail(file, 'incomplete-scan'); return; }

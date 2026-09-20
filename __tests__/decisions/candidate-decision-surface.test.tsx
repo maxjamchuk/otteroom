@@ -161,16 +161,17 @@ it('keeps both equivalent controls at least 44 points with meaningful roles and 
 });
 
 it.each([
-  [1, 2, false, false, '1 of 2 decisions collected.', null],
-  [2, 2, true, true, '2 of 2 decisions collected.', 'Current candidate agreement: both voters chose Yes.'],
-  [2, 2, true, false, '2 of 2 decisions collected.', 'Current candidate agreement: not both Yes.'],
-  [3, 3, true, null, '3 of 3 decisions collected.', null],
+  [1, 2, false, 'collecting', 'collecting', '1 of 2 decisions collected.'],
+  [2, 2, true, 'agreed', 'agreed', '2 of 2 decisions collected.'],
+  [2, 2, true, 'rejected', 'advancing', '2 of 2 decisions collected.'],
+  [3, 3, true, 'agreed', 'agreed', '3 of 3 decisions collected.'],
 ] as const)('shows neutral aggregate progress without inventing larger policy %#',
-  (completedCount, requiredVoterCount, decisionSetComplete, twoVoterAgreement, progress, agreement) => {
+  (completedCount, requiredVoterCount, decisionSetComplete,candidateOutcome,
+    candidateProgressionStatus,progress) => {
     mount({ kind: 'decided', controlsEnabled: false, projection: { myDecision: 'yes', completedCount,
-      requiredVoterCount, decisionSetComplete, twoVoterAgreement } });
+      candidateSequence:1,requiredVoterCount, decisionSetComplete,
+      agreementThreshold:requiredVoterCount===2?2:2,candidateOutcome,candidateProgressionStatus } });
     expect(screen.getByText(progress)).toBeVisible();
-    if (agreement) expect(screen.getByText(agreement)).toBeVisible();
-    else expect(screen.queryByText(/Current candidate agreement/)).toBeNull();
+    expect(screen.queryByText(/Current candidate agreement/)).toBeNull();
     expect(screen.queryByText(/next candidate|match|celebrat/i)).toBeNull();
   });

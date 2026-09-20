@@ -3,7 +3,7 @@ import type { AcceptedRoomState } from '../rooms/state';
 import type { CandidateResult } from './contracts';
 import { ensureRoomCandidate } from './service';
 import { candidateMessage, createCandidateState, failCandidate, finishPoster,
-  observeAuthoritativeStatus, receiveCandidate, retryCandidate, sameCandidateImage,
+  observeRoomCandidateAuthority, receiveCandidate, retryCandidate, sameCandidateImage,
   sameCandidateRequest, type CandidateImage, type CandidateRequest } from './state';
 
 function roomEligibility(room: AcceptedRoomState | null): boolean {
@@ -14,27 +14,28 @@ function roomEligibility(room: AcceptedRoomState | null): boolean {
 
 // The existing rooms-only subscription owns canonical invalidation. This hook
 // owns one generation-scoped Edge flight and never creates another channel.
-export function useRoomCandidate(room: AcceptedRoomState | null) {
+export function useRoomCandidate(room: AcceptedRoomState | null,
+  canonicalRefetch?: () => Promise<AcceptedRoomState | null>) {
   const id = room?.id ?? null;
   const eligible = roomEligibility(room);
   const authority = room?.candidateAcquisitionStatus ?? 'pending';
+  const progression = room?.candidateProgressionStatus ?? 'inactive';
+  const candidateSequence = room?.candidateSequence ?? 0;
   const integrity = !!room?.candidateIntegrityError || !!room?.resolutionIntegrityError;
-  const [model, setModel] = useState(() => createCandidateState(id, eligible, authority));
+  const [model, setModel] = useState(() => createCandidateState(id, eligible, authority, 0,
+    candidateSequence, progression));
   const flight = useRef<{ request: CandidateRequest; promise: Promise<CandidateResult> } | null>(null);
   const activeImage = useRef<CandidateImage | null>(null);
 
   let state = model;
-  if (model.roomId !== id) {
-    state = createCandidateState(id, eligible, authority, model.generation + 1);
-    setModel(state);
-  } else {
-    const observed = observeAuthoritativeStatus(model, eligible, authority, integrity);
-    if (observed !== model) { state = observed; setModel(observed); }
-  }
+  const observed = observeRoomCandidateAuthority(model, id, eligible, authority, progression,
+    candidateSequence, integrity);
+  if (observed !== model) { state = observed; setModel(observed); }
 
   const { roomId, generation, requestAttempt, imageAttempt } = state;
-  const image = useMemo(() => ({ roomId, generation, requestAttempt, imageAttempt }),
-    [roomId, generation, requestAttempt, imageAttempt]);
+  const image = useMemo(() => ({ roomId, candidateSequence: state.candidateSequence,
+    generation, requestAttempt, imageAttempt }),
+    [roomId, state.candidateSequence, generation, requestAttempt, imageAttempt]);
   useLayoutEffect(() => {
     activeImage.current = image;
     return () => { if (activeImage.current === image) activeImage.current = null; };
@@ -44,17 +45,32 @@ export function useRoomCandidate(room: AcceptedRoomState | null) {
     eligible && roomId !== null;
   useEffect(() => {
     if (!requesting || roomId === null) return;
-    const request = { roomId, generation, requestAttempt };
+    const request = { roomId, candidateSequence: state.candidateSequence, generation, requestAttempt };
     let disposed = false;
     if (!flight.current || !sameCandidateRequest(flight.current.request, request))
       flight.current = { request, promise: (async () => ensureRoomCandidate(roomId))() };
-    void flight.current.promise.then(result => {
-      if (!disposed) setModel(previous => receiveCandidate(previous, request, result));
+    void flight.current.promise.then(async result => {
+      if (disposed) return;
+      let canonical = room;
+      try { if (canonicalRefetch) canonical = await canonicalRefetch(); }
+      catch { if (!disposed) setModel(previous => failCandidate(previous, request)); return; }
+      if (disposed || !canonical) return;
+      setModel(previous => {
+        const refreshed = observeRoomCandidateAuthority(previous, canonical.id,
+          roomEligibility(canonical), canonical.candidateAcquisitionStatus,
+          canonical.candidateProgressionStatus, canonical.candidateSequence,
+          canonical.candidateIntegrityError || canonical.resolutionIntegrityError);
+        const metadataRequest = { roomId: refreshed.roomId,
+          candidateSequence: refreshed.candidateSequence, generation: refreshed.generation,
+          requestAttempt: refreshed.requestAttempt };
+        return receiveCandidate(refreshed, metadataRequest, result);
+      });
     }, () => {
       if (!disposed) setModel(previous => failCandidate(previous, request));
     });
     return () => { disposed = true; };
-  }, [requesting, roomId, generation, requestAttempt, eligible]);
+  }, [requesting, roomId, generation, requestAttempt, eligible, state.candidateSequence,
+    canonicalRefetch, room]);
 
   const posterUrl = state.attempt === 'integrity-error' ? null : state.candidate?.posterUrl;
   const posterSource = useMemo(() => posterUrl ? { uri: posterUrl } : null, [posterUrl]);

@@ -40,7 +40,7 @@ it('keeps destructive migration fixtures outside normal recursive pgTAP discover
   expect(manifest.scripts['db:test']).toBe('supabase test db supabase/tests/database');
   const suites = fs.readdirSync('supabase/tests/database', { recursive: true });
   expect(suites.filter(name => String(name).endsWith('.sql')).sort()).toEqual([
-    'common_filter_resolution.test.sql', 'participant_filter_concurrency.test.sql',
+    'candidate_progression.test.sql','common_filter_resolution.test.sql', 'participant_filter_concurrency.test.sql',
     'room_candidate.test.sql', 'room_session.test.sql', 'swipe_decisions.test.sql',
     'tmdb_candidate_source.test.sql',
   ]);

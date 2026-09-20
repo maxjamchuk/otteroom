@@ -5,7 +5,7 @@ import type {
   SubmitDecisionResult,
 } from './contracts';
 
-export type DecisionGeneration = Readonly<{ roomId: string; tmdbMovieId: number }>;
+export type DecisionGeneration = Readonly<{ roomId: string; candidateSequence: number; tmdbMovieId: number }>;
 export type DecisionAvailability = 'ineligible' | 'voter' | 'observer';
 export type DecisionKind = 'unavailable' | 'recovering' | 'undecided' |
   'submitting' | 'decided' | 'recoverable-error';
@@ -23,7 +23,7 @@ export type CandidateDecisionState = Readonly<{
 export function sameDecisionGeneration(left: DecisionGeneration | null,
   right: DecisionGeneration | null): boolean {
   return left === right || !!left && !!right && left.roomId === right.roomId &&
-    left.tmdbMovieId === right.tmdbMovieId;
+    left.candidateSequence === right.candidateSequence && left.tmdbMovieId === right.tmdbMovieId;
 }
 
 export function createDecisionState(generation: DecisionGeneration | null,
@@ -37,8 +37,10 @@ export function createDecisionState(generation: DecisionGeneration | null,
 
 function projection(result: DecisionProjection): DecisionProjection {
   return Object.freeze({ myDecision: result.myDecision, completedCount: result.completedCount,
+    candidateSequence: result.candidateSequence,
     requiredVoterCount: result.requiredVoterCount, decisionSetComplete: result.decisionSetComplete,
-    twoVoterAgreement: result.twoVoterAgreement });
+    agreementThreshold: result.agreementThreshold, candidateOutcome: result.candidateOutcome,
+    candidateProgressionStatus: result.candidateProgressionStatus });
 }
 
 export function receiveDecisionRecovery(state: CandidateDecisionState,

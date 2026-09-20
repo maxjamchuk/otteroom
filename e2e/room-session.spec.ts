@@ -185,10 +185,11 @@ const fullMessage = 'Room Full. The voting group is already assembled.';
 async function assertRejected(response: Response, outcome: 'not_found' | 'full') {
   const rows: unknown = await response.json();
   expect(response.ok() && Array.isArray(rows) && rows.length === 1 && rows[0] &&
-    Object.keys(rows[0]).sort().join(',') === 'candidate_acquisition_status,decision_completed_count,filter_completed_count,filter_resolution_status,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
+    Object.keys(rows[0]).sort().join(',') === 'candidate_acquisition_status,candidate_progression_status,candidate_sequence,decision_completed_count,filter_completed_count,filter_resolution_status,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
     rows[0].outcome === outcome && ['room_id', 'room_code', 'room_state', 'is_creator', 'is_voter',
       'voter_count', 'required_voter_count', 'filter_completed_count', 'filter_resolution_status',
-      'candidate_acquisition_status', 'decision_completed_count'].every(key => rows[0][key] === null)).toBe(true);
+      'candidate_acquisition_status', 'candidate_progression_status', 'candidate_sequence',
+      'decision_completed_count'].every(key => rows[0][key] === null)).toBe(true);
 }
 
 async function assertNoRoomDetails(page: Page, diagnostics: SafeDiagnostics, message: string) {
@@ -789,11 +790,13 @@ async function repeatJoin(page: Page, api: PublicApi, room: RoomProjection, role
     return (await Promise.all(responses.map(async response => {
       const rows = await response.json();
       return response.ok && Array.isArray(rows) && rows.length === 1 &&
-        Object.keys(rows[0]).sort().join(',') === 'candidate_acquisition_status,decision_completed_count,filter_completed_count,filter_resolution_status,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
+        Object.keys(rows[0]).sort().join(',') === 'candidate_acquisition_status,candidate_progression_status,candidate_sequence,decision_completed_count,filter_completed_count,filter_resolution_status,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
         rows[0].outcome === 'already_member' && rows[0].is_creator === (role === 'host') && rows[0].is_voter === true && rows[0].voter_count === 2 && rows[0].required_voter_count === 2 && Number.isInteger(rows[0].filter_completed_count) &&
         rows[0].filter_completed_count === expected.filter_completed_count &&
         rows[0].filter_resolution_status === expected.filter_resolution_status &&
         rows[0].candidate_acquisition_status === expected.candidate_acquisition_status &&
+        rows[0].candidate_progression_status === expected.candidate_progression_status &&
+        rows[0].candidate_sequence === expected.candidate_sequence &&
         rows[0].decision_completed_count === expected.decision_completed_count &&
         rows[0].room_id === room.id && rows[0].room_code === room.code && rows[0].room_state === 'ready';
     }))).every(Boolean);
@@ -801,6 +804,8 @@ async function repeatJoin(page: Page, api: PublicApi, room: RoomProjection, role
     filter_completed_count: expected.filter_completed_count,
     filter_resolution_status: expected.filter_resolution_status,
     candidate_acquisition_status: expected.candidate_acquisition_status,
+    candidate_progression_status: expected.candidate_progression_status,
+    candidate_sequence: expected.candidate_sequence,
     decision_completed_count: expected.decision_completed_count,
   } });
   expect(valid).toBe(true);

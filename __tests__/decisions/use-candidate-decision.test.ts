@@ -12,14 +12,17 @@ const room: AcceptedRoomState = { kind: 'accepted', id: '11111111-1111-4111-8111
   code: 'ABCDEF0123', isCreator: false, isVoter: true, state: 'ready', title: 'Ready',
   voterCount: 2, requiredVoterCount: 2, filterCompletedCount: 2, filtersComplete: true,
   filterResolutionStatus: 'compatible', resolutionIntegrityError: false,
-  candidateAcquisitionStatus: 'assigned', candidateIntegrityError: false,
+  candidateAcquisitionStatus: 'assigned', candidateProgressionStatus: 'collecting', candidateSequence: 1,
+  candidateIntegrityError: false,
   decisionCompletedCount: 0 };
-const candidateBase = { roomId: room.id, eligible: true, authoritativeStatus: 'assigned', generation: 1,
+const candidateBase = { roomId: room.id, eligible: true, authoritativeStatus: 'assigned',
+  progressionStatus:'collecting',candidateSequence:1,generation: 1,
   requestAttempt: 0, imageAttempt: 0, attempt: 'available', status: 'available',
   candidate: { tmdbMovieId: 42 as number, title: 'One Film', releaseYear: 2020, posterUrl: null },
   message: null, posterSource: null, imageKey: '1:0:0', retry: jest.fn(), onLoad: jest.fn(), onError: jest.fn() } as const;
 const projection = { myDecision: null, completedCount: 0, requiredVoterCount: 2,
-  decisionSetComplete: false, twoVoterAgreement: false } as const;
+  candidateSequence:1,decisionSetComplete: false,agreementThreshold:2,
+  candidateOutcome:'collecting',candidateProgressionStatus:'collecting' } as const;
 
 function deferred<T>() {
   let resolve!: (value: T) => void, reject!: (reason?: unknown) => void;
@@ -40,7 +43,7 @@ it.each(['loading-poster', 'poster-error', 'available', 'no-poster'] as const)(
     const hook = renderHook(() => useCandidateDecision(room, { ...candidateBase, attempt, status: attempt } as never));
     expect(hook.result.current).toMatchObject({ kind: 'recovering', controlsVisible: true,
       controlsEnabled: false });
-    expect(mockGet).toHaveBeenCalledWith(room.id, 42);
+    expect(mockGet).toHaveBeenCalledWith(room.id,1,42);
     await act(async () => pending.resolve({ outcome: 'not_decided', ...projection }));
     expect(hook.result.current).toMatchObject({ kind: 'undecided', controlsEnabled: true });
   });
@@ -59,7 +62,7 @@ it('recovers aggregate-only observer state without exposing controls', async () 
   mockGet.mockResolvedValue({ outcome: 'observer', ...projection, completedCount: 1 });
   const hook = renderHook(() => useCandidateDecision({ ...room, isCreator: true, isVoter: false }, candidateBase as never));
   await act(async () => {});
-  expect(mockGet).toHaveBeenCalledWith(room.id, 42);
+  expect(mockGet).toHaveBeenCalledWith(room.id,1,42);
   expect(hook.result.current).toMatchObject({ kind: 'unavailable', controlsVisible: false,
     projection: { completedCount: 1, myDecision: null } });
 });
@@ -71,7 +74,7 @@ it('starts only one submission, makes no optimistic claim, and commits while a p
   expect(hook.result.current.kind).toBe('undecided');
   act(() => { hook.result.current.submit('yes'); hook.result.current.submit('no'); });
   expect(mockSubmit).toHaveBeenCalledTimes(1);
-  expect(mockSubmit).toHaveBeenCalledWith(room.id, 42, 'yes');
+  expect(mockSubmit).toHaveBeenCalledWith(room.id,1,42,'yes');
   expect(hook.result.current).toMatchObject({ kind: 'submitting', pendingIntent: 'yes' });
   expect(hook.result.current.projection?.myDecision).toBeNull();
   await act(async () => pending.resolve({ outcome: 'accepted', ...projection,
@@ -137,7 +140,7 @@ it('privately rereads after room count advances and coalesces the active generat
   mockGet.mockResolvedValueOnce({ outcome: 'decided', ...projection,
     myDecision: 'yes', completedCount: 1 }).mockResolvedValueOnce({ outcome: 'decided',
     ...projection, myDecision: 'yes', completedCount: 2, decisionSetComplete: true,
-    twoVoterAgreement: true });
+    candidateOutcome:'agreed',candidateProgressionStatus:'agreed' });
   const hook = renderHook(({ value }: { value: AcceptedRoomState }) =>
     useCandidateDecision(value, candidateBase as never),
   { initialProps: { value: { ...room, decisionCompletedCount: 1 } } });
@@ -147,7 +150,7 @@ it('privately rereads after room count advances and coalesces the active generat
   await act(async () => hook.rerender({ value: { ...room, decisionCompletedCount: 2 } }));
   expect(mockGet).toHaveBeenCalledTimes(2);
   expect(hook.result.current).toMatchObject({ kind: 'decided',
-    projection: { completedCount: 2, decisionSetComplete: true, twoVoterAgreement: true } });
+    projection: { completedCount: 2, decisionSetComplete: true,candidateOutcome:'agreed' } });
 });
 
 it('withholds an undecided peer until count-advance private recovery restores keyboard eligibility', async () => {
@@ -171,7 +174,7 @@ it('withholds an undecided peer until count-advance private recovery restores ke
   expect(hook.result.current).toMatchObject({ kind: 'undecided', controlsEnabled: true,
     projection: { completedCount: 1, myDecision: null } });
   await act(async () => hook.result.current.submit('no'));
-  expect(mockSubmit).toHaveBeenCalledWith(room.id, 42, 'no');
+  expect(mockSubmit).toHaveBeenCalledWith(room.id,1,42,'no');
 });
 
 it('explicitly synchronizes a safe last-known result and ignores work after unmount', async () => {

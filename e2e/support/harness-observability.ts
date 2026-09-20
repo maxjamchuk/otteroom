@@ -1,5 +1,73 @@
 export type HarnessDiagnostic = ContainmentDiagnostic | CandidateBoundaryDiagnostic |
-  CandidateOverlapDiagnostic | FilterResolutionBoundaryDiagnostic;
+  CandidateOverlapDiagnostic | FilterResolutionBoundaryDiagnostic |
+  CandidateTerminalGuardDiagnostic | CandidateHealthGuardDiagnostic;
+
+export type CandidateTerminalGuard = 'binding-present' | 'snapshot-readable' |
+  'acquisition-status' | 'progression-status' | 'candidate-sequence' |
+  'decision-count' | 'terminal-kind';
+
+export type CandidateTerminalGuardDiagnostic = Readonly<{
+  kind: 'candidate-terminal-guard';
+  guard: CandidateTerminalGuard;
+  expected: 'initial-empty' | 'exhausted';
+  acquisitionStatus: 'pending' | 'assigned' | 'no_candidates' | 'unavailable';
+  progressionStatus: 'inactive' | 'collecting' | 'advancing' | 'agreed' |
+    'exhausted' | 'unavailable';
+  candidateSequence: number | null;
+  decisionCount: number | null;
+  bindingPresent: boolean;
+  snapshotReadable: boolean;
+  acquisitionMatches: boolean;
+  progressionMatches: boolean;
+  sequenceMatches: boolean;
+  decisionsZero: boolean;
+  terminalKindMatches: boolean;
+}>;
+
+export type CandidateHealthGuard = 'request-origin' | 'request-method' |
+  'request-shape' | 'request-room' | 'request-subject' | 'response-body' |
+  'response-size' | 'response-json' | 'response-contract' | 'not-disposed' |
+  'binding-present' | 'invalid-zero' | 'direct-provider-zero' | 'fixture-zero';
+
+export type CandidateResponseReadStage = 'not-started' | 'body-requested' |
+  'body-obtained' | 'json-decoded' | 'contract-checked';
+
+export type CandidateResponseFailure = 'none' | 'navigation' | 'target-closed' |
+  'disposed' | 'network' | 'empty-body' | 'malformed-json' | 'oversize' |
+  'contract' | 'other';
+
+export type CandidateResponseExceptionCategory = 'none' | 'protocol' |
+  'target-closed' | 'generic-error' | 'non-error';
+
+export type CandidateHealthGuardDiagnostic = Readonly<{
+  kind: 'candidate-health-guard';
+  guard: CandidateHealthGuard;
+  participants: number;
+  requests: number;
+  responses: number;
+  errors: number;
+  invalid: number;
+  directProvider: number;
+  fixture: number;
+  responseValidationActive: number;
+  httpStatus: number | null;
+  responseOutcome: 'available' | 'exhausted' | 'metadata_unavailable' |
+    'not_ready' | 'not_found' | 'no_candidates' | 'refresh_required' |
+    'candidate_acquisition_unavailable' | 'unknown' | 'unreadable';
+  responseReadStage: CandidateResponseReadStage;
+  responseFailure: CandidateResponseFailure;
+  exceptionCategory: CandidateResponseExceptionCategory;
+  bodyBytesObtained: boolean;
+  bodyLength: number | null;
+  jsonDecoded: boolean;
+  requestFinished: boolean;
+  requestFailed: boolean;
+  pageAlive: boolean;
+  contextAlive: boolean;
+  failed: boolean;
+  disposed: boolean;
+  bindingPresent: boolean;
+}>;
 
 export type FilterResolutionBoundaryDiagnostic = Readonly<{
   kind: 'filter-resolution-boundary';
@@ -125,6 +193,69 @@ type FilterResolutionBoundaryState = {
 
 const boundedCount = (value: unknown, maximum = 1000): value is number =>
   typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= maximum;
+
+const acquisitionStatuses = new Set(['pending', 'assigned', 'no_candidates', 'unavailable']);
+const progressionStatuses = new Set([
+  'inactive', 'collecting', 'advancing', 'agreed', 'exhausted', 'unavailable',
+]);
+const candidateTerminalGuards = new Set<CandidateTerminalGuard>([
+  'binding-present', 'snapshot-readable', 'acquisition-status', 'progression-status',
+  'candidate-sequence', 'decision-count', 'terminal-kind',
+]);
+const candidateHealthGuards = new Set<CandidateHealthGuard>([
+  'request-origin', 'request-method', 'request-shape', 'request-room', 'request-subject',
+  'response-body', 'response-size', 'response-json', 'response-contract', 'not-disposed',
+  'binding-present', 'invalid-zero', 'direct-provider-zero', 'fixture-zero',
+]);
+const candidateResponseOutcomes = new Set([
+  'available', 'exhausted', 'metadata_unavailable', 'not_ready', 'not_found',
+  'no_candidates', 'refresh_required', 'candidate_acquisition_unavailable', 'unknown', 'unreadable',
+]);
+const candidateResponseReadStages = new Set([
+  'not-started', 'body-requested', 'body-obtained', 'json-decoded', 'contract-checked',
+]);
+const candidateResponseFailures = new Set([
+  'none', 'navigation', 'target-closed', 'disposed', 'network', 'empty-body',
+  'malformed-json', 'oversize', 'contract', 'other',
+]);
+const candidateResponseExceptionCategories = new Set([
+  'none', 'protocol', 'target-closed', 'generic-error', 'non-error',
+]);
+
+export function candidateTerminalGuardDiagnostic(state: Omit<CandidateTerminalGuardDiagnostic, 'kind'>):
+  CandidateTerminalGuardDiagnostic {
+  if (!candidateTerminalGuards.has(state.guard) ||
+      !['initial-empty', 'exhausted'].includes(state.expected) ||
+      !acquisitionStatuses.has(state.acquisitionStatus) ||
+      !progressionStatuses.has(state.progressionStatus) ||
+      !(state.candidateSequence === null || boundedCount(state.candidateSequence, 2147483647)) ||
+      !(state.decisionCount === null || boundedCount(state.decisionCount, 2147483647)) ||
+      ![state.bindingPresent, state.snapshotReadable, state.acquisitionMatches,
+        state.progressionMatches, state.sequenceMatches, state.decisionsZero,
+        state.terminalKindMatches].every(value => typeof value === 'boolean'))
+    throw new Error('E2E_SAFE_FAILURE');
+  return Object.freeze({ kind: 'candidate-terminal-guard', ...state });
+}
+
+export function candidateHealthGuardDiagnostic(state: Omit<CandidateHealthGuardDiagnostic, 'kind'>):
+  CandidateHealthGuardDiagnostic {
+  if (!candidateHealthGuards.has(state.guard) || !boundedCount(state.participants, 4) ||
+      state.participants < 2 || ![state.requests, state.responses, state.errors, state.invalid,
+        state.directProvider, state.fixture, state.responseValidationActive]
+        .every(value => boundedCount(value)) ||
+      !(state.httpStatus === null || boundedCount(state.httpStatus, 599) && state.httpStatus >= 100) ||
+      !candidateResponseOutcomes.has(state.responseOutcome) ||
+      !candidateResponseReadStages.has(state.responseReadStage) ||
+      !candidateResponseFailures.has(state.responseFailure) ||
+      !candidateResponseExceptionCategories.has(state.exceptionCategory) ||
+      !(state.bodyLength === null || boundedCount(state.bodyLength, 4097)) ||
+      ![state.bodyBytesObtained, state.jsonDecoded, state.requestFinished,
+        state.requestFailed, state.pageAlive, state.contextAlive,
+        state.failed, state.disposed, state.bindingPresent]
+        .every(value => typeof value === 'boolean'))
+    throw new Error('E2E_SAFE_FAILURE');
+  return Object.freeze({ kind: 'candidate-health-guard', ...state });
+}
 
 export function containmentDiagnostic(state: ContainmentState): ContainmentDiagnostic {
   if (![state.handoffs, state.activeHandlers, state.handlersStarted, state.handlersCompleted,
@@ -261,6 +392,20 @@ export function candidateOverlapDiagnostic(state: CandidateOverlapState): Candid
 export function parseHarnessDiagnostic(value: unknown): HarnessDiagnostic {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('E2E_SAFE_FAILURE');
   const item = value as Record<string, unknown>;
+  if (item.kind === 'candidate-terminal-guard') {
+    if (Object.keys(item).sort().join(',') !==
+        'acquisitionMatches,acquisitionStatus,bindingPresent,candidateSequence,decisionCount,decisionsZero,expected,guard,kind,progressionMatches,progressionStatus,sequenceMatches,snapshotReadable,terminalKindMatches')
+      throw new Error('E2E_SAFE_FAILURE');
+    const { kind: _kind, ...state } = item;
+    return candidateTerminalGuardDiagnostic(state as Omit<CandidateTerminalGuardDiagnostic, 'kind'>);
+  }
+  if (item.kind === 'candidate-health-guard') {
+    if (Object.keys(item).sort().join(',') !==
+        'bindingPresent,bodyBytesObtained,bodyLength,contextAlive,directProvider,disposed,errors,exceptionCategory,failed,fixture,guard,httpStatus,invalid,jsonDecoded,kind,pageAlive,participants,requestFailed,requestFinished,requests,responseFailure,responseOutcome,responseReadStage,responseValidationActive,responses')
+      throw new Error('E2E_SAFE_FAILURE');
+    const { kind: _kind, ...state } = item;
+    return candidateHealthGuardDiagnostic(state as Omit<CandidateHealthGuardDiagnostic, 'kind'>);
+  }
   if (item.kind === 'candidate-containment') {
     if (Object.keys(item).sort().join(',') !==
         'activeHandlers,classification,handlerFailures,handlersCompleted,handlersStarted,handoffs,harnessFailures,kind,reopenedAfterDrain,requestCancellations')

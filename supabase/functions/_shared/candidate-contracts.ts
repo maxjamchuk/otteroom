@@ -4,6 +4,7 @@ export type CandidateConstraint = Readonly<{
   releaseYearFrom: number;
   releaseYearTo: number;
   clauses: readonly (readonly number[])[];
+  excludedTmdbMovieIds?: readonly number[];
 }>;
 
 export type TmdbMovie = Readonly<{
@@ -27,13 +28,19 @@ export type FailureClass = 'timeout' | 'rate_limited' | 'upstream' | 'request_re
 export type PreflightResult =
   | Readonly<{ outcome: 'not_found' }>
   | Readonly<{ outcome: 'not_ready' }>
-  | Readonly<{ outcome: 'no_candidates' }>
-  | Readonly<{ outcome: 'assigned'; tmdb_movie_id: number }>
+  | Readonly<{ outcome: 'no_candidates'; candidate_sequence: 0; candidate_progression_status: 'inactive' }>
+  | Readonly<{ outcome: 'exhausted'; candidate_sequence: number; candidate_progression_status: 'exhausted' }>
+  | Readonly<{ outcome: 'assigned'; candidate_sequence: number;
+      candidate_progression_status: 'collecting' | 'agreed'; tmdb_movie_id: number }>
   | Readonly<{ outcome: 'acquire'; release_year_from: number; release_year_to: number;
-      genre_clauses_tmdb_ids: readonly (readonly number[])[] }>;
+      candidate_sequence: number; candidate_progression_status: 'inactive' | 'advancing';
+      genre_clauses_tmdb_ids: readonly (readonly number[])[];
+      excluded_tmdb_movie_ids: readonly number[] }>;
 
 export type CommitResult = Readonly<{
-  outcome: 'assigned' | 'no_candidates';
+  outcome: 'assigned' | 'no_candidates' | 'exhausted' | 'refresh_required' | 'not_found' | 'not_ready';
+  candidate_sequence: number | null;
+  candidate_progression_status: 'inactive' | 'collecting' | 'agreed' | 'exhausted' | null;
   tmdb_movie_id: number | null;
 }>;
 

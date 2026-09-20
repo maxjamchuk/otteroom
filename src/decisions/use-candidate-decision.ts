@@ -26,21 +26,27 @@ function activeTarget(room: AcceptedRoomState | null, candidate: CandidateModel)
   const movie = candidate.candidate;
   const eligibleRoom = !!room && room.state === 'ready' && room.filtersComplete &&
     room.filterResolutionStatus === 'compatible' && !room.resolutionIntegrityError &&
-    room.candidateAcquisitionStatus === 'assigned' && !room.candidateIntegrityError;
+    room.candidateAcquisitionStatus === 'assigned' &&
+    (room.candidateProgressionStatus === 'collecting' || room.candidateProgressionStatus === 'agreed') &&
+    room.candidateSequence > 0 && !room.candidateIntegrityError;
   if (!eligibleRoom || !movie || !recognizable.has(candidate.attempt) ||
       !Number.isSafeInteger(movie.tmdbMovieId) || movie.tmdbMovieId <= 0)
     return { generation: null, availability: 'ineligible' };
-  return { generation: { roomId: room.id, tmdbMovieId: movie.tmdbMovieId },
+  return { generation: { roomId: room.id, candidateSequence: room.candidateSequence,
+      tmdbMovieId: movie.tmdbMovieId },
     availability: room.isVoter ? 'voter' : 'observer' };
 }
 
-export function useCandidateDecision(room: AcceptedRoomState | null, candidate: CandidateModel) {
+export function useCandidateDecision(room: AcceptedRoomState | null, candidate: CandidateModel,
+  canonicalRefetch?: () => Promise<AcceptedRoomState | null>) {
   const target = activeTarget(room, candidate);
   const targetRoomId = target.generation?.roomId ?? null;
   const targetMovieId = target.generation?.tmdbMovieId ?? null;
+  const targetSequence = target.generation?.candidateSequence ?? null;
   const generation = useMemo(() => targetRoomId !== null && targetMovieId !== null
-    ? { roomId: targetRoomId, tmdbMovieId: targetMovieId } : null,
-  [targetRoomId, targetMovieId]);
+    && targetSequence !== null
+    ? { roomId: targetRoomId, candidateSequence: targetSequence, tmdbMovieId: targetMovieId } : null,
+  [targetRoomId, targetSequence, targetMovieId]);
   const [model, setModel] = useState<CandidateDecisionState>(() =>
     createDecisionState(generation, target.availability));
   let state = model;
@@ -71,7 +77,8 @@ export function useCandidateDecision(room: AcceptedRoomState | null, candidate: 
     if (state.kind !== 'recovering' || !generation) return;
     if (!recoveryFlight.current || !sameDecisionGeneration(recoveryFlight.current.generation, generation)) {
       recoveryFlight.current = { generation,
-        promise: getCandidateDecision(generation.roomId, generation.tmdbMovieId) };
+        promise: getCandidateDecision(generation.roomId, generation.candidateSequence,
+          generation.tmdbMovieId) };
     }
     let disposed = false;
     const flight = recoveryFlight.current;
@@ -95,17 +102,20 @@ export function useCandidateDecision(room: AcceptedRoomState | null, candidate: 
     const next = beginDecisionSubmission(before, value);
     current.current = next;
     setModel(next);
-    const promise = submitCandidateDecision(generation.roomId, generation.tmdbMovieId, value);
+    const promise = submitCandidateDecision(generation.roomId, generation.candidateSequence,
+      generation.tmdbMovieId, value);
     const flight = { generation, promise };
     submissionFlight.current = flight;
     void promise.then(result => {
-      if (sameDecisionGeneration(active.current, generation))
+      if (sameDecisionGeneration(active.current, generation)) {
         setModel(previous => receiveDecisionSubmission(previous, generation, result));
+        void canonicalRefetch?.().catch(() => {});
+      }
     }, () => {
       if (sameDecisionGeneration(active.current, generation))
         setModel(previous => failDecisionRequest(previous, generation));
     }).finally(() => { if (submissionFlight.current === flight) submissionFlight.current = null; });
-  }, []);
+  }, [canonicalRefetch]);
 
   const retry = useCallback(() => {
     setModel(previous => retryDecisionRecovery(previous));
@@ -114,6 +124,8 @@ export function useCandidateDecision(room: AcceptedRoomState | null, candidate: 
     setModel(previous => refreshDecisionRecovery(previous));
   }, []);
 
-  return { ...state, controlsVisible: state.availability === 'voter' && !!state.generation,
+  return { ...state, controlsVisible: state.availability === 'voter' && !!state.generation &&
+      room?.candidateProgressionStatus === 'collecting' &&
+      (!state.projection || state.projection.candidateProgressionStatus === 'collecting'),
     controlsEnabled: state.kind === 'undecided', submit, retry, synchronize };
 }

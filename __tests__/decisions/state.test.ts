@@ -10,10 +10,11 @@ import {
 } from '../../src/decisions/state';
 
 const generation: DecisionGeneration = {
-  roomId: '11111111-1111-4111-8111-111111111111', tmdbMovieId: 42,
+  roomId: '11111111-1111-4111-8111-111111111111', candidateSequence:1,tmdbMovieId: 42,
 };
 const projection = { myDecision: null, completedCount: 0, requiredVoterCount: 2,
-  decisionSetComplete: false, twoVoterAgreement: false } as const;
+  candidateSequence:1,decisionSetComplete: false,agreementThreshold:2,
+  candidateOutcome:'collecting',candidateProgressionStatus:'collecting' } as const;
 
 it('recovers authority before enabling a voter and retains no optimistic answer', () => {
   const recovering = createDecisionState(generation, 'voter');
@@ -48,20 +49,22 @@ it('keeps observers aggregate-only and never makes them undecided', () => {
   expect(beginDecisionSubmission(observer, 'yes')).toBe(observer);
 });
 
-it('adopts authoritative progress and agreement without inferring larger-room policy', () => {
+it('adopts authoritative progress and resolved outcome without calculating it locally', () => {
   const exactTwo = receiveDecisionRecovery(createDecisionState(generation, 'voter'), generation, {
     outcome: 'decided', ...projection, myDecision: 'yes', completedCount: 2,
-    decisionSetComplete: true, twoVoterAgreement: true,
+    decisionSetComplete: true,candidateOutcome:'agreed',candidateProgressionStatus:'agreed',
   });
-  expect(exactTwo.projection).toEqual({ myDecision: 'yes', completedCount: 2,
-    requiredVoterCount: 2, decisionSetComplete: true, twoVoterAgreement: true });
+  expect(exactTwo.projection).toMatchObject({ myDecision: 'yes', completedCount: 2,
+    requiredVoterCount: 2, decisionSetComplete: true,candidateOutcome:'agreed',
+    candidateProgressionStatus:'agreed' });
 
   const largerRoom = receiveDecisionRecovery(createDecisionState(generation, 'observer'), generation, {
     outcome: 'observer', myDecision: null, completedCount: 3, requiredVoterCount: 3,
-    decisionSetComplete: true, twoVoterAgreement: null,
+    candidateSequence:1,decisionSetComplete: true,agreementThreshold:2,
+    candidateOutcome:'agreed',candidateProgressionStatus:'agreed',
   });
-  expect(largerRoom.projection).toEqual({ myDecision: null, completedCount: 3,
-    requiredVoterCount: 3, decisionSetComplete: true, twoVoterAgreement: null });
+  expect(largerRoom.projection).toMatchObject({ myDecision: null, completedCount: 3,
+    requiredVoterCount: 3, decisionSetComplete: true,candidateOutcome:'agreed' });
 });
 
 it('retires stale successes and stale failures by room/candidate generation', () => {

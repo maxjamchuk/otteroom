@@ -42,6 +42,10 @@ const decisionCases=new Map([
   ['@feature007 K01 exact-two immutable decision lifecycle','K01'],
   ['@feature007 K02 larger-room aggregate-only decision convergence','K02'],
 ]);
+const progressionCases=new Map([
+  ['@feature008 L01 exact-two candidate progression lifecycle','L01'],
+  ['@feature008 L02 creator and larger-group candidate progression convergence','L02'],
+]);
 
 function scenarioFor(title: unknown): string {
   if (typeof title !== 'string') return 'unclassified';
@@ -50,6 +54,7 @@ function scenarioFor(title: unknown): string {
   if(resolutionCases.has(title))return 'resolution';
   if(candidateCases.has(title))return 'candidate';
   if(decisionCases.has(title))return 'decision';
+  if(progressionCases.has(title))return 'progression';
   if (title.startsWith('@baseline ')) return 'baseline';
   if (title.startsWith('@auth ')) return 'auth';
   if (title.startsWith('@us1 E01 ')) return 'us1';
@@ -77,6 +82,7 @@ function browserCaseFor(title: unknown): string {
   if(scenario==='resolution')return resolutionCases.get(title)!;
   if(scenario==='candidate')return candidateCases.get(title)!;
   if(scenario==='decision')return decisionCases.get(title)!;
+  if(scenario==='progression')return progressionCases.get(title)!;
   if (['us1', 'us2-join', 'us2-realtime', 'us4'].includes(scenario)) {
     return title.match(/^@[^ ]+ (E(?:0[1-9]|1[0-2])) /)?.[1] ?? 'none';
   }

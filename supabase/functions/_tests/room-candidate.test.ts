@@ -7,8 +7,19 @@ const roomId = '11111111-1111-4111-8111-111111111111';
 const actorId = '22222222-2222-4222-8222-222222222222';
 const movie = { id: 7, adult: false, genreIds: [28], title: 'Winner',
   releaseDate: '2000-01-01', posterPath: null };
-const preflightRow = (value: Record<string, unknown>) => ({ tmdb_movie_id: null,
-  release_year_from: null, release_year_to: null, genre_clauses_tmdb_ids: null, ...value });
+const preflightRow = (value: Record<string, unknown>) => {
+  const outcome=value.outcome;
+  return { candidate_sequence: outcome==='acquire'||outcome==='no_candidates'?0:
+      outcome==='assigned'||outcome==='exhausted'?1:null,
+    candidate_progression_status: outcome==='acquire'||outcome==='no_candidates'?'inactive':
+      outcome==='assigned'?'collecting':outcome==='exhausted'?'exhausted':null,
+    tmdb_movie_id: null, release_year_from: null, release_year_to: null,
+    genre_clauses_tmdb_ids: null, excluded_tmdb_movie_ids: outcome==='acquire'?[]:null, ...value };
+};
+const commitRow=(outcome:'assigned'|'no_candidates'|'exhausted',tmdb_movie_id:number|null)=>({
+  outcome,candidate_sequence:outcome==='no_candidates'?0:1,
+  candidate_progression_status:outcome==='assigned'?'collecting':
+    outcome==='no_candidates'?'inactive':'exhausted',tmdb_movie_id});
 
 function harness(preflight: Record<string, unknown>) {
   const calls: Array<{ name: RpcName; args: Record<string, unknown> }> = [];
@@ -17,7 +28,7 @@ function harness(preflight: Record<string, unknown>) {
     verifyJwt: async token => token === 'Bearer current' ? actorId : null,
     rpc: async (name, args) => { calls.push({ name, args });
       if (name === 'prepare_room_tmdb_candidate') return preflightRow(preflight);
-      return { outcome: 'assigned', tmdb_movie_id: 7 };
+      return commitRow('assigned',7);
     },
     search: async () => { searches++; return { kind: 'match', movie }; },
     details: async id => { details++; return { tmdbMovieId: id, title: 'Winner', releaseYear: 2000,
@@ -53,7 +64,8 @@ Deno.test('preflight closes not-found/not-ready/no-candidates and assigned skips
     assertEquals(h.counts(), { searches: 0, details: 0 });
   }
   const assigned = harness({ outcome: 'assigned', tmdb_movie_id: 7 });
-  assertEquals(await (await assigned.handler(request())).json(), { outcome: 'available', candidate: {
+  assertEquals(await (await assigned.handler(request())).json(), { outcome: 'available',
+    candidate_sequence:1,candidate_progression_status:'collecting',candidate: {
     tmdb_movie_id: 7, title: 'Winner', release_year: 2000, poster_url: null } });
   assertEquals(assigned.counts(), { searches: 0, details: 1 });
 });
@@ -64,13 +76,34 @@ Deno.test('compatible flow searches, commits before Details, and returns only CA
   const response = await h.handler(request());
   assertEquals(response.status, 200);
   assertEquals(h.calls.map(call => call.name), ['prepare_room_tmdb_candidate','commit_room_tmdb_candidate']);
-  assertEquals(h.calls[1].args, { p_room_id: roomId, p_actor_user_id: actorId, p_tmdb_movie_id: 7,
-    p_release_year: 2000, p_tmdb_genre_ids: [28], p_adult: false });
+  assertEquals(h.calls[1].args, { p_room_id: roomId, p_actor_user_id: actorId,
+    p_expected_candidate_sequence:0,p_tmdb_movie_id: 7,p_release_year: 2000,
+    p_tmdb_genre_ids: [28], p_adult: false });
   assertEquals(h.counts(), { searches: 1, details: 1 });
   const text = await response.text();
   assertFalse(/clause|filter|fixture|actor|poster_path|release_date|genre/i.test(text));
-  assertEquals(JSON.parse(text), { outcome: 'available', candidate: { tmdb_movie_id: 7,
+  assertEquals(JSON.parse(text), { outcome: 'available',candidate_sequence:1,
+    candidate_progression_status:'collecting', candidate: { tmdb_movie_id: 7,
     title: 'Winner', release_year: 2000, poster_url: null } });
+});
+
+Deno.test('advancing preflight keeps sequence and ordered exclusions server-owned',async()=>{
+  let observed:unknown;
+  const calls:Array<{name:RpcName;args:Record<string,unknown>}>=[];
+  const handler=createRoomCandidateHandler({verifyJwt:async()=>actorId,
+    rpc:async(name,args)=>{calls.push({name,args});return name==='prepare_room_tmdb_candidate'
+      ?preflightRow({outcome:'acquire',candidate_sequence:3,candidate_progression_status:'advancing',
+        release_year_from:2000,release_year_to:2020,genre_clauses_tmdb_ids:[[28]],
+        excluded_tmdb_movie_ids:[7,8,9]})
+      :{outcome:'assigned',candidate_sequence:4,candidate_progression_status:'collecting',
+        tmdb_movie_id:10};},
+    search:async constraint=>{observed=constraint.excludedTmdbMovieIds;return{kind:'match',
+      movie:{...movie,id:10}};},details:async id=>({tmdbMovieId:id,title:'Next',releaseYear:2000,
+      posterUrl:null})});
+  const body=await(await handler(request())).json();
+  assertEquals(observed,[7,8,9]);
+  assertEquals(calls[1].args.p_expected_candidate_sequence,3);
+  assertEquals(body.candidate_sequence,4);
 });
 
 Deno.test('unsorted TMDB genres are canonical through exact eligibility and candidate commit', async () => {
@@ -91,7 +124,7 @@ Deno.test('unsorted TMDB genres are canonical through exact eligibility and cand
       return name === 'prepare_room_tmdb_candidate'
         ? preflightRow({ outcome: 'acquire', release_year_from: constraint.releaseYearFrom,
             release_year_to: constraint.releaseYearTo, genre_clauses_tmdb_ids: constraint.clauses })
-        : { outcome: 'assigned', tmdb_movie_id: parsedMovie.id };
+        : commitRow('assigned',parsedMovie.id);
     },
     search: async value => {
       assert(eligibleMovie(parsedMovie, value));
@@ -102,7 +135,7 @@ Deno.test('unsorted TMDB genres are canonical through exact eligibility and cand
 
   assertEquals((await handler(request())).status, 200);
   assertEquals(calls[1], { name: 'commit_room_tmdb_candidate', args: {
-    p_room_id: roomId, p_actor_user_id: actorId, p_tmdb_movie_id: 7,
+    p_room_id: roomId, p_actor_user_id: actorId,p_expected_candidate_sequence:0,p_tmdb_movie_id: 7,
     p_release_year: 2000, p_tmdb_genre_ids: [12,14,16,10751], p_adult: false,
   } });
 });
@@ -131,7 +164,7 @@ Deno.test('different concurrent proposals both adopt the one CAS winner', async 
         release_year_to: 2020, genre_clauses_tmdb_ids: [[28]] });
       entered.push(release); if (entered.length === 2) release(); await barrier;
       winner ??= args.p_tmdb_movie_id as number;
-      return { outcome: 'assigned', tmdb_movie_id: winner };
+      return commitRow('assigned',winner);
     },
     search: async () => { const id = ++proposal; return { kind: 'match', movie: { ...movie, id } }; },
     details: async id => ({ tmdbMovieId: id, title: `Winner ${id}`, releaseYear: 2000, posterUrl: null }),
@@ -151,12 +184,13 @@ Deno.test('completed-empty loser adopts assigned winner and never exposes empty'
     rpc: async name => name === 'prepare_room_tmdb_candidate'
       ? preflightRow({ outcome: 'acquire', release_year_from: 2000, release_year_to: 2020,
           genre_clauses_tmdb_ids: [[28]] })
-      : { outcome: 'assigned', tmdb_movie_id: 19 },
+      : commitRow('assigned',19),
     search: async () => ({ kind: 'completed_empty' }),
     details: async id => ({ tmdbMovieId: id, title: 'Stored Winner', releaseYear: 2004, posterUrl: null }),
   };
   const body = await (await createRoomCandidateHandler(custom)(request())).json();
-  assertEquals(body, { outcome: 'available', candidate: { tmdb_movie_id: 19,
+  assertEquals(body, { outcome: 'available',candidate_sequence:1,
+    candidate_progression_status:'collecting', candidate: { tmdb_movie_id: 19,
     title: 'Stored Winner', release_year: 2004, poster_url: null } });
   assertEquals(h.counts(), { searches: 0, details: 0 });
 });
@@ -177,7 +211,8 @@ Deno.test('lost assignment response recovers the committed ID by preflight and D
   };
   const handler = createRoomCandidateHandler(deps);
   assertEquals((await handler(request())).status, 503);
-  assertEquals(await (await handler(request())).json(), { outcome: 'available', candidate: {
+  assertEquals(await (await handler(request())).json(), { outcome: 'available',candidate_sequence:1,
+    candidate_progression_status:'collecting', candidate: {
     tmdb_movie_id: 7, title: 'Winner', release_year: 2000, poster_url: null } });
   assertEquals({ searches, details }, { searches: 1, details: 1 });
 });
@@ -185,8 +220,9 @@ Deno.test('lost assignment response recovers the committed ID by preflight and D
 Deno.test('search incomplete is a fixed non-success and performs no terminal commit',async()=>{
   const names:RpcName[]=[];
   const handler=createRoomCandidateHandler({verifyJwt:async()=>actorId,
-    rpc:async(name)=>{names.push(name);return preflightRow({outcome:'acquire',release_year_from:2000,
-      release_year_to:2020,genre_clauses_tmdb_ids:[[28]]});},
+    rpc:async(name)=>{names.push(name);return preflightRow({outcome:'acquire',candidate_sequence:1,
+      candidate_progression_status:'advancing',release_year_from:2000,
+      release_year_to:2020,genre_clauses_tmdb_ids:[[28]],excluded_tmdb_movie_ids:[7]});},
     search:async()=>({kind:'search_incomplete',reason:'timeout'}),
     details:async()=>{throw new Error('must not run');}});
   const result=await handler(request());assertEquals(result.status,503);
@@ -195,8 +231,7 @@ Deno.test('search incomplete is a fixed non-success and performs no terminal com
 });
 
 Deno.test('fully completed empty alone invokes empty CAS and adopts either terminal',async()=>{
-  for(const winner of [{outcome:'no_candidates',tmdb_movie_id:null} as const,
-    {outcome:'assigned',tmdb_movie_id:7} as const]){
+  for(const winner of [commitRow('no_candidates',null),commitRow('assigned',7)]){
     const names:RpcName[]=[];let details=0;
     const handler=createRoomCandidateHandler({verifyJwt:async()=>actorId,
       rpc:async(name)=>{names.push(name);return name==='prepare_room_tmdb_candidate'
@@ -218,7 +253,8 @@ Deno.test('metadata failure after assignment preserves terminal and next request
     search:async()=>{searches++;return{kind:'completed_empty'};},
     details:async()=>{details++;throw new Error('upstream');}});
   for(let index=0;index<2;index++)assertEquals(await(await handler(request())).json(),
-    {outcome:'metadata_unavailable'});
+    {outcome:'metadata_unavailable',candidate_sequence:1,
+      candidate_progression_status:'collecting'});
   assertEquals({searches,details},{searches:0,details:2});
 });
 
@@ -246,5 +282,6 @@ Deno.test('invalid injected Details data cannot escape the response boundary',as
     rpc:async()=>preflightRow({outcome:'assigned',tmdb_movie_id:7}),search:async()=>({kind:'completed_empty'}),
     details:async()=>({tmdbMovieId:7,title:sentinel,releaseYear:1,posterUrl:`http://${sentinel}.invalid/a`})});
   const response=await handler(request());const text=await response.text();
-  assertEquals(JSON.parse(text),{outcome:'metadata_unavailable'});assertFalse(text.includes(sentinel));
+  assertEquals(JSON.parse(text),{outcome:'metadata_unavailable',candidate_sequence:1,
+    candidate_progression_status:'collecting'});assertFalse(text.includes(sentinel));
 });

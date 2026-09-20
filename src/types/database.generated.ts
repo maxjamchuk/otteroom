@@ -12,29 +12,39 @@ export type Database = {
       candidate_decisions: {
         Row: {
           accepted_at: string
+          candidate_occurrence_id: string
           decision: Database["public"]["Enums"]["candidate_decision_value"]
+          room_id: string
           room_member_id: string
-          tmdb_movie_id: number
         }
         Insert: {
           accepted_at?: string
+          candidate_occurrence_id: string
           decision: Database["public"]["Enums"]["candidate_decision_value"]
+          room_id: string
           room_member_id: string
-          tmdb_movie_id: number
         }
         Update: {
           accepted_at?: string
+          candidate_occurrence_id?: string
           decision?: Database["public"]["Enums"]["candidate_decision_value"]
+          room_id?: string
           room_member_id?: string
-          tmdb_movie_id?: number
         }
         Relationships: [
           {
-            foreignKeyName: "candidate_decisions_room_member_id_fkey"
-            columns: ["room_member_id"]
+            foreignKeyName: "candidate_decisions_occurrence_same_room_fkey"
+            columns: ["room_id", "candidate_occurrence_id"]
+            isOneToOne: false
+            referencedRelation: "room_candidate_occurrences"
+            referencedColumns: ["room_id", "id"]
+          },
+          {
+            foreignKeyName: "candidate_decisions_room_member_same_room_fkey"
+            columns: ["room_id", "room_member_id"]
             isOneToOne: false
             referencedRelation: "room_members"
-            referencedColumns: ["id"]
+            referencedColumns: ["room_id", "id"]
           },
         ]
       }
@@ -91,6 +101,44 @@ export type Database = {
           },
         ]
       }
+      room_candidate_occurrences: {
+        Row: {
+          created_at: string
+          id: string
+          resolved_at: string | null
+          room_id: string
+          sequence: number
+          status: Database["public"]["Enums"]["candidate_occurrence_status"]
+          tmdb_movie_id: number
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          resolved_at?: string | null
+          room_id: string
+          sequence: number
+          status?: Database["public"]["Enums"]["candidate_occurrence_status"]
+          tmdb_movie_id: number
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          resolved_at?: string | null
+          room_id?: string
+          sequence?: number
+          status?: Database["public"]["Enums"]["candidate_occurrence_status"]
+          tmdb_movie_id?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "room_candidate_occurrences_room_id_fkey"
+            columns: ["room_id"]
+            isOneToOne: false
+            referencedRelation: "rooms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       room_members: {
         Row: {
           id: string
@@ -126,6 +174,8 @@ export type Database = {
       rooms: {
         Row: {
           candidate_acquisition_status: Database["public"]["Enums"]["candidate_acquisition_status"]
+          candidate_progression_status: Database["public"]["Enums"]["candidate_progression_status"]
+          candidate_sequence: number
           code: string
           created_at: string
           creation_request_id: string
@@ -143,6 +193,8 @@ export type Database = {
         }
         Insert: {
           candidate_acquisition_status?: Database["public"]["Enums"]["candidate_acquisition_status"]
+          candidate_progression_status?: Database["public"]["Enums"]["candidate_progression_status"]
+          candidate_sequence?: number
           code: string
           created_at?: string
           creation_request_id: string
@@ -160,6 +212,8 @@ export type Database = {
         }
         Update: {
           candidate_acquisition_status?: Database["public"]["Enums"]["candidate_acquisition_status"]
+          candidate_progression_status?: Database["public"]["Enums"]["candidate_progression_status"]
+          candidate_sequence?: number
           code?: string
           created_at?: string
           creation_request_id?: string
@@ -176,6 +230,13 @@ export type Database = {
           voter_count?: number
         }
         Relationships: [
+          {
+            foreignKeyName: "rooms_current_candidate_occurrence_fkey"
+            columns: ["id", "candidate_sequence", "tmdb_movie_id"]
+            isOneToOne: false
+            referencedRelation: "room_candidate_occurrences"
+            referencedColumns: ["room_id", "sequence", "tmdb_movie_id"]
+          },
           {
             foreignKeyName: "rooms_movie_candidate_id_fkey"
             columns: ["movie_candidate_id"]
@@ -194,19 +255,28 @@ export type Database = {
         Args: {
           p_actor_user_id: string
           p_adult: boolean
+          p_expected_candidate_sequence: number
           p_release_year: number
           p_room_id: string
           p_tmdb_genre_ids: number[]
           p_tmdb_movie_id: number
         }
         Returns: {
+          candidate_progression_status: Database["public"]["Enums"]["candidate_progression_status"]
+          candidate_sequence: number
           outcome: string
           tmdb_movie_id: number
         }[]
       }
       commit_room_tmdb_no_candidates: {
-        Args: { p_actor_user_id: string; p_room_id: string }
+        Args: {
+          p_actor_user_id: string
+          p_expected_candidate_sequence: number
+          p_room_id: string
+        }
         Returns: {
+          candidate_progression_status: Database["public"]["Enums"]["candidate_progression_status"]
+          candidate_sequence: number
           outcome: string
           tmdb_movie_id: number
         }[]
@@ -219,6 +289,8 @@ export type Database = {
         }
         Returns: {
           candidate_acquisition_status: Database["public"]["Enums"]["candidate_acquisition_status"]
+          candidate_progression_status: Database["public"]["Enums"]["candidate_progression_status"]
+          candidate_sequence: number
           decision_completed_count: number
           filter_completed_count: number
           filter_resolution_status: Database["public"]["Enums"]["filter_resolution_status"]
@@ -255,20 +327,29 @@ export type Database = {
         }[]
       }
       get_room_candidate_decision: {
-        Args: { p_expected_tmdb_movie_id: number; p_room_id: string }
+        Args: {
+          p_expected_candidate_sequence: number
+          p_expected_tmdb_movie_id: number
+          p_room_id: string
+        }
         Returns: {
+          agreement_threshold: number
+          candidate_outcome: Database["public"]["Enums"]["candidate_occurrence_status"]
+          candidate_progression_status: Database["public"]["Enums"]["candidate_progression_status"]
+          candidate_sequence: number
           decision_completed_count: number
           decision_set_complete: boolean
           my_decision: Database["public"]["Enums"]["candidate_decision_value"]
           outcome: string
           required_voter_count: number
-          two_voter_agreement: boolean
         }[]
       }
       join_room: {
         Args: { p_room_code: string }
         Returns: {
           candidate_acquisition_status: Database["public"]["Enums"]["candidate_acquisition_status"]
+          candidate_progression_status: Database["public"]["Enums"]["candidate_progression_status"]
+          candidate_sequence: number
           decision_completed_count: number
           filter_completed_count: number
           filter_resolution_status: Database["public"]["Enums"]["filter_resolution_status"]
@@ -285,6 +366,9 @@ export type Database = {
       prepare_room_tmdb_candidate: {
         Args: { p_actor_user_id: string; p_room_id: string }
         Returns: {
+          candidate_progression_status: Database["public"]["Enums"]["candidate_progression_status"]
+          candidate_sequence: number
+          excluded_tmdb_movie_ids: Json
           genre_clauses_tmdb_ids: Json
           outcome: string
           release_year_from: number
@@ -319,22 +403,33 @@ export type Database = {
       submit_room_candidate_decision: {
         Args: {
           p_decision: Database["public"]["Enums"]["candidate_decision_value"]
+          p_expected_candidate_sequence: number
           p_expected_tmdb_movie_id: number
           p_room_id: string
         }
         Returns: {
+          agreement_threshold: number
+          candidate_outcome: Database["public"]["Enums"]["candidate_occurrence_status"]
+          candidate_progression_status: Database["public"]["Enums"]["candidate_progression_status"]
+          candidate_sequence: number
           decision_completed_count: number
           decision_set_complete: boolean
           my_decision: Database["public"]["Enums"]["candidate_decision_value"]
           outcome: string
           required_voter_count: number
-          two_voter_agreement: boolean
         }[]
       }
     }
     Enums: {
       candidate_acquisition_status: "pending" | "assigned" | "no_candidates"
       candidate_decision_value: "yes" | "no"
+      candidate_occurrence_status: "collecting" | "rejected" | "agreed"
+      candidate_progression_status:
+        | "inactive"
+        | "collecting"
+        | "advancing"
+        | "agreed"
+        | "exhausted"
       filter_resolution_status: "pending" | "compatible" | "incompatible"
       participant_genre:
         | "action"
@@ -485,6 +580,14 @@ export const Constants = {
     Enums: {
       candidate_acquisition_status: ["pending", "assigned", "no_candidates"],
       candidate_decision_value: ["yes", "no"],
+      candidate_occurrence_status: ["collecting", "rejected", "agreed"],
+      candidate_progression_status: [
+        "inactive",
+        "collecting",
+        "advancing",
+        "agreed",
+        "exhausted",
+      ],
       filter_resolution_status: ["pending", "compatible", "incompatible"],
       participant_genre: [
         "action",

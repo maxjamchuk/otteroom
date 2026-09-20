@@ -8,9 +8,16 @@ export type RoomProjection = { id: string; code: string; state: string; voter_co
   required_voter_count: number; filter_completed_count: number;
   filter_resolution_status: 'pending' | 'compatible' | 'incompatible';
   candidate_acquisition_status: 'pending' | 'assigned' | 'no_candidates';
-  decision_completed_count: number };
+  candidate_progression_status: 'inactive' | 'collecting' | 'advancing' | 'agreed' | 'exhausted';
+  candidate_sequence: number; decision_completed_count: number };
 export type CreationConfiguration = { requiredVoterCount: number; creatorIsVoter: boolean };
 export const twoVoters = { requiredVoterCount: 2, creatorIsVoter: true } as const;
+export type ResponseValidationDrain = {
+  drainResponses(): Promise<void>;
+};
+export type DocumentReplacementLifecycle = ResponseValidationDrain & {
+  replaceDocuments<T>(pages: readonly Page[], navigate: () => Promise<T>): Promise<T>;
+};
 type Member = { id: string; room_id: string; user_id: string; is_voter: boolean; joined_at: string };
 type StoredRoom = RoomProjection & { creator_user_id: string; creation_request_id: string;
   created_at: string; updated_at: string; movie_candidate_id: string | null; tmdb_movie_id: number | null };
@@ -18,6 +25,22 @@ type StoredFilter = { room_member_id: string; genres: string[]; release_year_fro
   release_year_to: number; xmin: string };
 const candidateTraffic = new WeakMap<Page, { count: number; byRoom: Map<string, number>;
   listener: (request: Request) => void }>();
+
+function validProgression(row: RoomProjection): boolean {
+  const sequence = row.candidate_sequence, count = row.decision_completed_count;
+  if (!Number.isInteger(sequence) || sequence < 0 || !Number.isInteger(count) || count < 0 ||
+      count > row.required_voter_count) return false;
+  if (row.candidate_progression_status === 'inactive')
+    return sequence === 0 && count === 0 && row.candidate_acquisition_status !== 'assigned';
+  if (row.candidate_progression_status === 'collecting')
+    return sequence > 0 && count < row.required_voter_count && row.candidate_acquisition_status === 'assigned';
+  if (row.candidate_progression_status === 'agreed')
+    return sequence > 0 && count === row.required_voter_count && row.candidate_acquisition_status === 'assigned';
+  if (row.candidate_progression_status === 'advancing')
+    return sequence > 0 && count === 0 && row.candidate_acquisition_status === 'pending';
+  return row.candidate_progression_status === 'exhausted' && sequence > 0 && count === 0 &&
+    row.candidate_acquisition_status === 'no_candidates';
+}
 
 export function observeCandidateRpcZero(page: Page) {
   let traffic = candidateTraffic.get(page);
@@ -175,7 +198,7 @@ export function committedRoomSnapshot(room: RoomProjection) {
     if (!Array.isArray(snapshots) || snapshots.length !== 1 || !/^[0-9]+$/.test(snapshots[0].xmin)) throw new Error();
     const { row, members, filters } = snapshots[0] as { row: StoredRoom; members: Member[]; filters: StoredFilter[] };
     if (!row || row.id !== room.id || row.code !== room.code ||
-      Object.keys(row).sort().join(',') !== 'candidate_acquisition_status,code,created_at,creation_request_id,creator_user_id,decision_completed_count,filter_completed_count,filter_resolution_status,id,movie_candidate_id,required_voter_count,state,tmdb_movie_id,updated_at,voter_count' ||
+      Object.keys(row).sort().join(',') !== 'candidate_acquisition_status,candidate_progression_status,candidate_sequence,code,created_at,creation_request_id,creator_user_id,decision_completed_count,filter_completed_count,filter_resolution_status,id,movie_candidate_id,required_voter_count,state,tmdb_movie_id,updated_at,voter_count' ||
       !Number.isInteger(row.required_voter_count) || row.required_voter_count < 2 || row.required_voter_count > 2147483647 ||
       !Number.isInteger(row.voter_count) || row.voter_count < 0 || row.voter_count > row.required_voter_count ||
       row.state !== (row.voter_count === row.required_voter_count ? 'ready' : 'waiting') ||
@@ -188,9 +211,7 @@ export function committedRoomSnapshot(room: RoomProjection) {
       (row.candidate_acquisition_status === 'assigned') !== (typeof row.tmdb_movie_id === 'number' &&
         Number.isSafeInteger(row.tmdb_movie_id) && row.tmdb_movie_id > 0) ||
       row.candidate_acquisition_status !== 'pending' && row.filter_resolution_status !== 'compatible' ||
-      !Number.isInteger(row.decision_completed_count) || row.decision_completed_count < 0 ||
-      row.decision_completed_count > row.required_voter_count ||
-      row.decision_completed_count > 0 && row.candidate_acquisition_status !== 'assigned' ||
+      !validProgression(row) ||
       row.movie_candidate_id !== null && typeof row.movie_candidate_id !== 'string' ||
       !Array.isArray(members) || members.length < 1 || members.length > 5 ||
       members.some(m => Object.keys(m).sort().join(',') !== 'id,is_voter,joined_at,room_id,user_id' || m.room_id !== row.id ||
@@ -234,22 +255,27 @@ export async function startHost(page: Page, diagnostics: SafeDiagnostics): Promi
   return { origin: new URL(signup.url()).origin, publicKey };
 }
 
+export async function navigateAfterResponseValidation<T>(responses: DocumentReplacementLifecycle,
+  pages: readonly Page[], navigate: () => Promise<T>): Promise<T> {
+  return responses.replaceDocuments(pages, navigate);
+}
+
 export async function ownRooms(page: Page, api: PublicApi, targetId?: string, targetCode?: string): Promise<RoomProjection[]> {
   // A real member-authorized Data API read, never an owner/service-role oracle.
-    // Session access stays inside this browser context and only the nine public room fields return.
+    // Session access stays inside this browser context and only the eleven public room fields return.
   const rows: unknown = await page.evaluate(async ({ origin, publicKey, targetId, targetCode }) => {
     const key = Object.keys(localStorage).find(name => /^sb-.+-auth-token$/.test(name));
     const session = key ? JSON.parse(localStorage.getItem(key) ?? 'null') : null;
     if (!session?.access_token) throw new Error('E2E_SAFE_FAILURE');
     const filter = targetId ? `&id=eq.${encodeURIComponent(targetId)}` : targetCode ? `&code=eq.${encodeURIComponent(targetCode)}` : '';
-    const response = await fetch(`${origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status,decision_completed_count${filter}`, {
+    const response = await fetch(`${origin}/rest/v1/rooms?select=id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status,candidate_progression_status,candidate_sequence,decision_completed_count${filter}`, {
       headers: { apikey: publicKey, Authorization: `Bearer ${session.access_token}` },
     });
     if (!response.ok) throw new Error('E2E_SAFE_FAILURE');
     return response.json();
   }, { ...api, targetId, targetCode });
   if (!Array.isArray(rows) || rows.length > 10 || rows.some(row => !row ||
-    Object.keys(row).sort().join(',') !== 'candidate_acquisition_status,code,decision_completed_count,filter_completed_count,filter_resolution_status,id,required_voter_count,state,voter_count' || typeof row.id !== 'string' ||
+    Object.keys(row).sort().join(',') !== 'candidate_acquisition_status,candidate_progression_status,candidate_sequence,code,decision_completed_count,filter_completed_count,filter_resolution_status,id,required_voter_count,state,voter_count' || typeof row.id !== 'string' ||
     typeof row.code !== 'string' || !/^[0-9A-F]{10}$/.test(row.code) || !Number.isInteger(row.voter_count) || !Number.isInteger(row.required_voter_count) || row.voter_count < 0 ||
     row.required_voter_count < 2 || row.required_voter_count > 2147483647 || row.voter_count > row.required_voter_count ||
     row.state !== (row.voter_count === row.required_voter_count ? 'ready' : 'waiting') ||
@@ -260,9 +286,7 @@ export async function ownRooms(page: Page, api: PublicApi, targetId?: string, ta
       (row.state !== 'ready' || row.filter_completed_count !== row.required_voter_count) ||
     !['pending','assigned','no_candidates'].includes(row.candidate_acquisition_status) ||
     row.candidate_acquisition_status !== 'pending' && row.filter_resolution_status !== 'compatible' ||
-    !Number.isInteger(row.decision_completed_count) || row.decision_completed_count < 0 ||
-    row.decision_completed_count > row.required_voter_count ||
-    row.decision_completed_count > 0 && row.candidate_acquisition_status !== 'assigned')) {
+    !validProgression(row))) {
     throw new Error('E2E_SAFE_FAILURE');
   }
   return rows;
@@ -351,7 +375,7 @@ export async function realtimeBarrier(page: Page, holdInitial = false) {
     const url = new URL(r.url());
     if (url.pathname.endsWith('/rpc/join_room')) stats.joins++;
     if (url.pathname === '/rest/v1/rooms' && url.searchParams.get('id') &&
-      url.searchParams.get('select')?.replaceAll(' ', '') === 'id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status,decision_completed_count') {
+      url.searchParams.get('select')?.replaceAll(' ', '') === 'id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status,candidate_progression_status,candidate_sequence,decision_completed_count') {
       // Dispatch and completion are distinct: a response already in flight can
       // finish after an observed socket loss without issuing any new request.
       stats.readRequests++; readDocuments.set(r, documentGeneration);
@@ -361,7 +385,7 @@ export async function realtimeBarrier(page: Page, holdInitial = false) {
   };
   const response = async (r: Response) => {
     const url = new URL(r.url());
-    if (url.pathname !== '/rest/v1/rooms' || !url.searchParams.get('id') || url.searchParams.get('select')?.replaceAll(' ', '') !== 'id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status,decision_completed_count') return;
+    if (url.pathname !== '/rest/v1/rooms' || !url.searchParams.get('id') || url.searchParams.get('select')?.replaceAll(' ', '') !== 'id,code,state,voter_count,required_voter_count,filter_completed_count,filter_resolution_status,candidate_acquisition_status,candidate_progression_status,candidate_sequence,decision_completed_count') return;
     let bytes: Buffer;
     try { bytes = await r.body(); }
     catch {
@@ -380,15 +404,13 @@ export async function realtimeBarrier(page: Page, holdInitial = false) {
       if (bytes.length > 4096) throw new Error('E2E_SAFE_FAILURE');
       const rows = JSON.parse(bytes.toString('utf8'));
       if (!r.ok() || !Array.isArray(rows) || rows.length !== 1 ||
-        Object.keys(rows[0]).sort().join(',') !== 'candidate_acquisition_status,code,decision_completed_count,filter_completed_count,filter_resolution_status,id,required_voter_count,state,voter_count' || url.searchParams.get('id') !== `eq.${rows[0].id}` ||
+        Object.keys(rows[0]).sort().join(',') !== 'candidate_acquisition_status,candidate_progression_status,candidate_sequence,code,decision_completed_count,filter_completed_count,filter_resolution_status,id,required_voter_count,state,voter_count' || url.searchParams.get('id') !== `eq.${rows[0].id}` ||
         !['pending','compatible','incompatible'].includes(rows[0].filter_resolution_status) ||
         rows[0].filter_resolution_status !== 'pending' &&
           (rows[0].state !== 'ready' || rows[0].filter_completed_count !== rows[0].required_voter_count) ||
         !['pending','assigned','no_candidates'].includes(rows[0].candidate_acquisition_status) ||
         rows[0].candidate_acquisition_status !== 'pending' && rows[0].filter_resolution_status !== 'compatible' ||
-        !Number.isInteger(rows[0].decision_completed_count) || rows[0].decision_completed_count < 0 ||
-        rows[0].decision_completed_count > rows[0].required_voter_count ||
-        rows[0].decision_completed_count > 0 && rows[0].candidate_acquisition_status !== 'assigned') throw new Error('E2E_SAFE_FAILURE');
+        !validProgression(rows[0])) throw new Error('E2E_SAFE_FAILURE');
       stats.reads++; changed();
     } catch { if (!disposed) failure('read'); }
   };
@@ -506,7 +528,7 @@ export async function assertAccepted(response: Response, room: RoomProjection, o
   member: { isCreator: boolean; isVoter: boolean }, state: 'waiting' | 'ready', count = state === 'ready' ? room.required_voter_count : room.voter_count) {
   const rows: unknown = await response.json();
   const valid = response.ok() && Array.isArray(rows) && rows.length === 1 && rows[0] &&
-    Object.keys(rows[0]).sort().join(',') === 'candidate_acquisition_status,decision_completed_count,filter_completed_count,filter_resolution_status,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
+    Object.keys(rows[0]).sort().join(',') === 'candidate_acquisition_status,candidate_progression_status,candidate_sequence,decision_completed_count,filter_completed_count,filter_resolution_status,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
     rows[0].outcome === outcome && rows[0].room_id === room.id && rows[0].room_code === room.code &&
     rows[0].is_creator === member.isCreator && rows[0].is_voter === member.isVoter &&
     rows[0].room_state === state && rows[0].voter_count === count && rows[0].required_voter_count === room.required_voter_count &&
@@ -514,9 +536,8 @@ export async function assertAccepted(response: Response, room: RoomProjection, o
     rows[0].filter_completed_count <= room.required_voter_count &&
     ['pending','compatible','incompatible'].includes(rows[0].filter_resolution_status) &&
     ['pending','assigned','no_candidates'].includes(rows[0].candidate_acquisition_status) &&
-    Number.isInteger(rows[0].decision_completed_count) && rows[0].decision_completed_count >= 0 &&
-    rows[0].decision_completed_count <= rows[0].required_voter_count &&
-    (rows[0].decision_completed_count === 0 || rows[0].candidate_acquisition_status === 'assigned') &&
+    validProgression({ ...room, ...rows[0], id: rows[0].room_id, code: rows[0].room_code,
+      state: rows[0].room_state, voter_count: rows[0].voter_count }) &&
     (rows[0].candidate_acquisition_status === 'pending' || rows[0].filter_resolution_status === 'compatible') &&
     (rows[0].filter_resolution_status === 'pending' ||
       rows[0].room_state === 'ready' && rows[0].filter_completed_count === room.required_voter_count);
@@ -534,11 +555,12 @@ export async function createWaiting(page: Page, diagnostics: SafeDiagnostics, co
   expect(response.ok() && Object.keys(request).sort().join(',') === 'p_creation_request_id,p_creator_is_voter,p_required_voter_count' &&
     request.p_required_voter_count === configuration.requiredVoterCount && request.p_creator_is_voter === configuration.creatorIsVoter &&
     Array.isArray(rows) && rows.length === 1 && rows[0].outcome === 'created' &&
-    Object.keys(rows[0]).sort().join(',') === 'candidate_acquisition_status,decision_completed_count,filter_completed_count,filter_resolution_status,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
+    Object.keys(rows[0]).sort().join(',') === 'candidate_acquisition_status,candidate_progression_status,candidate_sequence,decision_completed_count,filter_completed_count,filter_resolution_status,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
     rows[0].is_creator === true && rows[0].is_voter === configuration.creatorIsVoter && rows[0].room_state === 'waiting' &&
     rows[0].voter_count === Number(configuration.creatorIsVoter) && rows[0].required_voter_count === configuration.requiredVoterCount &&
     rows[0].filter_completed_count === 0 && rows[0].filter_resolution_status === 'pending' &&
-    rows[0].candidate_acquisition_status === 'pending' && rows[0].decision_completed_count === 0).toBe(true);
+    rows[0].candidate_acquisition_status === 'pending' && rows[0].candidate_progression_status === 'inactive' &&
+    rows[0].candidate_sequence === 0 && rows[0].decision_completed_count === 0).toBe(true);
   const rooms = await ownRooms(page, api);
   expect(rooms.length === 1 && rooms[0].id === rows[0].room_id && rooms[0].code === rows[0].room_code).toBe(true);
   const room = rooms[0];
@@ -586,10 +608,12 @@ export function selectCreatedTrial(rows: unknown, rooms: RoomProjection[], reque
 // A second logical create via the real UI and retained Auth storage. No signup
 // waiter/startHost and no assumption that this participant owns only one room.
 export async function createWaitingWithSession(page: Page, diagnostics: SafeDiagnostics, api: PublicApi,
-  previous: ReturnType<typeof committedRoomSnapshot>, configuration: CreationConfiguration = twoVoters) {
+  previous: ReturnType<typeof committedRoomSnapshot>, configuration: CreationConfiguration = twoVoters,
+  responses?: DocumentReplacementLifecycle) {
   await diagnostics.assertAuthAccounting(1, 1);
   const participant = await ownParticipant(page);
-  expect((await page.goto('/'))?.status() === 200).toBe(true);
+  const home = () => page.goto('/');
+  expect((await (responses ? navigateAfterResponseValidation(responses, [page], home) : home()))?.status() === 200).toBe(true);
   await expect(page.getByRole('button', { name: 'Create Room' })).toBeVisible();
   await configureCreation(page, configuration);
   const created = page.waitForResponse(response => new URL(response.url()).pathname === '/rest/v1/rpc/create_room');

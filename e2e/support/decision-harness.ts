@@ -1,4 +1,4 @@
-import { expect, type Page, type Route, type TestInfo } from '@playwright/test';
+import { expect, type Page, type Request, type Route, type TestInfo } from '@playwright/test';
 import { spawnSync } from 'node:child_process';
 import { committedRoomSnapshot, realtimeBarrier, type PublicApi, type RoomProjection } from './room-harness.ts';
 
@@ -7,17 +7,57 @@ export type OwnDecisionResult = Readonly<{
   outcome: 'decided' | 'not_decided' | 'observer' | 'accepted' | 'unchanged' | 'conflict' |
     'not_voter' | 'not_found' | 'not_ready' | 'candidate_changed';
   my_decision: SafeDecision | null;
+  candidate_sequence: number | null;
   decision_completed_count: number | null;
   required_voter_count: number | null;
   decision_set_complete: boolean | null;
-  two_voter_agreement: boolean | null;
+  agreement_threshold: number | null;
+  candidate_outcome: 'collecting' | 'rejected' | 'agreed' | null;
+  candidate_progression_status: 'collecting' | 'advancing' | 'agreed' | null;
 }>;
 
-const fields = ['outcome', 'my_decision', 'decision_completed_count', 'required_voter_count',
-  'decision_set_complete', 'two_voter_agreement'] as const;
+const fields = ['outcome', 'my_decision', 'candidate_sequence', 'decision_completed_count',
+  'required_voter_count', 'decision_set_complete', 'agreement_threshold', 'candidate_outcome',
+  'candidate_progression_status'] as const;
 const projected = new Set(['decided', 'not_decided', 'observer', 'accepted', 'unchanged', 'conflict', 'not_voter']);
 const protectedOutcomes = new Set(['not_found', 'not_ready', 'candidate_changed']);
 const decisionEndpoint = '**/rest/v1/rpc/submit_room_candidate_decision';
+const decisionPath = '/rest/v1/rpc/submit_room_candidate_decision';
+
+export type AcceptedDecisionState = 'acknowledgement' | 'agreed' | 'advancing';
+
+export function acceptedDecisionState(result: OwnDecisionResult,
+  value: SafeDecision): AcceptedDecisionState {
+  if (result.outcome !== 'accepted' || result.my_decision !== value)
+    throw new Error('E2E_SAFE_FAILURE');
+  if (result.candidate_progression_status === 'collecting' &&
+      result.candidate_outcome === 'collecting' && result.decision_set_complete === false)
+    return 'acknowledgement';
+  if (result.candidate_progression_status === 'agreed' &&
+      result.candidate_outcome === 'agreed' && result.decision_set_complete === true)
+    return 'agreed';
+  if (result.candidate_progression_status === 'advancing' &&
+      result.candidate_outcome === 'rejected' && result.decision_set_complete === true)
+    return 'advancing';
+  throw new Error('E2E_SAFE_FAILURE');
+}
+
+export function acceptedDecisionViewSatisfied(state: AcceptedDecisionState,
+  acknowledgementVisible: boolean, previousProgression: string | null,
+  currentProgression: string | null, requiredVoterCount: number): boolean {
+  if (acknowledgementVisible) return true;
+  if (currentProgression === previousProgression) return false;
+  if (state === 'agreed')
+    return currentProgression === 'Group agreement reached. Candidate selection has stopped.';
+  const progressionSupersession = [
+    'The group did not agree. Finding another movie.',
+    'No further eligible movies were found for this selection.',
+    `0 of ${requiredVoterCount} decisions collected.`,
+  ].includes(currentProgression ?? '');
+  if (state === 'advancing') return progressionSupersession;
+  return progressionSupersession ||
+    currentProgression === 'Group agreement reached. Candidate selection has stopped.';
+}
 
 export function validateOwnDecisionResult(value: unknown): OwnDecisionResult {
   if (!Array.isArray(value) || value.length !== 1 || !value[0] || typeof value[0] !== 'object' ||
@@ -35,8 +75,13 @@ export function validateOwnDecisionResult(value: unknown): OwnDecisionResult {
   if (!Number.isInteger(completed) || !Number.isInteger(required) || (completed as number) < 0 ||
       (required as number) < 2 || (completed as number) > (required as number) ||
       row.decision_set_complete !== (completed === required) ||
-      ((required as number) === 2 ? typeof row.two_voter_agreement !== 'boolean' : row.two_voter_agreement !== null) ||
-      row.two_voter_agreement === true && row.decision_set_complete !== true) throw new Error('E2E_SAFE_FAILURE');
+      !Number.isInteger(row.candidate_sequence) || (row.candidate_sequence as number) < 1 ||
+      row.agreement_threshold !== ((required as number) === 2 ? 2 : Math.floor((2 * (required as number) + 2) / 3)) ||
+      !['collecting','rejected','agreed'].includes(String(row.candidate_outcome)) ||
+      !['collecting','advancing','agreed'].includes(String(row.candidate_progression_status)) ||
+      (row.candidate_outcome === 'collecting') !== (row.candidate_progression_status === 'collecting') ||
+      row.candidate_outcome === 'rejected' && row.candidate_progression_status !== 'advancing' ||
+      row.candidate_outcome === 'agreed' && row.candidate_progression_status !== 'agreed') throw new Error('E2E_SAFE_FAILURE');
   const owns = ['decided', 'accepted', 'unchanged', 'conflict'].includes(row.outcome);
   if (owns !== (row.my_decision === 'yes' || row.my_decision === 'no') ||
       !owns && row.my_decision !== null) throw new Error('E2E_SAFE_FAILURE');
@@ -45,21 +90,24 @@ export function validateOwnDecisionResult(value: unknown): OwnDecisionResult {
 
 async function rpc(page: Page, api: PublicApi, room: RoomProjection,
   name: 'get_room_candidate_decision' | 'submit_room_candidate_decision', value?: SafeDecision) {
-  const tmdbMovieId = committedRoomSnapshot(room).row.tmdb_movie_id;
+  const snapshot = committedRoomSnapshot(room).row;
+  const tmdbMovieId = snapshot.tmdb_movie_id, candidateSequence = snapshot.candidate_sequence;
   if (!Number.isSafeInteger(tmdbMovieId) || (tmdbMovieId as number) <= 0) throw new Error('E2E_SAFE_FAILURE');
-  const rows = await page.evaluate(async ({ origin, publicKey, name, roomId, tmdbMovieId, value }) => {
+  const rows = await page.evaluate(async ({ origin, publicKey, name, roomId, tmdbMovieId, candidateSequence, value }) => {
     const key = Object.keys(localStorage).find(item => /^sb-.+-auth-token$/.test(item));
     const token = key ? JSON.parse(localStorage.getItem(key) ?? 'null')?.access_token : null;
     if (!token) throw new Error('E2E_SAFE_FAILURE');
     const body = name === 'submit_room_candidate_decision'
-      ? { p_room_id: roomId, p_expected_tmdb_movie_id: tmdbMovieId, p_decision: value }
-      : { p_room_id: roomId, p_expected_tmdb_movie_id: tmdbMovieId };
+      ? { p_room_id: roomId, p_expected_candidate_sequence: candidateSequence,
+          p_expected_tmdb_movie_id: tmdbMovieId, p_decision: value }
+      : { p_room_id: roomId, p_expected_candidate_sequence: candidateSequence,
+          p_expected_tmdb_movie_id: tmdbMovieId };
     const response = await fetch(`${origin}/rest/v1/rpc/${name}`, { method: 'POST',
       headers: { apikey: publicKey, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal: AbortSignal.timeout(15000) });
     if (!response.ok) throw new Error('E2E_SAFE_FAILURE');
     return response.json();
-  }, { ...api, name, roomId: room.id, tmdbMovieId, value });
+  }, { ...api, name, roomId: room.id, tmdbMovieId, candidateSequence, value });
   return validateOwnDecisionResult(rows);
 }
 
@@ -85,12 +133,17 @@ export function preassembleAssignedCandidate(room: RoomProjection, tmdbMovieId: 
     throw new Error('E2E_SAFE_FAILURE');
   const result = spawnSync('docker', ['exec', 'supabase_db_otteroom-room-session', 'psql', '-X',
     '-U', 'postgres', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-qAt', '-c',
-    `update public.rooms set candidate_acquisition_status='assigned',tmdb_movie_id=${tmdbMovieId},
-      movie_candidate_id=null,updated_at=clock_timestamp()
+    `begin;
+     insert into public.room_candidate_occurrences(room_id,sequence,tmdb_movie_id,release_year,status)
+       values('${room.id}'::uuid,1,${tmdbMovieId},2005,'collecting');
+     update public.rooms set candidate_acquisition_status='assigned',candidate_progression_status='collecting',
+      candidate_sequence=1,tmdb_movie_id=${tmdbMovieId},movie_candidate_id=null,updated_at=clock_timestamp()
       where id='${room.id}'::uuid and state='ready' and filter_resolution_status='compatible'
-        and candidate_acquisition_status='pending' and decision_completed_count=0;
+        and candidate_acquisition_status='pending' and candidate_progression_status='inactive'
+        and candidate_sequence=0 and decision_completed_count=0;
      select count(*) from public.rooms where id='${room.id}'::uuid
-       and candidate_acquisition_status='assigned' and tmdb_movie_id=${tmdbMovieId};`],
+       and candidate_acquisition_status='assigned' and candidate_progression_status='collecting'
+       and candidate_sequence=1 and tmdb_movie_id=${tmdbMovieId};commit;`],
   { encoding: 'utf8', timeout: 10000, maxBuffer: 1024 });
   if (result.status !== 0 || result.error || result.stdout.trim() !== '1') throw new Error('E2E_SAFE_FAILURE');
 }
@@ -107,9 +160,10 @@ export function preassembleDecisionRooms(template: RoomProjection, count: number
     update feature007_room_seed set code=upper(substr(md5(id::text),1,10));
     insert into public.rooms(id,code,creation_request_id,creator_user_id,created_at,updated_at,
       movie_candidate_id,required_voter_count,voter_count,filter_completed_count,
-      filter_resolution_status,candidate_acquisition_status,tmdb_movie_id,decision_completed_count)
+      filter_resolution_status,candidate_acquisition_status,candidate_progression_status,candidate_sequence,
+      tmdb_movie_id,decision_completed_count)
     select seed.id,seed.code,seed.request_id,source.creator_user_id,clock_timestamp(),clock_timestamp(),
-      null,2,2,2,'compatible','assigned',${tmdbMovieId},0
+      null,2,2,2,'compatible','pending','inactive',0,null,0
     from feature007_room_seed seed cross join public.rooms source where source.id='${template.id}'::uuid;
     create temporary table feature007_member_seed on commit drop as
       select extensions.gen_random_uuid() id,seed.id room_id,member.user_id,member.is_voter,member.id source_member_id
@@ -129,9 +183,15 @@ export function preassembleDecisionRooms(template: RoomProjection, count: number
       select seed.id,source.clause_ordinal,source.genres
       from feature007_room_seed seed cross join private.room_filter_resolution_genre_clauses source
       where source.room_id='${template.id}'::uuid;
+    insert into public.room_candidate_occurrences(room_id,sequence,tmdb_movie_id,release_year,status)
+      select seed.id,1,${tmdbMovieId},2005,'collecting' from feature007_room_seed seed;
+    update public.rooms set candidate_acquisition_status='assigned',candidate_progression_status='collecting',
+      candidate_sequence=1,tmdb_movie_id=${tmdbMovieId},updated_at=clock_timestamp()
+      where id in(select id from feature007_room_seed);
     select json_agg(json_build_object('id',id,'code',code,'state','ready','voter_count',2,
       'required_voter_count',2,'filter_completed_count',2,'filter_resolution_status','compatible',
-      'candidate_acquisition_status','assigned','decision_completed_count',0) order by code)
+      'candidate_acquisition_status','assigned','candidate_progression_status','collecting',
+      'candidate_sequence',1,'decision_completed_count',0) order by code)
       from feature007_room_seed;
     commit;`;
   const result = spawnSync('docker', ['exec', 'supabase_db_otteroom-room-session', 'psql', '-X',
@@ -144,7 +204,8 @@ export function preassembleDecisionRooms(template: RoomProjection, count: number
         rooms.some(room => !/^[0-9a-f-]{36}$/.test(room.id) || !/^[0-9A-F]{10}$/.test(room.code) ||
           room.state !== 'ready' || room.voter_count !== 2 || room.required_voter_count !== 2 ||
           room.filter_completed_count !== 2 || room.filter_resolution_status !== 'compatible' ||
-          room.candidate_acquisition_status !== 'assigned' || room.decision_completed_count !== 0))
+          room.candidate_acquisition_status !== 'assigned' || room.candidate_progression_status !== 'collecting' ||
+          room.candidate_sequence !== 1 || room.decision_completed_count !== 0))
       throw new Error();
     return rooms;
   } catch { throw new Error('E2E_SAFE_FAILURE'); }
@@ -166,7 +227,8 @@ export async function installAssignedCandidatePresentation(pages: Page[], candid
       if (!roomId || route.request().method() !== 'POST' ||
           Object.keys(body ?? {}).join(',') !== 'room_id' || body.room_id !== roomId) throw new Error();
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
-        outcome: 'available', candidate: { tmdb_movie_id: candidate.tmdbMovieId,
+        outcome: 'available', candidate_sequence: 1, candidate_progression_status: 'collecting',
+        candidate: { tmdb_movie_id: candidate.tmdbMovieId,
           title: candidate.title, release_year: candidate.releaseYear,
           poster_url: candidate.posterUrl === undefined
             ? 'https://image.tmdb.org/t/p/w500/controlled.png' : candidate.posterUrl },
@@ -220,8 +282,32 @@ export async function keyboardDecision(page: Page, value: SafeDecision) {
   // acquisition and Enter delivery in one locator-scoped Playwright action so
   // a recovery render cannot move focus between separate focus and key calls.
   await expect(button).toBeEnabled();
-  await button.press('Enter');
-  await expect(page.getByText(`You chose ${value === 'yes' ? 'Yes' : 'No'}`, { exact: true })).toBeVisible();
+  const progression = page.getByTestId('candidate-progression-status');
+  const previousProgression = await progression.textContent();
+  let submissions = 0;
+  const countSubmission = (request: Request) => {
+    if (request.method() === 'POST' && new URL(request.url()).pathname === decisionPath) submissions++;
+  };
+  page.on('request', countSubmission);
+  try {
+    const [response] = await Promise.all([
+      page.waitForResponse(item => item.request().method() === 'POST' &&
+        new URL(item.url()).pathname === decisionPath),
+      button.press('Enter'),
+    ]);
+    const request = response.request(), body = request.postDataJSON();
+    if (!response.ok() || Object.keys(body ?? {}).sort().join(',') !==
+        'p_decision,p_expected_candidate_sequence,p_expected_tmdb_movie_id,p_room_id' ||
+        body.p_decision !== value) throw new Error('E2E_SAFE_FAILURE');
+    const result = validateOwnDecisionResult(await response.json());
+    const state = acceptedDecisionState(result, value);
+    const acknowledgement = page.getByText(`You chose ${value === 'yes' ? 'Yes' : 'No'}`, { exact: true });
+    await expect.poll(async () => acceptedDecisionViewSatisfied(state,
+      await acknowledgement.isVisible().catch(() => false), previousProgression,
+      await progression.textContent().catch(() => null), result.required_voter_count!), { timeout: 5000 })
+      .toBe(true);
+    expect(submissions).toBe(1);
+  } finally { page.off('request', countSubmission); }
 }
 
 export async function touchSwipeDecision(page: Page, value: SafeDecision) {
@@ -297,7 +383,7 @@ export async function installDecisionOverlap(pages: Page[]) {
   const entries = pages.map(page => ({ page, handler: async (route: Route) => {
     try {
       if (Object.keys(route.request().postDataJSON() ?? {}).sort().join(',') !==
-          'p_decision,p_expected_tmdb_movie_id,p_room_id') throw new Error();
+          'p_decision,p_expected_candidate_sequence,p_expected_tmdb_movie_id,p_room_id') throw new Error();
       held++; if (held === pages.length) arrived(); await gate; await route.continue();
     } catch { failed = true; arrived(); release(); await route.abort('failed').catch(() => {}); }
   }}));

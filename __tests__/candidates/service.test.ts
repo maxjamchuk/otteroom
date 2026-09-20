@@ -6,7 +6,8 @@ const mockClient = { functions: { invoke: mockInvoke }, rpc: mockRpc, from: mock
 jest.mock('../../src/auth/anonymous-session', () => ({ bootstrapAnonymousSession: () => mockBootstrap() }));
 jest.mock('../../src/lib/supabase', () => ({ getSupabase: () => mockClient }));
 const id = '11111111-1111-4111-8111-111111111111';
-const transport = { outcome: 'available', candidate: { tmdb_movie_id: 7, title: 'TMDB Film',
+const transport = { outcome: 'available',candidate_sequence:1,
+  candidate_progression_status:'collecting', candidate: { tmdb_movie_id: 7, title: 'TMDB Film',
   release_year: 2020, poster_url: null } };
 
 beforeEach(() => { jest.clearAllMocks(); mockBootstrap.mockResolvedValue({ user: { id: 'private' } });
@@ -15,7 +16,8 @@ afterEach(() => { expect(mockRpc).not.toHaveBeenCalled(); expect(mockFrom).not.t
   expect(mockChannel).not.toHaveBeenCalled(); });
 
 it('invokes only the authenticated Edge boundary with the room UUID body', async () => {
-  await expect(ensureRoomCandidate(id)).resolves.toEqual({ outcome: 'available', candidate: {
+  await expect(ensureRoomCandidate(id)).resolves.toEqual({ outcome: 'available',candidateSequence:1,
+    candidateProgressionStatus:'collecting', candidate: {
     tmdbMovieId: 7, title: 'TMDB Film', releaseYear: 2020, posterUrl: null } });
   expect(mockInvoke).toHaveBeenCalledWith('room-candidate', { body: { room_id: id } });
   expect(mockBootstrap).toHaveBeenCalledTimes(1);
@@ -27,7 +29,7 @@ it('awaits bootstrap before creating Edge traffic', async () => {
   release(); await result; expect(mockInvoke).toHaveBeenCalledTimes(1);
 });
 
-it.each(['not_found','not_ready','no_candidates','metadata_unavailable'] as const)(
+it.each(['not_found','not_ready','no_candidates','refresh_required'] as const)(
   'preserves exact safe %s response', async outcome => {
     mockInvoke.mockResolvedValue({ data: { outcome }, error: null });
     await expect(ensureRoomCandidate(id)).resolves.toEqual({ outcome });

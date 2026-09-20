@@ -452,12 +452,14 @@ begin
         perform pg_temp.require(results[i]=jsonb_build_object('outcome','full','room_id',null,'room_code',null,'room_state',null,
           'is_creator',null,'is_voter',null,'voter_count',null,'required_voter_count',null,
           'filter_completed_count',null,'filter_resolution_status',null,'candidate_acquisition_status',null,
+          'candidate_progression_status',null,'candidate_sequence',null,
           'decision_completed_count',null),'full exact all-null private projection');
       else
         perform pg_temp.require(results[i]=jsonb_build_object('outcome',results[i]->>'outcome','room_id',rid,'room_code',code,
           'room_state',results[i]->>'room_state','is_creator',false,'is_voter',true,
           'voter_count',(results[i]->>'voter_count')::integer,'required_voter_count',target,
           'filter_completed_count',0,'filter_resolution_status','pending','candidate_acquisition_status','pending',
+          'candidate_progression_status','inactive','candidate_sequence',0,
           'decision_completed_count',0)
           and (results[i]->>'voter_count')::integer between initial and target
           and results[i]->>'room_state'=case when (results[i]->>'voter_count')::integer=target then 'ready' else 'waiting' end,
@@ -602,13 +604,16 @@ select * from pg_temp.cross_room_trial();
 select results_eq(
   $$select relname::text collate "default" from pg_class where relnamespace='public'::regnamespace
     and relkind in ('r','p') order by relname$$,
-  $$values ('candidate_decisions'::text),('movie_candidates'),('participant_filters'),('room_members'),('rooms')$$,
-  'exactly five application relations; separate membership, filter, and decision authorities');
+  $$values ('candidate_decisions'::text),('movie_candidates'),('participant_filters'),
+    ('room_candidate_occurrences'),('room_members'),('rooms')$$,
+  'exactly six application relations; separate occurrence, membership, filter, and decision authorities');
 select results_eq(
   $$select attname::text collate "default",format_type(atttypid,atttypmod) collate "default",attnotnull,
     attgenerated::text collate "default" from pg_attribute
     where attrelid=to_regclass('public.rooms') and attnum>0 and not attisdropped order by attname$$,
   $$values ('candidate_acquisition_status'::text,'candidate_acquisition_status'::text,true,''::text),
+    ('candidate_progression_status','candidate_progression_status',true,''),
+    ('candidate_sequence','integer',true,''),
     ('code','text',true,''),('created_at','timestamp with time zone',true,''),
     ('creation_request_id','uuid',true,''),('creator_user_id','uuid',true,''),
     ('decision_completed_count','integer',true,''),
@@ -617,7 +622,7 @@ select results_eq(
     ('movie_candidate_id','text',false,''),('required_voter_count','integer',true,''),
     ('state','text',true,'s'),('tmdb_movie_id','bigint',false,''),
     ('updated_at','timestamp with time zone',true,''),('voter_count','integer',true,'')$$,
-  'exact fifteen rooms columns/types/nullability/generated state; no host/guest');
+  'exact seventeen rooms columns/types/nullability/generated state; no host/guest');
 select results_eq(
   $$select attname::text collate "default",format_type(atttypid,atttypmod) collate "default",attnotnull,
     attgenerated::text collate "default" from pg_attribute
@@ -631,6 +636,8 @@ select results_eq(
     where a.attrelid=to_regclass('public.rooms') and a.attnum>0 and not a.attisdropped
     and a.attgenerated='' order by a.attname$$,
   $$values ('candidate_acquisition_status'::text,'''pending''::candidate_acquisition_status'::text),
+    ('candidate_progression_status','''inactive''::candidate_progression_status'),
+    ('candidate_sequence','0'),
     ('code',null),('created_at','transaction_timestamp()'),('creation_request_id',null),
     ('creator_user_id',null),('decision_completed_count','0'),('filter_completed_count','0'),('filter_resolution_status','''pending''::filter_resolution_status'),
     ('id','extensions.gen_random_uuid()'),('movie_candidate_id',null),
@@ -651,17 +658,15 @@ select results_eq(
   'generated state uses only voter count and target');
 select results_eq(
   $$select conname::text collate "default",contype::text collate "default",pg_get_constraintdef(oid) collate "default",
-    convalidated,condeferrable,condeferred from pg_constraint where conrelid=to_regclass('public.rooms') order by conname$$,
+    convalidated,condeferrable,condeferred from pg_constraint where conrelid=to_regclass('public.rooms')
+    and conname not in('rooms_candidate_progression_shape_check','rooms_candidate_sequence_nonnegative_check',
+      'rooms_current_candidate_occurrence_fkey','rooms_progression_ready_compatible_check') order by conname$$,
   $$values
     ('rooms_candidate_requires_ready_check'::text,'c'::text,'CHECK (((movie_candidate_id IS NULL) OR (voter_count = required_voter_count)))'::text,true,false,false),
-    ('rooms_candidate_status_id_check','c',$c$CHECK (((candidate_acquisition_status = 'assigned'::candidate_acquisition_status) = (tmdb_movie_id IS NOT NULL)))$c$,true,false,false),
-    ('rooms_candidate_terminal_requires_compatible_check','c',$c$CHECK (((candidate_acquisition_status = 'pending'::candidate_acquisition_status) OR ((state = 'ready'::text) AND (voter_count = required_voter_count) AND (filter_completed_count = required_voter_count) AND (filter_resolution_status = 'compatible'::filter_resolution_status))))$c$,true,false,false),
     ('rooms_code_format_check','c',$c$CHECK ((code ~ '^[0-9A-F]{10}$'::text))$c$,true,false,false),
     ('rooms_code_key','u','UNIQUE (code)',true,false,false),
     ('rooms_creator_creation_request_key','u','UNIQUE (creator_user_id, creation_request_id)',true,false,false),
     ('rooms_creator_user_id_fkey','f','FOREIGN KEY (creator_user_id) REFERENCES auth.users(id) ON DELETE RESTRICT',true,false,false),
-    ('rooms_decision_completed_count_bounds_check','c',$c$CHECK (((decision_completed_count >= 0) AND (decision_completed_count <= required_voter_count)))$c$,true,false,false),
-    ('rooms_decisions_require_assigned_candidate_check','c',$c$CHECK (((decision_completed_count = 0) OR ((state = 'ready'::text) AND (voter_count = required_voter_count) AND (filter_completed_count = required_voter_count) AND (filter_resolution_status = 'compatible'::filter_resolution_status) AND (candidate_acquisition_status = 'assigned'::candidate_acquisition_status) AND (tmdb_movie_id IS NOT NULL))))$c$,true,false,false),
     ('rooms_filter_completed_count_check','c','CHECK (((filter_completed_count >= 0) AND (filter_completed_count <= required_voter_count)))',true,false,false),
     ('rooms_filter_resolution_requires_complete_check','c',$c$CHECK (((filter_resolution_status = 'pending'::filter_resolution_status) OR ((state = 'ready'::text) AND (filter_completed_count = required_voter_count))))$c$,true,false,false),
     ('rooms_filters_require_assembled_check','c',$c$CHECK (((filter_completed_count = 0) OR (voter_count = required_voter_count)))$c$,true,false,false),
@@ -670,16 +675,18 @@ select results_eq(
     ('rooms_required_voter_count_check','c','CHECK ((required_voter_count >= 2))',true,false,false),
     ('rooms_tmdb_movie_id_positive_check','c','CHECK (((tmdb_movie_id IS NULL) OR (tmdb_movie_id > 0)))',true,false,false),
     ('rooms_voter_count_check','c','CHECK (((voter_count >= 0) AND (voter_count <= required_voter_count)))',true,false,false)$$,
-  'exact named validated immediate room constraints');
+  'preserved room constraints remain exact while Feature 008 progression constraints are tested separately');
 select results_eq(
   $$select conname::text collate "default",pg_get_constraintdef(oid) collate "default",convalidated,condeferrable,condeferred
     from pg_constraint where conrelid=to_regclass('public.room_members') order by conname$$,
   $$values ('room_members_pkey'::text,'PRIMARY KEY (id)'::text,true,false,false),
     ('room_members_room_id_fkey','FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE',true,false,false),
+    ('room_members_room_id_id_key','UNIQUE (room_id, id)',true,false,false),
     ('room_members_room_user_key','UNIQUE (room_id, user_id)',true,false,false),
     ('room_members_user_id_fkey','FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE RESTRICT',true,false,false)$$,
   'exact member constraints and cleanup/Auth deletion rules');
-select ok(confupdtype='a' and confdeltype=case when conname='room_members_room_id_fkey' then 'c'::"char" else 'r'::"char" end,
+select ok(confupdtype='a' and confdeltype=case when conname='room_members_room_id_fkey' then 'c'::"char"
+    when conname='rooms_current_candidate_occurrence_fkey' then 'a'::"char" else 'r'::"char" end,
   conname || ': exact FK actions') from pg_constraint
   where conrelid in (to_regclass('public.rooms'),to_regclass('public.room_members')) and contype='f';
 select results_eq(
@@ -690,11 +697,12 @@ select results_eq(
     from pg_index i join pg_class c on c.oid=i.indexrelid join pg_am am on am.oid=c.relam
     where i.indrelid in (to_regclass('public.rooms'),to_regclass('public.room_members')) order by c.relname$$,
   $$values ('room_members_pkey'::text,'btree'::text,true,true,true,'id'::text,null::text,1,1,null::text),
+    ('room_members_room_id_id_key','btree',true,true,true,'room_id','id',2,2,null),
     ('room_members_room_user_key','btree',true,true,true,'room_id','user_id',2,2,null),
     ('rooms_code_key','btree',true,true,true,'code',null,1,1,null),
     ('rooms_creator_creation_request_key','btree',true,true,true,'creator_user_id','creation_request_id',2,2,null),
     ('rooms_pkey','btree',true,true,true,'id',null,1,1,null)$$,
-  'exact five valid unique B-tree indexes; no guest/speculative index');
+  'exact six valid unique B-tree indexes; no guest/speculative index');
 select is((select count(*) from pg_trigger where tgrelid in (to_regclass('public.rooms'),to_regclass('public.room_members'))
   and not tgisinternal),0::bigint,'no count/state/timestamp application trigger');
 -- Owner-only observation; each tested operation changes to authenticated with
@@ -774,6 +782,7 @@ begin
       expected:=jsonb_build_array(jsonb_build_object('outcome','created','room_id',rid,'room_code',code,'room_state','waiting',
         'is_creator',true,'is_voter',voting,'voter_count',initial,'required_voter_count',target,
         'filter_completed_count',0,'filter_resolution_status','pending','candidate_acquisition_status','pending',
+        'candidate_progression_status','inactive','candidate_sequence',0,
         'decision_completed_count',0));
       return next ok(result=expected and code ~ '^[0-9A-F]{10}$' and rid is not null,label || ': exact singleton twelve-field created projection');
       return next ok((select creator_user_id=creator and creation_request_id=request and voter_count=initial
@@ -806,7 +815,8 @@ begin
         expected:=jsonb_build_array(jsonb_build_object('outcome','joined','room_id',rid,'room_code',code,
           'room_state',case when initial+n=target then 'ready' else 'waiting' end,'is_creator',false,'is_voter',true,
           'voter_count',initial+n,'required_voter_count',target,'filter_completed_count',0,
-          'filter_resolution_status','pending','candidate_acquisition_status','pending','decision_completed_count',0));
+          'filter_resolution_status','pending','candidate_acquisition_status','pending',
+          'candidate_progression_status','inactive','candidate_sequence',0,'decision_completed_count',0));
         return next ok(result=expected and after_counts[1]-before_counts[1]=0
           and after_counts[2]-before_counts[2]=1 and after_counts[3]-before_counts[3]=1,
           label || ': admission '||n||' exact result and one member/room mutation');
@@ -823,6 +833,7 @@ begin
       expected:=jsonb_build_array(jsonb_build_object('outcome','already_created','room_id',rid,'room_code',code,
         'room_state','ready','is_creator',true,'is_voter',voting,'voter_count',target,
         'required_voter_count',target,'filter_completed_count',0,'filter_resolution_status','pending','candidate_acquisition_status','pending',
+        'candidate_progression_status','inactive','candidate_sequence',0,
         'decision_completed_count',0));
       return next ok(result=expected and pg_temp.snapshot()=before_state and pg_temp.coherent(),label || ': Ready create retry returns original current configuration with ZERO UPDATE');
       result:=pg_temp.rpc(creator,format('select * from public.join_room(%L)',code));
@@ -832,6 +843,7 @@ begin
       return next ok(result=jsonb_build_array(jsonb_build_object('outcome','full','room_id',null,'room_code',null,'room_state',null,
         'is_creator',null,'is_voter',null,'voter_count',null,'required_voter_count',null,
         'filter_completed_count',null,'filter_resolution_status',null,'candidate_acquisition_status',null,
+        'candidate_progression_status',null,'candidate_sequence',null,
         'decision_completed_count',null))
         and pg_temp.snapshot()=before_state and pg_temp.coherent(),label || ': new full rejection exact NULL shape and no writes');
       delete from public.rooms where id=rid;
@@ -906,13 +918,13 @@ select results_eq(
     p.proargnames collate "default",p.proargmodes,p.proallargtypes::regtype[]::text collate "default",p.proretset
     from pg_proc p where p.pronamespace='public'::regnamespace and p.proname in ('create_room','join_room') order by p.proname$$,
   $$values ('create_room'::text,3,0,
-    array['p_creation_request_id','p_required_voter_count','p_creator_is_voter','outcome','room_id','room_code','room_state','is_creator','is_voter','voter_count','required_voter_count','filter_completed_count','filter_resolution_status','candidate_acquisition_status','decision_completed_count'],
-    array['i','i','i','t','t','t','t','t','t','t','t','t','t','t','t']::"char"[],
-    '{uuid,integer,boolean,text,uuid,text,text,boolean,boolean,integer,integer,integer,filter_resolution_status,candidate_acquisition_status,integer}'::text,true),
-    ('join_room',1,0,array['p_room_code','outcome','room_id','room_code','room_state','is_creator','is_voter','voter_count','required_voter_count','filter_completed_count','filter_resolution_status','candidate_acquisition_status','decision_completed_count'],
-    array['i','t','t','t','t','t','t','t','t','t','t','t','t']::"char"[],
-    '{text,text,uuid,text,text,boolean,boolean,integer,integer,integer,filter_resolution_status,candidate_acquisition_status,integer}',true)$$,
-  'exact create/join arguments, no defaults/identity/old overload, twelve ordered results');
+    array['p_creation_request_id','p_required_voter_count','p_creator_is_voter','outcome','room_id','room_code','room_state','is_creator','is_voter','voter_count','required_voter_count','filter_completed_count','filter_resolution_status','candidate_acquisition_status','candidate_progression_status','candidate_sequence','decision_completed_count'],
+    array['i','i','i','t','t','t','t','t','t','t','t','t','t','t','t','t','t']::"char"[],
+    '{uuid,integer,boolean,text,uuid,text,text,boolean,boolean,integer,integer,integer,filter_resolution_status,candidate_acquisition_status,candidate_progression_status,integer,integer}'::text,true),
+    ('join_room',1,0,array['p_room_code','outcome','room_id','room_code','room_state','is_creator','is_voter','voter_count','required_voter_count','filter_completed_count','filter_resolution_status','candidate_acquisition_status','candidate_progression_status','candidate_sequence','decision_completed_count'],
+    array['i','t','t','t','t','t','t','t','t','t','t','t','t','t','t']::"char"[],
+    '{text,text,uuid,text,text,boolean,boolean,integer,integer,integer,filter_resolution_status,candidate_acquisition_status,candidate_progression_status,integer,integer}',true)$$,
+  'exact create/join arguments, no defaults/identity/old overload, fourteen ordered results');
 select ok(to_regprocedure('public.create_room(uuid)') is null,'old one-argument create removed');
 select results_eq(
   $$select n.nspname::text collate "default",p.proname::text collate "default",p.prosecdef,
@@ -941,24 +953,24 @@ select ok((select array_agg(a.grantee::regrole::text||':'||a.privilege_type||':'
     =array['authenticated:EXECUTE:false','postgres:EXECUTE:false'],fn||': exact EXECUTE ACL, no PUBLIC/anon')
   from (values ('public.create_room(uuid,integer,boolean)'),('public.join_room(text)'),
     ('public.get_my_participant_filter(uuid)'),
-    ('public.get_room_candidate_decision(uuid,bigint)'),
+    ('public.get_room_candidate_decision(uuid,integer,bigint)'),
     ('public.resolve_common_filters(uuid)'),
     ('public.submit_my_participant_filter(uuid,participant_genre[],smallint,smallint)'),
-    ('public.submit_room_candidate_decision(uuid,bigint,candidate_decision_value)'),
+    ('public.submit_room_candidate_decision(uuid,integer,bigint,candidate_decision_value)'),
     ('private.is_room_member(uuid)')) x(fn);
 select ok(prosrc !~* '\mexecute\M|otteroom.test|pg_advisory' and prosrc ~ 'auth.uid\(\)' and prosrc ~ 'public.room_members',
   proname||': fixed qualified SQL, auth.uid only, no dynamic SQL/test hooks/advisory production lock')
   from pg_proc where oid in (to_regprocedure('public.create_room(uuid,integer,boolean)'),to_regprocedure('public.join_room(text)'),
     to_regprocedure('public.get_my_participant_filter(uuid)'),
-    to_regprocedure('public.get_room_candidate_decision(uuid,bigint)'),
+    to_regprocedure('public.get_room_candidate_decision(uuid,integer,bigint)'),
     to_regprocedure('public.resolve_common_filters(uuid)'),
     to_regprocedure('public.submit_my_participant_filter(uuid,participant_genre[],smallint,smallint)'),
-    to_regprocedure('public.submit_room_candidate_decision(uuid,bigint,candidate_decision_value)'),
+    to_regprocedure('public.submit_room_candidate_decision(uuid,integer,bigint,candidate_decision_value)'),
     to_regprocedure('private.is_room_member(uuid)'));
 select results_eq(
   $$select c.relname::text collate "default",c.relrowsecurity,pg_get_userbyid(c.relowner)::text collate "default"
-    from pg_class c where c.oid in (to_regclass('public.rooms'),to_regclass('public.room_members'),to_regclass('public.movie_candidates'),to_regclass('public.participant_filters'),to_regclass('public.candidate_decisions')) order by c.relname$$,
-  $$values ('candidate_decisions'::text,true,'postgres'::text),('movie_candidates',true,'postgres'),('participant_filters',true,'postgres'),('room_members',true,'postgres'),('rooms',true,'postgres')$$,
+    from pg_class c where c.oid in (to_regclass('public.rooms'),to_regclass('public.room_members'),to_regclass('public.movie_candidates'),to_regclass('public.participant_filters'),to_regclass('public.candidate_decisions'),to_regclass('public.room_candidate_occurrences')) order by c.relname$$,
+  $$values ('candidate_decisions'::text,true,'postgres'::text),('movie_candidates',true,'postgres'),('participant_filters',true,'postgres'),('room_candidate_occurrences',true,'postgres'),('room_members',true,'postgres'),('rooms',true,'postgres')$$,
   'all application tables postgres-owned and RLS enabled');
 select results_eq(
   $$select polname::text collate "default",polcmd::text collate "default",polpermissive,
@@ -966,31 +978,33 @@ select results_eq(
     from pg_policy where polrelid=to_regclass('public.rooms') order by polname$$,
   $$values ('rooms_select_member'::text,'r'::text,true,true,'private.is_room_member(id)'::text,true)$$,
   'one authenticated rooms SELECT policy through private member helper');
-select is((select count(*) from pg_policy where polrelid in (to_regclass('public.room_members'),to_regclass('public.movie_candidates'),to_regclass('public.participant_filters'),to_regclass('public.candidate_decisions'))),
-  0::bigint,'member, filter, candidate catalog, and decision detail have no client policy');
+select is((select count(*) from pg_policy where polrelid in (to_regclass('public.room_members'),to_regclass('public.movie_candidates'),to_regclass('public.participant_filters'),to_regclass('public.candidate_decisions'),to_regclass('public.room_candidate_occurrences'))),
+  0::bigint,'member, filter, occurrence, candidate catalog, and decision detail have no client policy');
 select is((select count(*) from pg_class c cross join lateral aclexplode(coalesce(c.relacl,acldefault('r',c.relowner))) a
-  where c.oid in (to_regclass('public.rooms'),to_regclass('public.room_members'),to_regclass('public.movie_candidates'),to_regclass('public.participant_filters'),to_regclass('public.candidate_decisions'))
+  where c.oid in (to_regclass('public.rooms'),to_regclass('public.room_members'),to_regclass('public.movie_candidates'),to_regclass('public.participant_filters'),to_regclass('public.candidate_decisions'),to_regclass('public.room_candidate_occurrences'))
   and a.grantee in (0,'anon'::regrole::oid,'authenticated'::regrole::oid)),0::bigint,'no PUBLIC/client table-wide privileges');
 select results_eq(
   $$select c.relname::text collate "default",a.attname::text collate "default",p.grantee::regrole::text collate "default",
     p.privilege_type collate "default",p.is_grantable from pg_attribute a join pg_class c on c.oid=a.attrelid
-    cross join lateral aclexplode(a.attacl) p where a.attrelid in (to_regclass('public.rooms'),to_regclass('public.room_members'),to_regclass('public.movie_candidates'),to_regclass('public.participant_filters'),to_regclass('public.candidate_decisions'))
+    cross join lateral aclexplode(a.attacl) p where a.attrelid in (to_regclass('public.rooms'),to_regclass('public.room_members'),to_regclass('public.movie_candidates'),to_regclass('public.participant_filters'),to_regclass('public.candidate_decisions'),to_regclass('public.room_candidate_occurrences'))
     and p.grantee in (0,'anon'::regrole::oid,'authenticated'::regrole::oid) order by c.relname,a.attname,p.grantee,p.privilege_type$$,
   $$values ('rooms'::text,'candidate_acquisition_status'::text,'authenticated'::text,'SELECT'::text,false),
+    ('rooms','candidate_progression_status','authenticated','SELECT',false),
+    ('rooms','candidate_sequence','authenticated','SELECT',false),
     ('rooms','code','authenticated','SELECT',false),
     ('rooms','decision_completed_count','authenticated','SELECT',false),
     ('rooms','filter_completed_count','authenticated','SELECT',false),
     ('rooms','filter_resolution_status','authenticated','SELECT',false),('rooms','id','authenticated','SELECT',false),
     ('rooms','required_voter_count','authenticated','SELECT',false),('rooms','state','authenticated','SELECT',false),
     ('rooms','voter_count','authenticated','SELECT',false)$$,
-  'exact nine column grants; no residual identity/request/member/filter/catalog privilege');
+  'exact eleven column grants; no residual identity/request/member/filter/catalog privilege');
 select ok(not has_table_privilege(role_name,table_name,privilege_name),role_name||' denied table-wide '||table_name||' '||privilege_name)
   from (values ('anon'),('authenticated')) r(role_name)
-  cross join (values ('public.rooms'),('public.room_members'),('public.participant_filters'),('public.movie_candidates'),('public.candidate_decisions')) t(table_name)
+  cross join (values ('public.rooms'),('public.room_members'),('public.participant_filters'),('public.movie_candidates'),('public.candidate_decisions'),('public.room_candidate_occurrences')) t(table_name)
   cross join (values ('SELECT'),('INSERT'),('UPDATE'),('DELETE'),('TRUNCATE'),('REFERENCES'),('TRIGGER'),('MAINTAIN')) p(privilege_name);
 select ok(not has_any_column_privilege(role_name,table_name,privilege_name),role_name||' denied column '||table_name||' '||privilege_name)
   from (values ('anon'),('authenticated')) r(role_name)
-  cross join (values ('public.room_members'),('public.participant_filters'),('public.movie_candidates'),('public.candidate_decisions')) t(table_name)
+  cross join (values ('public.room_members'),('public.participant_filters'),('public.movie_candidates'),('public.candidate_decisions'),('public.room_candidate_occurrences')) t(table_name)
   cross join (values ('SELECT'),('INSERT'),('UPDATE'),('REFERENCES')) p(privilege_name);
 select ok(not has_any_column_privilege(role_name,'public.rooms',privilege_name),role_name||' denied rooms column '||privilege_name)
   from (values ('anon','SELECT'),('anon','INSERT'),('anon','UPDATE'),('anon','REFERENCES'),
@@ -1072,6 +1086,7 @@ begin
     return next ok(result=jsonb_build_array(jsonb_build_object('outcome','invalid_code','room_id',null,'room_code',null,'room_state',null,
       'is_creator',null,'is_voter',null,'voter_count',null,'required_voter_count',null,
       'filter_completed_count',null,'filter_resolution_status',null,'candidate_acquisition_status',null,
+      'candidate_progression_status',null,'candidate_sequence',null,
       'decision_completed_count',null)) and pg_temp.snapshot()=before_state and pg_temp.coherent(),
       'malformed/NULL invitation exact rejection with zero writes');
   end loop;
@@ -1079,6 +1094,7 @@ begin
   return next ok(result=jsonb_build_array(jsonb_build_object('outcome','not_found','room_id',null,'room_code',null,'room_state',null,
     'is_creator',null,'is_voter',null,'voter_count',null,'required_voter_count',null,
     'filter_completed_count',null,'filter_resolution_status',null,'candidate_acquisition_status',null,
+    'candidate_progression_status',null,'candidate_sequence',null,
     'decision_completed_count',null)) and pg_temp.snapshot()=before_state and pg_temp.coherent(),
     'well-formed nonexistent invitation exact rejection with zero writes');
   delete from public.rooms where id=rid;

@@ -98,6 +98,9 @@ export async function searchTmdbCandidate(constraint: CandidateConstraint,
     random: dependencies.random ?? Math.random };
   const base = dependencies.baseUrl ?? DEFAULT_BASE;
   const seen = new Set<number>();
+  const excluded = new Set(constraint.excludedTmdbMovieIds ?? []);
+  if ([...excluded].some(id => !positiveInteger(id)))
+    return { kind: 'search_incomplete', reason: 'internal' };
 
   const shard = async (from: string, to: string): Promise<SearchResult> => {
     let first;
@@ -143,7 +146,7 @@ export async function searchTmdbCandidate(constraint: CandidateConstraint,
       for (const movie of page.results) {
         if (seen.has(movie.id)) continue;
         seen.add(movie.id); dependencies.onMovieEvaluated?.(movie);
-        if (eligibleMovie(movie, constraint)) return { kind: 'match', movie };
+        if (!excluded.has(movie.id) && eligibleMovie(movie, constraint)) return { kind: 'match', movie };
       }
     }
     if (rawResultCount !== expectedResults)

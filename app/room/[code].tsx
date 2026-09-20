@@ -14,6 +14,7 @@ import { InvitationQr } from '../../src/rooms/invitation-qr';
 import { joinRoom } from '../../src/rooms/service';
 import { joinRoomState, joinErrorState, malformedInvitationState, type AcceptedRoomState } from '../../src/rooms/state';
 import { useRoomSubscription } from '../../src/rooms/use-room-subscription';
+import { CandidateProgressionStatus } from '../../src/progression/candidate-progression-status';
 
 export default function RoomRouteScreen() {
   const params = useLocalSearchParams<{ code?: string | string[] }>();
@@ -82,13 +83,13 @@ function RoomEntry({ code }: { code: string }) {
 
 function AcceptedRoom({ initial }: { initial: AcceptedRoomState & { invitation?: string } }) {
   const { room, error, retry, retrying, observeFilterProgress,
-    observeResolutionStatus } = useRoomSubscription(initial);
+    observeResolutionStatus, synchronizeRoom } = useRoomSubscription(initial);
   // An accepted RPC is immediately visible, including intermediate Waiting counts.
   const state = room ?? initial;
   const filters = useParticipantFilter(state, error, observeFilterProgress);
   const resolution = useCommonFilterResolution(state, observeResolutionStatus);
-  const candidate = useRoomCandidate(state);
-  const decision = useCandidateDecision(state, candidate);
+  const candidate = useRoomCandidate(state, synchronizeRoom);
+  const decision = useCandidateDecision(state, candidate, synchronizeRoom);
   const recognizableCandidate = candidate.candidate !== null &&
     (candidate.attempt === 'loading-poster' || candidate.attempt === 'poster-error' ||
       candidate.attempt === 'available' || candidate.attempt === 'no-poster');
@@ -121,6 +122,7 @@ function AcceptedRoom({ initial }: { initial: AcceptedRoomState & { invitation?:
         {!state.filtersComplete && <Text>Waiting for voters to finish their filters.</Text>}
       </>}
       {state.filtersComplete && <CommonFilterResolutionPanel model={resolution} />}
+    <CandidateProgressionStatus room={state} decision={decision} />
     {recognizableCandidate
       ? <CandidateDecisionSurface candidate={candidate} decision={decision} />
       : <CandidateCard model={candidate} />}
