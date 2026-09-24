@@ -1,9 +1,11 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { localExecutable } from './safe-process.mjs';
+import { localSupabaseArgs } from './local-supabase.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const canonical = 'src/types/database.generated.ts';
@@ -49,8 +51,14 @@ async function generate({ fd, spawnProcess, signal, timeoutMs }) {
         if (stopped || code !== 0) reject(new TypesError('GENERATOR'));
         else resolve();
       };
-      child = spawnProcess(command, args, {
-        cwd: root, env: { ...process.env, CI: '1' },
+      child = spawnProcess(command, localSupabaseArgs(args), {
+        cwd: root, env: {
+          ...process.env,
+          CI: '1',
+          DO_NOT_TRACK: '1',
+          SUPABASE_TELEMETRY_DISABLED: '1',
+          XDG_CONFIG_HOME: path.join(os.tmpdir(), 'otteroom-supabase-config'),
+        },
         detached: process.platform !== 'win32', stdio: ['ignore', fd, 'pipe'],
       });
       child.stderr.resume();

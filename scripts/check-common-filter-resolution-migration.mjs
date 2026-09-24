@@ -6,10 +6,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { localExecutable, runManagedProcess } from './safe-process.mjs';
+import { localSupabaseArgs, localSupabaseConfig, localSupabaseContainer, localSupabaseRuntime } from './local-supabase.mjs';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
-const project='otteroom-room-session';
-const container=`supabase_db_${project}`;
+const runtime=localSupabaseRuntime();
+const project=runtime.project;
+const container=localSupabaseContainer();
 const env={...process.env,
   PATH:`${path.join(root,'node_modules/.bin')}${path.delimiter}${process.env.PATH??''}`,
   CI:'1',DO_NOT_TRACK:'1',SUPABASE_TELEMETRY_DISABLED:'1'};
@@ -50,8 +52,8 @@ async function portUnused(){return await new Promise(resolve=>{const socket=net.
 process.once('SIGINT',onInt);process.once('SIGTERM',onTerm);
 try{
   if(process.argv.length!==2)fail();
-  const config=await fs.readFile(path.join(root,'supabase/config.toml'),'utf8');
-  if(!/^project_id = "otteroom-room-session"$/m.test(config)
+  const config=await fs.readFile(localSupabaseConfig(),'utf8');
+  if(!new RegExp(`^project_id = "${project}"$`,'m').test(config)
     ||!/^schemas = \["public", "graphql_public"\]$/m.test(config))fail();
   const handle=await fs.open(lock,'wx',0o600);locked=true;await handle.close();
   const info=(await bounded('docker',['inspect','--format','{{.State.Running}} {{index .Config.Labels "com.supabase.cli.project"}}',container],{cap:1024})).trim();
@@ -68,7 +70,7 @@ try{
   const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
   const typesBefore=digest(await fs.readFile(canonical));
   stage='feature004-reset';resetStarted=true;
-  await managed(cli,['db','reset','--local','--version','20260911000000','--no-seed']);
+  await managed(cli,localSupabaseArgs(['db','reset','--local','--version','20260911000000','--no-seed']));
   stage='feature004-fixtures';
   let snapshot=await bounded('docker',sqlArgs,{input:await fs.readFile(
     path.join(root,'supabase/tests/migration/common_filter_resolution.before.sql'),'utf8')});
@@ -81,7 +83,7 @@ try{
       ||row.filter_completed_count!==[0,1,3,2][index]
       ||row.movie_candidate_id!==([null,'fixture-clockwork-orchard',null,'fixture-cloud-tram-four'][index])))fail();
   receipt('legacy-rooms=4 members=10 filters=6 fixture-candidates=4 synthetic-users=9 gotrue-signups=0');
-  stage='actual-cutover';await managed(cli,['migration','up','--local']);
+  stage='actual-cutover';await managed(cli,localSupabaseArgs(['migration','up','--local']));
   stage='compatibility';
   const variable=snapshot.trim().replaceAll('\\','\\\\').replaceAll("'","\\'");
   await managed('docker',sqlArgs,{input:`\\set feature005_snapshot '${variable}'\n${await fs.readFile(
@@ -94,7 +96,7 @@ try{
   process.exitCode=abort.signal.aborted?(abort.signal.reason==='SIGINT'?130:143):1;
 }finally{
   if(resetStarted){try{
-    await managed(localExecutable('supabase'),['db','reset','--local','--no-seed'],{signal:null});
+    await managed(localExecutable('supabase'),localSupabaseArgs(['db','reset','--local','--no-seed']),{signal:null});
     const empty=await bounded('docker',sqlArgs,{signal:null,input:`set statement_timeout='5s';
       select not exists(select 1 from public.rooms) and not exists(select 1 from public.room_members)
       and not exists(select 1 from public.participant_filters)
@@ -107,7 +109,8 @@ try{
       and not exists(select 1 from auth.users)
       and to_regprocedure('public.resolve_common_filters(uuid)') is not null
       and to_regprocedure('public.prepare_room_tmdb_candidate(uuid,uuid)') is not null
-      and to_regprocedure('public.commit_room_tmdb_candidate(uuid,uuid,integer,bigint,smallint,integer[],boolean)') is not null
+      and to_regprocedure('public.commit_room_tmdb_candidate(uuid,uuid,integer,bigint,smallint,integer[],boolean,bigint,numeric)') is not null
+      and to_regprocedure('public.commit_room_tmdb_candidate(uuid,uuid,integer,bigint,smallint,integer[],boolean)') is null
       and to_regprocedure('public.commit_room_tmdb_no_candidates(uuid,uuid,integer)') is not null;`});
     if(empty.trim()!=='t')fail();receipt('latest-reset=true owned-fixtures=0');
   }catch{receipt('cleanup=FAIL');process.exitCode=1;}}

@@ -81,6 +81,7 @@ begin
     perform extensions.dblink_exec(own,format(
       'insert into auth.users(id) values(%1$L),(%2$L),(%3$L);'
       'insert into public.rooms(id,code,creation_request_id,creator_user_id,required_voter_count,voter_count,filter_completed_count) values(%4$L,%5$L,%6$L,%7$L,%8$s,%8$s,%9$s);'
+      'insert into private.room_selection_rules(room_id,rule_set_kind,candidate_ordering,metadata_language,genre_mode,agreement_numerator,agreement_denominator) values(%4$L,''legacy_005_006_008'',''legacy_source_order'',''en-US'',''or'',2,3);'
       'insert into public.room_members(id,room_id,user_id,is_voter) values(%10$L,%4$L,%1$L,true),(%11$L,%4$L,%2$L,true);',
       creator,v1,v2,rid,code,extensions.gen_random_uuid(),creator,target,initial,m0,m1));
     if target=3 then perform extensions.dblink_exec(own,format(
@@ -228,6 +229,7 @@ begin
     perform extensions.dblink_exec(own,format(
       'insert into auth.users(id) values(%1$L),(%2$L);'
       'insert into public.rooms(id,code,creation_request_id,creator_user_id,required_voter_count,voter_count,filter_completed_count) values(%3$L,%4$L,%5$L,%1$L,2,2,1);'
+      'insert into private.room_selection_rules(room_id,rule_set_kind,candidate_ordering,metadata_language,genre_mode,agreement_numerator,agreement_denominator) values(%3$L,''legacy_005_006_008'',''legacy_source_order'',''en-US'',''or'',2,3);'
       'insert into public.room_members(id,room_id,user_id,is_voter) values(%6$L,%3$L,%1$L,true),(%7$L,%3$L,%2$L,true);'
       'insert into public.participant_filters(room_member_id,genres,release_year_from,release_year_to) values(%7$L,''{comedy}'',2000,2020)',
       recovering_user,other_user,rid,code,extensions.gen_random_uuid(),recovering_member,other_member));
@@ -338,6 +340,8 @@ insert into public.rooms(id,code,creation_request_id,creator_user_id,required_vo
   voter_count,filter_completed_count) values
   ('05210000-0000-4000-a000-000000000001','F500000101','05220000-0000-4000-a000-000000000001',
    '05200000-0000-4000-a000-000000000001',2,2,2);
+insert into private.room_selection_rules(room_id,rule_set_kind,candidate_ordering,metadata_language,genre_mode,agreement_numerator,agreement_denominator)
+values('05210000-0000-4000-a000-000000000001','legacy_005_006_008','legacy_source_order','en-US','or',2,3);
 insert into public.room_members(id,room_id,user_id,is_voter) values
   ('05230000-0000-4000-a000-000000000001','05210000-0000-4000-a000-000000000001','05200000-0000-4000-a000-000000000001',true),
   ('05230000-0000-4000-a000-000000000002','05210000-0000-4000-a000-000000000001','05200000-0000-4000-a000-000000000002',true);

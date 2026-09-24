@@ -6,10 +6,12 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { localExecutable, runManagedProcess } from './safe-process.mjs';
+import { localSupabaseArgs, localSupabaseConfig, localSupabaseContainer, localSupabaseRuntime } from './local-supabase.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const project = 'otteroom-room-session';
-const container = `supabase_db_${project}`;
+const runtime = localSupabaseRuntime();
+const project = runtime.project;
+const container = localSupabaseContainer();
 const env = { ...process.env, PATH: `${path.join(root, 'node_modules/.bin')}${path.delimiter}${process.env.PATH ?? ''}`, CI: '1', SUPABASE_TELEMETRY_DISABLED: '1' };
 // A fixed project lock serializes migration-runner invocations even in different
 // checkouts. Never remove a lock we did not create, or try to steal a stale lock.
@@ -65,8 +67,8 @@ async function portUnused() {
 process.once('SIGINT', onInt); process.once('SIGTERM', onTerm);
 try {
   if (process.argv.length !== 2) fail();
-  const config = await fs.readFile(path.join(root, 'supabase/config.toml'), 'utf8');
-  if (!/^project_id = "otteroom-room-session"$/m.test(config)
+  const config = await fs.readFile(localSupabaseConfig(), 'utf8');
+  if (!new RegExp(`^project_id = "${project}"$`, 'm').test(config)
     || !/^schemas = \["public", "graphql_public"\]$/m.test(config)) fail();
   const handle = await fs.open(lock, 'wx', 0o600); locked = true;
   await handle.close();
@@ -87,7 +89,7 @@ try {
   const digest = bytes => createHash('sha256').update(bytes).digest('hex');
   const typesBefore = digest(await fs.readFile(canonical));
   stage = 'legacy-reset'; resetStarted = true;
-  await managed(cli, ['db', 'reset', '--local', '--version', '20260909000001', '--no-seed']);
+  await managed(cli, localSupabaseArgs(['db', 'reset', '--local', '--version', '20260909000001', '--no-seed']));
   stage = 'legacy-fixtures';
   let snapshot = await bounded('docker', sqlArgs, { input: await fs.readFile(path.join(root, 'supabase/tests/migration/room_membership.before.sql'), 'utf8') });
   const rows = JSON.parse(snapshot);
@@ -97,7 +99,7 @@ try {
     || row.state !== (i === 0 ? 'waiting' : 'ready') || row.movie_candidate_id !== (i === 2 ? 'fixture-clockwork-orchard' : null))) fail();
   receipt('legacy-fixtures=3 synthetic-users=5 gotrue-signups=0');
   stage = 'actual-cutover';
-  await managed(cli, ['migration', 'up', '--local']);
+  await managed(cli, localSupabaseArgs(['migration', 'up', '--local']));
   stage = 'compatibility';
   snapshot = JSON.stringify(rows);
   // Escape psql quoted-variable syntax. The validated local SQL snapshot is
@@ -115,7 +117,7 @@ try {
     // Cleanup has its own bounded lifetime even after SIGINT/SIGTERM. A reset
     // failure is fatal; the outer owned-stack block still guarantees shutdown.
     try {
-      await managed(localExecutable('supabase'), ['db', 'reset', '--local', '--no-seed'], { signal: null });
+      await managed(localExecutable('supabase'), localSupabaseArgs(['db', 'reset', '--local', '--no-seed']), { signal: null });
       const empty = await bounded('docker', sqlArgs, { signal: null, input: `set statement_timeout='5s';
         select not exists(select 1 from public.rooms) and not exists(select 1 from public.room_members)
         and not exists(select 1 from public.participant_filters) and not exists(select 1 from auth.users)
@@ -125,11 +127,13 @@ try {
         and not exists(select 1 from public.rooms where candidate_acquisition_status<>'pending' or tmdb_movie_id is not null or decision_completed_count<>0 or candidate_progression_status<>'inactive' or candidate_sequence<>0)
         and not exists(select 1 from public.candidate_decisions)
         and not exists(select 1 from public.room_candidate_occurrences)
-        and to_regprocedure('public.create_room(uuid,integer,boolean)') is not null
+        and to_regprocedure('public.create_room(uuid,integer,boolean)') is null
+        and to_regprocedure('public.create_room_with_selection_rules(uuid,uuid,integer,boolean,text,text,bigint,numeric,text,text,integer,integer)') is not null
         and to_regprocedure('public.get_my_participant_filter(uuid)') is not null
         and to_regprocedure('public.resolve_common_filters(uuid)') is not null
         and to_regprocedure('public.prepare_room_tmdb_candidate(uuid,uuid)') is not null
-        and to_regprocedure('public.commit_room_tmdb_candidate(uuid,uuid,integer,bigint,smallint,integer[],boolean)') is not null
+        and to_regprocedure('public.commit_room_tmdb_candidate(uuid,uuid,integer,bigint,smallint,integer[],boolean,bigint,numeric)') is not null
+        and to_regprocedure('public.commit_room_tmdb_candidate(uuid,uuid,integer,bigint,smallint,integer[],boolean)') is null
         and to_regprocedure('public.commit_room_tmdb_no_candidates(uuid,uuid,integer)') is not null
         and not has_function_privilege('authenticated','public.ensure_room_candidate(uuid)'::regprocedure,'EXECUTE');
 ` });

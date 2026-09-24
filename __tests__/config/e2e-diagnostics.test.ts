@@ -1,5 +1,6 @@
 /** @jest-environment node */
 import { spawnSync } from 'node:child_process';
+import { expectCleanNodeChild } from './subprocess-diagnostics';
 
 // Exercise the very same native-TypeScript/ESM modules as the Node controller.
 // Only runtime synthetic values enter the isolated child; never print its raw output.
@@ -11,8 +12,7 @@ function verify(source: string) {
     timeout: 20000,
     maxBuffer: 131072,
   });
-  expect(result.error === undefined).toBe(true);
-  expect(result.status).toBe(0);
+  expectCleanNodeChild(result, false);
 }
 
 const prelude = `
@@ -22,6 +22,8 @@ const prelude = `
   import os from 'node:os';
   import path from 'node:path';
   const sentinel = () => 'synthetic-' + randomUUID();
+  const apiOrigin = 'http://127.0.0.1:1';
+  process.env.EXPO_PUBLIC_SUPABASE_URL = apiOrigin;
 `;
 
 it('Feature 007 diagnostics retain only fixed categories and bounded aggregate counts', () => verify(prelude + `
@@ -359,8 +361,130 @@ describe('credential-safe diagnostics boundaries', () => {
       assert.deepEqual(scanArtifacts(directory).findings, []); }
     finally { fs.rmSync(directory, { recursive: true }); }
   `));
+  it('self-localizes candidate presentation states with scanner-clean closed diagnostics', () => verify(prelude + `
+    const { candidatePresentationDiagnostic, parseHarnessDiagnostic } =
+      await import('./e2e/support/harness-observability.ts');
+    const { safeResult } = await import('./e2e/support/safe-reporter.ts');
+    const { scanArtifacts } = await import('./scripts/check-e2e-artifacts.mjs');
+    const base = { routeView: 'room', candidateAttempt: 'loading-metadata',
+      canonicalReadable: true, acquisitionStatus: 'assigned', progressionStatus: 'collecting',
+      candidateSequence: 1, decisionCount: 0, canonicalCandidateIdentityPresent: true,
+      titleMetadataPresent: false, releaseYearMetadataPresent: false,
+      posterMetadataPresent: false, metadataRequestState: 'pending',
+      metadataRequestAttemptCount: 1, metadataRecoveryActive: false,
+      metadataHttpStatusClass: 'none',
+      metadataResultClass: 'none', requestSequenceMatches: null,
+      candidateCardExists: true, expectedHeadingExists: false,
+      expectedHeadingVisible: false, loadingSurfacePresent: true,
+      errorSurfacePresent: false, exhaustedSurfacePresent: false,
+      agreedSurfacePresent: false };
+    const loading = candidatePresentationDiagnostic(base);
+    const failed = candidatePresentationDiagnostic({ ...base, candidateAttempt: 'metadata-error',
+      metadataRequestState: 'failed', metadataHttpStatusClass: '2xx',
+      metadataResultClass: 'metadata_unavailable', loadingSurfacePresent: false,
+      errorSurfacePresent: true });
+    const stale = candidatePresentationDiagnostic({ ...base, candidateAttempt: 'acquiring' });
+    const missingCard = candidatePresentationDiagnostic({ ...base, candidateAttempt: 'not-observed',
+      titleMetadataPresent: true, releaseYearMetadataPresent: true, posterMetadataPresent: true,
+      metadataRequestState: 'completed', metadataHttpStatusClass: '2xx',
+      metadataResultClass: 'available', requestSequenceMatches: true,
+      candidateCardExists: false, loadingSurfacePresent: false });
+    const visible = candidatePresentationDiagnostic({ ...base, candidateAttempt: 'available',
+      titleMetadataPresent: true, releaseYearMetadataPresent: true, posterMetadataPresent: true,
+      metadataRequestState: 'completed', metadataHttpStatusClass: '2xx',
+      metadataResultClass: 'available', requestSequenceMatches: true,
+      candidateCardExists: true, expectedHeadingExists: true,
+      expectedHeadingVisible: true, loadingSurfacePresent: false });
+    const recovery = candidatePresentationDiagnostic({ ...base,
+      metadataRequestAttemptCount: 2, metadataRecoveryActive: true });
+    const exhausted = candidatePresentationDiagnostic({ ...base, candidateAttempt: 'no-candidates',
+      acquisitionStatus: 'no_candidates', progressionStatus: 'exhausted',
+      canonicalCandidateIdentityPresent: false, metadataRequestState: 'none',
+      metadataRequestAttemptCount: 0, exhaustedSurfacePresent: true,
+      metadataHttpStatusClass: 'none', metadataResultClass: 'none', loadingSurfacePresent: false });
+    const agreed = candidatePresentationDiagnostic({ ...base, candidateAttempt: 'not-observed',
+      progressionStatus: 'agreed', decisionCount: 2, metadataRequestState: 'none',
+      metadataRequestAttemptCount: 0, metadataHttpStatusClass: 'none',
+      metadataResultClass: 'none', loadingSurfacePresent: false, agreedSurfacePresent: true });
+    const minimal = [loading, failed, stale, missingCard, visible, recovery, exhausted, agreed];
+    assert.deepEqual(minimal.map(value => value.presentationState), [
+      'metadata-loading','metadata-request-failure','stale-client-projection',
+      'metadata-ready-card-missing','heading-visible','metadata-recovery','exhausted','agreed']);
+    assert.equal(visible.expectedHeadingHidden, false);
+    const hidden = candidatePresentationDiagnostic({ ...base, candidateAttempt: 'available',
+      titleMetadataPresent: true, releaseYearMetadataPresent: true, posterMetadataPresent: true,
+      metadataRequestState: 'completed', metadataHttpStatusClass: '2xx',
+      metadataResultClass: 'available', requestSequenceMatches: true,
+      candidateCardExists: true, expectedHeadingExists: true,
+      expectedHeadingVisible: false, loadingSurfacePresent: false });
+    assert.equal(hidden.expectedHeadingHidden, true);
+    const pendingAuthority = { ...base, acquisitionStatus: 'pending', progressionStatus: 'inactive',
+      candidateSequence: 0, canonicalCandidateIdentityPresent: false };
+    const completeMetadata = { titleMetadataPresent: true, releaseYearMetadataPresent: true,
+      metadataRequestState: 'completed', metadataHttpStatusClass: '2xx',
+      metadataResultClass: 'available', requestSequenceMatches: true,
+      loadingSurfacePresent: false };
+    const remaining = [
+      candidatePresentationDiagnostic({ ...base, routeView: 'loading',
+        candidateAttempt: 'not-observed' }),
+      candidatePresentationDiagnostic({ ...base, routeView: 'error',
+        candidateAttempt: 'not-observed', loadingSurfacePresent: false, errorSurfacePresent: true }),
+      candidatePresentationDiagnostic({ ...base, routeView: 'other',
+        candidateAttempt: 'not-observed', loadingSurfacePresent: false }),
+      candidatePresentationDiagnostic({ ...pendingAuthority, candidateAttempt: 'acquiring' }),
+      candidatePresentationDiagnostic({ ...pendingAuthority, candidateAttempt: 'acquisition-error',
+        metadataRequestState: 'failed', metadataHttpStatusClass: '5xx',
+        metadataResultClass: 'candidate_acquisition_unavailable',
+        loadingSurfacePresent: false, errorSurfacePresent: true }),
+      candidatePresentationDiagnostic({ ...base, ...completeMetadata,
+        candidateAttempt: 'loading-poster', posterMetadataPresent: true,
+        expectedHeadingExists: true }),
+      candidatePresentationDiagnostic({ ...base, ...completeMetadata,
+        candidateAttempt: 'poster-error', posterMetadataPresent: true,
+        expectedHeadingExists: true, errorSurfacePresent: true }),
+      candidatePresentationDiagnostic({ ...base, ...completeMetadata,
+        candidateAttempt: 'no-poster', posterMetadataPresent: false,
+        expectedHeadingExists: true }),
+      candidatePresentationDiagnostic({ ...base, candidateAttempt: 'integrity-error',
+        metadataRequestState: 'none', metadataRequestAttemptCount: 0,
+        metadataHttpStatusClass: 'none', metadataResultClass: 'none',
+        loadingSurfacePresent: false, errorSurfacePresent: true }),
+      hidden,
+    ];
+    assert.deepEqual(remaining.map(value => value.presentationState), [
+      'route-loading','route-error','route-other','acquisition-loading','acquisition-failure',
+      'poster-loading','poster-failure','no-poster','integrity-error','other']);
+    const diagnostics = [...minimal, ...remaining];
+    for (const diagnostic of [...diagnostics, hidden])
+      assert.deepEqual(parseHarnessDiagnostic(diagnostic), diagnostic);
+
+    const secret = sentinel();
+    for (const injected of [
+      { ...base, routeView: secret }, { ...base, candidateAttempt: secret },
+      { ...base, metadataResultClass: secret }, { ...base, token: secret },
+      { ...base, room_id: secret },
+    ]) assert.throws(() => candidatePresentationDiagnostic(injected), /E2E_SAFE_FAILURE/);
+    assert.throws(() => parseHarnessDiagnostic({ ...loading, authorization: secret }),
+      /E2E_SAFE_FAILURE/);
+    assert.equal(JSON.stringify(diagnostics).includes(secret), false);
+
+    const annotations = diagnostics.slice(0, 4).map(value =>
+      ({ type: 'safe-harness-diagnostic', description: JSON.stringify(value) }));
+    const receipt = safeResult({ title: '@feature009 M01 configured order cutoff and exact-two progression' },
+      { status: 'failed', annotations });
+    assert.deepEqual(receipt.harnessDiagnostics, diagnostics.slice(0, 4));
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'otteroom-presentation-diagnostic-'));
+    try {
+      fs.writeFileSync(path.join(directory, 'summary.json'), JSON.stringify({ diagnostics, receipt }));
+      assert.deepEqual(scanArtifacts(directory).findings, []);
+    } finally { fs.rmSync(directory, { recursive: true }); }
+    const source = fs.readFileSync('e2e/support/candidate-harness.ts', 'utf8');
+    const available = source.slice(source.indexOf('async available('), source.indexOf('async successorAvailable('));
+    assert.equal(available.includes('catch {'), true);
+    assert.equal(available.includes('emitPresentationDiagnostic(page, expected)'), true);
+    assert.equal(available.includes('throw safeError()'), true);
+  `));
   it('drains initial-assembly candidate validation before invitation navigation', () => verify(prelude + `
-    const { parseEnv } = await import('node:util');
     const { candidateHarness, classifyCandidateResponseReadFailure } =
       await import('./e2e/support/candidate-harness.ts');
     const { navigateInvitationAfterCandidateResponses } =
@@ -376,9 +500,7 @@ describe('credential-safe diagnostics boundaries', () => {
       emit(name, value) { for (const handler of this.events.get(name) ?? []) handler(value); },
       isClosed() { return this.closed; },
       context() { return { pages: () => [this], browser: () => ({ isConnected: () => true }) }; } });
-    const local = process.env.EXPO_PUBLIC_SUPABASE_URL ? process.env :
-      parseEnv(fs.readFileSync('.env.local','utf8'));
-    const origin = new URL(local.EXPO_PUBLIC_SUPABASE_URL).origin;
+    const origin = apiOrigin;
     const room = id => ({ id, code: 'ABCDEF0123', state: 'ready', voter_count: 2,
       required_voter_count: 2, filter_completed_count: 2, filter_resolution_status: 'compatible',
       candidate_acquisition_status: 'assigned', candidate_progression_status: 'collecting',
@@ -462,7 +584,6 @@ describe('credential-safe diagnostics boundaries', () => {
       { responseFailure: 'navigation', exceptionCategory: 'protocol' });
   `));
   it('guards retained-session home navigation and reproduces the exact bypass safely', () => verify(prelude + `
-    const { parseEnv } = await import('node:util');
     const { candidateHarness } = await import('./e2e/support/candidate-harness.ts');
     const { createWaitingWithSession, navigateAfterResponseValidation } =
       await import('./e2e/support/room-harness.ts');
@@ -481,9 +602,7 @@ describe('credential-safe diagnostics boundaries', () => {
       async evaluate() { order.push('retained-session-participant'); return participant; },
       async goto(value) { assert.equal(value, '/'); navigated = true; order.push('home-navigation');
         throw new Error('STOP_AFTER_HOME_NAVIGATION'); } });
-    const local = process.env.EXPO_PUBLIC_SUPABASE_URL ? process.env :
-      parseEnv(fs.readFileSync('.env.local','utf8'));
-    const origin = new URL(local.EXPO_PUBLIC_SUPABASE_URL).origin;
+    const origin = apiOrigin;
     const ids = ['22222222-2222-4222-8222-222222222222',
       '33333333-3333-4333-8333-333333333333'];
     const roomId = '11111111-1111-4111-8111-111111111111';
@@ -600,7 +719,6 @@ describe('credential-safe diagnostics boundaries', () => {
     await fixedHarness.close();
   `));
   it('reproduces request 13 at the post-loss second reload boundary', () => verify(prelude + `
-    const { parseEnv } = await import('node:util');
     const { candidateHarness } = await import('./e2e/support/candidate-harness.ts');
     const { reloadPagesAfterCandidateResponses } =
       await import('./e2e/support/progression-harness.ts');
@@ -618,9 +736,7 @@ describe('credential-safe diagnostics boundaries', () => {
       context() { return { pages: () => [this], browser: () => ({ isConnected: () => true }) }; },
       async reload(options) { assert.deepEqual(options, { waitUntil: 'domcontentloaded' });
         return this.onReload(); } });
-    const local = process.env.EXPO_PUBLIC_SUPABASE_URL ? process.env :
-      parseEnv(fs.readFileSync('.env.local','utf8'));
-    const origin = new URL(local.EXPO_PUBLIC_SUPABASE_URL).origin;
+    const origin = apiOrigin;
     const roomId = '11111111-1111-4111-8111-111111111111';
     const ids = ['22222222-2222-4222-8222-222222222222',
       '33333333-3333-4333-8333-333333333333'];
@@ -819,7 +935,6 @@ describe('credential-safe diagnostics boundaries', () => {
     await unavailableHarness.close();
   `));
   it('does not misclassify an intentionally consumed candidate response as a health failure', () => verify(prelude + `
-    const { parseEnv } = await import('node:util');
     const { candidateHarness } = await import('./e2e/support/candidate-harness.ts');
     const events = () => new Map();
     const makePage = () => ({ routes: [], events: events(),
@@ -833,9 +948,7 @@ describe('credential-safe diagnostics boundaries', () => {
     const pages = [makePage(), makePage()], captured = [];
     const participants = pages.map(page => ({ page,
       recordHarnessDiagnostic: value => captured.push(value) }));
-    const local = process.env.EXPO_PUBLIC_SUPABASE_URL ? process.env :
-      parseEnv(fs.readFileSync('.env.local','utf8'));
-    const origin = new URL(local.EXPO_PUBLIC_SUPABASE_URL).origin;
+    const origin = apiOrigin;
     const harness = await candidateHarness(participants, 'http://127.0.0.1:8081');
     const room = { id: '11111111-1111-4111-8111-111111111111', code: 'ABCDEF0123',
       state: 'ready', voter_count: 2, required_voter_count: 2, filter_completed_count: 2,
@@ -925,6 +1038,37 @@ describe('credential-safe diagnostics boundaries', () => {
       }
       assert.equal(closed, 1); assert.equal(events.size, 0);
     }
+  `));
+
+  it('classifies a pre-response Auth transport failure and retains truthful teardown', () => verify(prelude + `
+    const { SafeDiagnostics } = await import('./e2e/support/safe-diagnostics.ts');
+    const { safeResult } = await import('./e2e/support/safe-reporter.ts');
+    const { CredentialRegistry, startRegistryServer } = await import('./e2e/support/credential-registry.ts');
+    const registry = new CredentialRegistry(); const server = await startRegistryServer(registry);
+    process.env.OTTEROOM_CREDENTIAL_SOCKET = server.endpoint;
+    const events = new Map(); let intercept, aborted = 0, closed = 0;
+    const page = { screenshot: async () => Buffer.alloc(0), pdf: async () => Buffer.alloc(0) };
+    const context = { tracing: {}, request: {}, addInitScript: async () => {}, newPage: async () => page,
+      on: (name, callback) => events.set(name, callback), removeListener: name => events.delete(name),
+      route: async (_, handler) => { intercept = handler; }, unrouteAll: async () => {},
+      close: async () => { closed++; } };
+    const info = { title: '@credential-probe C real Anonymous Auth controlled failure', annotations: [] };
+    const d = await SafeDiagnostics.create(context, {}, info); d.allowAnonymousSignups(1);
+    const request = { url: () => 'http://127.0.0.1:55321/auth/v1/signup', allHeaders: async () => ({}) };
+    const route = { request: () => request, fetch: async () => { throw new Error('ECONNREFUSED'); },
+      abort: async () => { aborted++; } };
+    try {
+      events.get('request')(request); await intercept(route);
+      await assert.rejects(d.flush(), /E2E_SAFE_FAILURE/);
+      await assert.rejects(d.close(), /E2E_SAFE_FAILURE/);
+      assert.equal(aborted, 1); assert.equal(closed, 1); assert.equal(events.size, 0);
+      assert.equal(info.annotations.some(x => x.type === 'safe-auth-result' && x.description === 'transport'), true);
+      assert.equal(info.annotations.some(x => x.type === 'safe-context-cleanup' && x.description === 'complete'), true);
+      const receipt = safeResult({ title: info.title, expectedStatus: 'passed' },
+        { status: 'failed', errorCount: 1, error: { message: 'Error: E2E_SAFE_FAILURE' }, annotations: info.annotations });
+      assert.equal(receipt.authResult, 'transport'); assert.equal(receipt.cleanup, true);
+      assert.equal(receipt.authSuccess, false); assert.equal(receipt.signups, 1); assert.equal(receipt.identities, 0);
+    } finally { delete process.env.OTTEROOM_CREDENTIAL_SOCKET; await d.close().catch(() => {}); await server.close(); registry.clear(); }
   `));
 
   it('requires actual finalized probe artifact categories, not merely a success receipt', () => verify(prelude + `
@@ -1020,6 +1164,93 @@ describe('credential-safe diagnostics boundaries', () => {
       fs.writeFileSync(path.join(dir, 'large.txt'), 'x'.repeat(1100000) + secret);
       assert.equal(scanArtifacts(dir, { registry }).ok, false);
     } finally { registry.clear(); fs.rmSync(dir, { recursive: true }); }
+  `));
+
+  it('distinguishes public room schema keys from private identifier and decision values', () => verify(prelude + `
+    const { scanArtifacts } = await import('./scripts/check-e2e-artifacts.mjs');
+    const { safeResult } = await import('./e2e/support/safe-reporter.ts');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'otteroom-scanner-boundary-'));
+    const roomId = randomUUID();
+    const jwt = ['eyJ' + randomUUID().replaceAll('-', ''), randomUUID().replaceAll('-', ''), randomUUID().replaceAll('-', '')].join('.');
+    const scan = () => scanArtifacts(dir);
+    const write = (name, value) => fs.writeFileSync(path.join(dir, name), value);
+    const remove = name => fs.rmSync(path.join(dir, name), { force: true });
+    try {
+      // This is the public room projection/schema vocabulary, including the
+      // exact source-reference shape emitted by the failed M01 artifact.
+      write('safe-key.md', 'room_id');
+      assert.equal(scan().ok, true);
+      remove('safe-key.md');
+      write('safe-contract.md', [
+        'room_id room_code room_state is_creator is_voter voter_count required_voter_count',
+        'filter_completed_count filter_resolution_status candidate_acquisition_status',
+        'candidate_progression_status candidate_sequence decision_completed_count',
+        'rows[0].room_id === room.id && rows[0].room_code === room.code',
+        "Object.keys(rows[0]).sort().join(',') === '...room_id...room_code...'",
+      ].join('\\n'));
+      write('safe-projection.json', JSON.stringify({ outcome: 'created', room_id: null, room_code: null,
+        room_state: 'waiting', is_creator: true, is_voter: true, voter_count: 0,
+        required_voter_count: 2, filter_completed_count: 0, filter_resolution_status: 'pending',
+        candidate_acquisition_status: 'pending', candidate_progression_status: 'inactive',
+        candidate_sequence: 0, decision_completed_count: 0 }));
+      let safeScanResult = scan();
+      assert.equal(safeScanResult.ok, true, JSON.stringify(safeScanResult));
+
+      write('room-value.json', JSON.stringify({ room_id: roomId }));
+      let result = scan();
+      assert.equal(result.ok, false);
+      assert.equal(result.findings.some(finding => finding.category === 'feature007-private-content'), true);
+      assert.equal(JSON.stringify(result).includes(roomId), false);
+      remove('room-value.json');
+
+      for (const [name, value] of [
+        ['room-member-value.json', JSON.stringify({ room_member_id: randomUUID() })],
+        ['member-value.json', JSON.stringify({ member_id: randomUUID() })],
+        ['user-value.json', JSON.stringify({ user_id: randomUUID() })],
+      ]) {
+        write(name, value); result = scan();
+        assert.equal(result.ok, false);
+        assert.equal(result.findings.some(finding => finding.category === 'feature007-private-content'), true);
+        remove(name);
+      }
+
+      for (const [name, value] of [
+        ['decision-yes.json', JSON.stringify({ my_decision: 'yes' })],
+        ['decision-no.json', JSON.stringify({ decision_value: 'no' })],
+        ['decision-table.json', JSON.stringify({ table: 'candidate_decisions' })],
+        ['authorization.txt', 'Authorization: Bearer synthetic-token'],
+        ['cookie.txt', 'Cookie: session=synthetic-cookie'],
+        ['jwt.txt', jwt],
+      ]) {
+        write(name, value); result = scan();
+        assert.equal(result.ok, false);
+        assert.equal(JSON.stringify(result).includes(jwt), false);
+        remove(name);
+      }
+
+      // Playwright's retained M01 error-context shape is source-only: it names
+      // public contract keys but contains no room/member value.
+      write('error-context.md', [
+        '# Instructions',
+        '- Following Playwright test failed.',
+        '# Test info',
+        '- Name: selection-rules-candidate-ordering.spec.ts >> @feature009 M01 configured order cutoff and exact-two progression',
+        '- Location: e2e/selection-rules-candidate-ordering.spec.ts:45:1',
+        '# Error details',
+        'Error: E2E_SAFE_FAILURE at e2e/support/room-harness.ts:573:75',
+        'Error: page.waitForResponse: Target page, context or browser has been closed',
+        '# Test source',
+        'rows[0].room_id === room.id && rows[0].room_code === room.code',
+        'rows.candidate_sequence === 0 && rows.decision_completed_count === 0',
+      ].join('\\n'));
+      const projected = safeResult({ title: '@feature009 M01 configured order cutoff and exact-two progression', repeatEachIndex: 0 },
+        { status: 'failed', errorCount: 1, error: { message: 'Error: E2E_SAFE_FAILURE at e2e/support/room-harness.ts:573:75' } });
+      assert.equal(projected.scenario, 'selection-rules');
+      assert.equal(projected.browserCase, 'M01');
+      assert.equal(projected.location, 'e2e/support/room-harness.ts:573:75');
+      write('summary.json', JSON.stringify([projected]));
+      assert.equal(scan().ok, true);
+    } finally { fs.rmSync(dir, { recursive: true }); }
   `));
 
   it('fails scanner CLI safely for missing, unreadable, escaping and synthetic-leaking inputs', () => verify(prelude + `
@@ -1131,6 +1362,27 @@ describe('credential-safe diagnostics boundaries', () => {
     assert.equal(assessRun('security', true, 0, checks, true), true);
   `));
 
+  it('probes the configured Auth target before launching non-static security diagnostics', () => verify(prelude + `
+    const { probeAuthTarget, parseInvocation, executeInvocation } = await import('./scripts/run-e2e.mjs');
+    const seen = [];
+    assert.equal(await probeAuthTarget({ apiUrl: 'http://127.0.0.1:55321/base/', fetchImpl: async (url, options) => {
+      seen.push({ url, method: options.method, redirect: options.redirect }); return { status: 204 };
+    }}), 204);
+    assert.deepEqual(seen, [{ url: 'http://127.0.0.1:55321/auth/v1/health', method: 'GET', redirect: 'error' }]);
+    await assert.rejects(() => probeAuthTarget({ apiUrl: 'http://127.0.0.1:55321', fetchImpl: async () => { throw new Error('refused'); } }), /AUTH_TARGET_UNAVAILABLE/);
+    await assert.rejects(() => probeAuthTarget({ apiUrl: 'http://127.0.0.1:55321', fetchImpl: async () => ({ status: 503 }) }), /AUTH_TARGET_UNHEALTHY/);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'otteroom-auth-preflight-')); let launched = false;
+    const stderrWrite = process.stderr.write;
+    process.stderr.write = () => true;
+    try {
+      const outcome = await executeInvocation(parseInvocation(['security']), { artifactRoot: root,
+        authProbe: async () => { throw new Error('AUTH_TARGET_UNAVAILABLE'); },
+        runtime: async () => { launched = true; return 0; } });
+      assert.equal(outcome, 1);
+    } finally { process.stderr.write = stderrWrite; fs.rmSync(root, { recursive: true }); }
+    assert.equal(launched, false);
+  `));
+
   it('controller scans finalized late output and always clears credentials and private IPC', () => verify(prelude + `
     const { parseInvocation, executeInvocation } = await import('./scripts/run-e2e.mjs');
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'otteroom-controller-test-'));
@@ -1198,7 +1450,7 @@ it('explicitly discovers H01–H03, I01–I03 and J01–J03 with fixed safe labe
   const { safeDiagnosticLocation } = await import('./e2e/support/sanitize-diagnostics.ts');
   assert.deepEqual(config.projects.find(p => p.name === 'acceptance').testMatch,
     ['room-session.spec.ts', 'generalized-room-membership-qr.spec.ts', 'participant-filters.spec.ts', 'common-filter-resolution.spec.ts',
-      'tmdb-candidate-source.spec.ts', 'swipe-decisions.spec.ts', 'candidate-progression.spec.ts']);
+      'tmdb-candidate-source.spec.ts', 'swipe-decisions.spec.ts', 'candidate-progression.spec.ts', 'selection-rules-candidate-ordering.spec.ts']);
   const titles = ['@filters H01 validates private owned filters and editable saved state',
     '@filters H02 recovers filters through failures and lost acknowledgements',
     '@filters H03 serializes final completion and freezes every filter'];
@@ -1252,10 +1504,13 @@ it('second-room selection accepts two owned rooms but rejects reused requests or
   const old = { id: randomUUID(), code: 'ABCDEF0123', state: 'ready' };
   const fresh = { id: randomUUID(), code: '012345ABCD', state: 'waiting' };
   const priorRequest = randomUUID(), request = randomUUID();
-  const result = [{ outcome: 'created', room_id: fresh.id, room_code: fresh.code }];
+  const result = { outcome: 'created', room_id: fresh.id, room_code: fresh.code,
+    room_state: 'waiting', is_creator: true, is_voter: true, voter_count: 1, required_voter_count: 2,
+    filter_completed_count: 0, filter_resolution_status: 'pending', candidate_acquisition_status: 'pending',
+    candidate_progression_status: 'inactive', candidate_sequence: 0, decision_completed_count: 0 };
   assert.deepEqual(selectCreatedTrial(result, [old, fresh], request, priorRequest, old.id), fresh);
   for (const [rows, rooms, id] of [[result, [old, fresh], priorRequest], [result, [old], request],
-    [[{ ...result[0], room_id: old.id }], [old, fresh], request], [result, [fresh, fresh], request]])
+    [{ ...result, room_id: old.id }, [old, fresh], request], [result, [fresh, fresh], request]])
     assert.throws(() => selectCreatedTrial(rows, rooms, id, priorRequest, old.id));
 `));
 

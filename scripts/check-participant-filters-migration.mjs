@@ -6,19 +6,23 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { localExecutable, runManagedProcess } from './safe-process.mjs';
+import { localSupabaseArgs, localSupabaseConfig, localSupabaseContainer, localSupabaseRuntime } from './local-supabase.mjs';
+import { classifyParticipantFilterPrecondition } from './participant-filter-precondition-diagnostics.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const project = 'otteroom-room-session';
-const container = `supabase_db_${project}`;
 const env = { ...process.env,
   PATH: `${path.join(root,'node_modules/.bin')}${path.delimiter}${process.env.PATH ?? ''}`,
   CI: '1', DO_NOT_TRACK: '1', SUPABASE_TELEMETRY_DISABLED: '1' };
-const lock = path.join(os.tmpdir(),`otteroom-participant-filters-migration-${project}.lock`);
+let runtime, project, container, lock;
+let sqlArgs;
 const abort = new AbortController();
 const onInt=()=>abort.abort('SIGINT'), onTerm=()=>abort.abort('SIGTERM');
 let locked=false, resetStarted=false, stage='preconditions';
+let failedPrecondition='arguments', safeObserved={};
 const fail=()=>{ throw new Error('MIGRATION_CHECK_FAILED'); };
 const receipt=value=>process.stdout.write(`PARTICIPANT_FILTERS_MIGRATION ${value}\n`);
+const beginPrecondition=id=>{ failedPrecondition=id; safeObserved={}; };
+const checkPrecondition=(id,condition,observed={})=>{ failedPrecondition=id; safeObserved=observed; if(!condition)fail(); };
 
 async function managed(command,args,{input,signal=abort.signal,timeoutMs=180000}={}) {
   const code=await runManagedProcess({command,args,input,signal,timeoutMs,env,label:'fixture'});
@@ -41,33 +45,65 @@ async function bounded(command,args,{input,cap=24576,signal=abort.signal}={}) {
     } catch { finish(1); }
   });
 }
-const sqlArgs=['exec','-i',container,'psql','-X','-U','postgres','-d','postgres','-v','ON_ERROR_STOP=1','-qAt'];
-async function portUnused(){return await new Promise(resolve=>{const socket=net.createConnection({host:'127.0.0.1',port:8081});
-  const done=value=>{socket.destroy();resolve(value);};socket.once('connect',()=>done(false));
-  socket.once('error',error=>done(error.code==='ECONNREFUSED'));socket.setTimeout(1000,()=>done(false));});}
+async function portStatus(){return await new Promise(resolve=>{const socket=net.createConnection({host:'127.0.0.1',port:8081});
+  const done=value=>{socket.destroy();resolve(value);};socket.once('connect',()=>done('occupied'));
+  socket.once('error',error=>done(error.code==='ECONNREFUSED'?'free':'probe-error'));
+  socket.setTimeout(1000,()=>done('probe-error'));});}
 
 process.once('SIGINT',onInt);process.once('SIGTERM',onTerm);
 try {
-  if(process.argv.length!==2)fail();
-  const config=await fs.readFile(path.join(root,'supabase/config.toml'),'utf8');
-  if(!/^project_id = "otteroom-room-session"$/m.test(config)
-    || !/^schemas = \["public", "graphql_public"\]$/m.test(config))fail();
+  checkPrecondition('arguments',process.argv.length===2);
+  beginPrecondition('runtime-resolution');
+  runtime=localSupabaseRuntime();project=runtime.project;container=localSupabaseContainer();
+  lock=path.join(os.tmpdir(),`otteroom-participant-filters-migration-${project}.lock`);
+  sqlArgs=['exec','-i',container,'psql','-X','-U','postgres','-d','postgres','-v','ON_ERROR_STOP=1','-qAt'];
+  beginPrecondition('config-read');
+  const config=await fs.readFile(localSupabaseConfig(),'utf8');
+  checkPrecondition('config-project-match',new RegExp(`^project_id = "${project}"$`,'m').test(config),{project_match:new RegExp(`^project_id = "${project}"$`,'m').test(config)});
+  checkPrecondition('config-schemas-match',/^schemas = \["public", "graphql_public"\]$/m.test(config),{schemas_match:/^schemas = \["public", "graphql_public"\]$/m.test(config)});
+  beginPrecondition('lock-create');
   const handle=await fs.open(lock,'wx',0o600);locked=true;await handle.close();
+  beginPrecondition('container-inspect');
   const info=(await bounded('docker',['inspect','--format','{{.State.Running}} {{index .Config.Labels "com.supabase.cli.project"}}',container],{cap:1024})).trim();
-  if(info!==`true ${project}`||!await portUnused())fail();
+  const [containerState,containerProject]=info.split(' ');
+  checkPrecondition('container-running',containerState==='true',{container_running:containerState==='true'});
+  checkPrecondition('container-project-match',containerProject===project,{container_project_match:containerProject===project});
+  beginPrecondition('port-8081-probe');
+  const port=await portStatus();
+  checkPrecondition('port-8081-probe',port!=='probe-error',{port_free:port==='free'});
+  checkPrecondition('port-8081-free',port==='free',{port_free:port==='free'});
+  beginPrecondition('browser-containers-query');
   const browserContainers=await bounded('docker',['ps','-q','--filter','label=com.otteroom.playwright.owner'],{cap:1024});
-  if(browserContainers.trim())fail();
-  const idle=await bounded('docker',sqlArgs,{input:`set statement_timeout='5s';
-    select not exists(select 1 from public.rooms) and not exists(select 1 from auth.users)
-    and not exists(select 1 from pg_stat_activity where datname=current_database() and pid<>pg_backend_pid()
-      and backend_type='client backend' and (state<>'idle' or usename in('authenticated','anon')));`});
-  if(idle.trim()!=='t')fail();
-  process.env.PATH=env.PATH;const cli=localExecutable('supabase');
+  const browserCount=browserContainers.trim()?browserContainers.trim().split(/\r?\n/).length:0;
+  checkPrecondition('browser-containers-empty',browserCount===0,{browser_container_count:browserCount});
+  beginPrecondition('database-baseline-query');
+  const baselineText=await bounded('docker',sqlArgs,{input:`set statement_timeout='5s';
+    select json_build_object(
+      'rooms',(select count(*)::integer from public.rooms),
+      'auth_users',(select count(*)::integer from auth.users),
+      'active_client_sessions',(select count(*)::integer from pg_stat_activity where datname=current_database()
+        and pid<>pg_backend_pid() and backend_type='client backend' and state<>'idle'),
+      'anon_auth_client_sessions',(select count(*)::integer from pg_stat_activity where datname=current_database()
+        and pid<>pg_backend_pid() and backend_type='client backend' and usename in('authenticated','anon'))
+    )::text;`});
+  beginPrecondition('database-baseline-parse');
+  let baseline;
+  try { baseline=JSON.parse(baselineText); } catch { fail(); }
+  if(!baseline||Object.keys(baseline).sort().join(',')!=='active_client_sessions,anon_auth_client_sessions,auth_users,rooms'
+    ||Object.values(baseline).some(value=>!Number.isSafeInteger(value)||value<0))fail();
+  checkPrecondition('database-rooms-empty',baseline.rooms===0,{room_count:baseline.rooms});
+  checkPrecondition('database-auth-users-empty',baseline.auth_users===0,{auth_user_count:baseline.auth_users});
+  checkPrecondition('database-no-active-clients',baseline.active_client_sessions===0,{active_client_session_count:baseline.active_client_sessions});
+  checkPrecondition('database-no-anon-auth-clients',baseline.anon_auth_client_sessions===0,{anon_auth_client_session_count:baseline.anon_auth_client_sessions});
+  process.env.PATH=env.PATH;beginPrecondition('project-local-cli');safeObserved={cli_resolves:false};
+  const cli=localExecutable('supabase');safeObserved={cli_resolves:true};
   const canonical=path.join(root,'src/types/database.generated.ts');
   const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
-  const typesBefore=digest(await fs.readFile(canonical));
+  beginPrecondition('generated-types-readable');safeObserved={types_readable:false};
+  const types=await fs.readFile(canonical);safeObserved={types_readable:true};
+  const typesBefore=digest(types);
   stage='feature003-reset';resetStarted=true;
-  await managed(cli,['db','reset','--local','--version','20260910000000','--no-seed']);
+  await managed(cli,localSupabaseArgs(['db','reset','--local','--version','20260910000000','--no-seed']));
   stage='feature003-fixtures';
   let snapshot=await bounded('docker',sqlArgs,{input:await fs.readFile(path.join(root,'supabase/tests/migration/participant_filters.before.sql'),'utf8')});
   const parsed=JSON.parse(snapshot);
@@ -76,7 +112,7 @@ try {
       || row.code!==`F41000000${index+1}`||row.state!==(index===0?'waiting':'ready')
       || row.movie_candidate_id!==(index===3?'fixture-clockwork-orchard':null)))fail();
   receipt('legacy-rooms=4 members=8 synthetic-users=8 gotrue-signups=0');
-  stage='actual-cutover';await managed(cli,['migration','up','--local']);
+  stage='actual-cutover';await managed(cli,localSupabaseArgs(['migration','up','--local']));
   stage='compatibility';
   const variable=snapshot.trim().replaceAll('\\','\\\\').replaceAll("'","\\'");
   await managed('docker',sqlArgs,{input:`\\set feature004_snapshot '${variable}'\n${await fs.readFile(path.join(root,'supabase/tests/migration/participant_filters.after.sql'),'utf8')}`,timeoutMs:30000});
@@ -84,11 +120,14 @@ try {
   if(digest(await fs.readFile(canonical))!==typesBefore)fail();
   receipt('preserved-rooms=4 members=8 filters=0 count-zero=true resolution-pending=true candidate-pending=true tmdb-ids=0 mapping=19 server-rpcs=true candidate-suppressed=true types-unchanged=true');
 } catch {
-  receipt(`stage=${stage} result=FAIL`);
+  if(stage==='preconditions'){
+    try { receipt(`stage=preconditions ${classifyParticipantFilterPrecondition(failedPrecondition,safeObserved)} result=FAIL`); }
+    catch { receipt('stage=preconditions check=diagnostic-classification result=FAIL'); }
+  } else receipt(`stage=${stage} result=FAIL`);
   process.exitCode=abort.signal.aborted?(abort.signal.reason==='SIGINT'?130:143):1;
 } finally {
   if(resetStarted){try{
-    await managed(localExecutable('supabase'),['db','reset','--local','--no-seed'],{signal:null});
+    await managed(localExecutable('supabase'),localSupabaseArgs(['db','reset','--local','--no-seed']),{signal:null});
     const empty=await bounded('docker',sqlArgs,{signal:null,input:`set statement_timeout='5s';
       select not exists(select 1 from public.rooms) and not exists(select 1 from public.room_members)
       and not exists(select 1 from public.participant_filters) and not exists(select 1 from auth.users)
@@ -101,7 +140,8 @@ try {
       and to_regprocedure('public.get_my_participant_filter(uuid)') is not null
       and to_regprocedure('public.resolve_common_filters(uuid)') is not null
       and to_regprocedure('public.prepare_room_tmdb_candidate(uuid,uuid)') is not null
-      and to_regprocedure('public.commit_room_tmdb_candidate(uuid,uuid,integer,bigint,smallint,integer[],boolean)') is not null
+      and to_regprocedure('public.commit_room_tmdb_candidate(uuid,uuid,integer,bigint,smallint,integer[],boolean,bigint,numeric)') is not null
+      and to_regprocedure('public.commit_room_tmdb_candidate(uuid,uuid,integer,bigint,smallint,integer[],boolean)') is null
       and to_regprocedure('public.commit_room_tmdb_no_candidates(uuid,uuid,integer)') is not null;`});
     if(empty.trim()!=='t')fail();receipt('latest-reset=true owned-fixtures=0');
   }catch{receipt('cleanup=FAIL');process.exitCode=1;}}

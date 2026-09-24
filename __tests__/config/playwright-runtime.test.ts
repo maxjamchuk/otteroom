@@ -65,6 +65,8 @@ describe('repository-owned Playwright runtime', () => {
     await assert.rejects(prepareRuntime({ kind: 'docker', docker: fake.docker }), /DOCKER_UNAVAILABLE/);
     assert.equal(runs, 0);
     assert.equal(runtimeDiagnostic(new RuntimeError('DOCKER_UNAVAILABLE')).includes('npm run playwright:install'), true);
+    assert.equal(runtimeDiagnostic(new RuntimeError('DOCKER_NOT_READY')).includes('npm registry'), false);
+    assert.equal(runtimeDiagnostic(new RuntimeError('DOCKER_PACKAGE_MISSING')).includes('npm ci'), true);
     const missing = fakeDocker({ fail: 'image' });
     await assert.rejects(withPlaywrightRuntime(async () => {}, { kind: 'docker', docker: missing.docker }), /DOCKER_IMAGE_MISSING/);
     assert.equal(missing.calls.some(c => c.args[0] === 'create'), false);
@@ -79,8 +81,14 @@ describe('repository-owned Playwright runtime', () => {
       assert.equal(result, exit); assert.deepEqual(events, ['ready', 'test']);
       assert.equal(fake.exists(), false);
       const create = fake.calls.find(c => c.args[0] === 'create').args;
-      for (const flag of [PLAYWRIGHT_IMAGE, 'playwright@1.63.0', '--log-driver=none', '--add-host=hostmachine:host-gateway', '127.0.0.1::3000', '--init']) assert.equal(create.includes(flag), true);
+      for (const flag of [PLAYWRIGHT_IMAGE, '/home/pwuser/playwright/cli.js', '--log-driver=none', '--add-host=hostmachine:host-gateway', '127.0.0.1::3000', '--init', 'NODE_PATH=/home/pwuser']) assert.equal(create.includes(flag), true);
+      assert.equal(create.includes('npx'), false);
       assert.equal(create.includes('--privileged') || create.includes('--volume'), false);
+      const copies = fake.calls.filter(c => c.args[0] === 'cp');
+      assert.equal(copies.length, 2);
+      assert.equal(copies.every(c => c.args[1].endsWith('/node_modules/playwright') || c.args[1].endsWith('/node_modules/playwright-core')), true);
+      assert.equal(copies.every(c => c.args[2].includes(':/home/pwuser/')), true);
+      assert.equal(copies.every(c => fake.calls.indexOf(c) < fake.calls.findIndex(value => value.args[0] === 'start')), true);
       const stops = fake.calls.filter(c => ['stop', 'rm'].includes(c.args[0]));
       assert.equal(stops.length, 2); assert.equal(stops.every(c => c.args.at(-1) === 'abcdef123456'), true);
       assert.equal(logs.some(s => JSON.parse(s).status === 'removed'), true);
@@ -176,7 +184,7 @@ it('Feature 006 discovery retains serial default acceptance and bounded runtime 
   const { parseInvocation } = await import('./scripts/run-e2e.mjs');
   assert.deepEqual(config.projects.find(p => p.name === 'acceptance').testMatch,
     ['room-session.spec.ts', 'generalized-room-membership-qr.spec.ts', 'participant-filters.spec.ts', 'common-filter-resolution.spec.ts',
-      'tmdb-candidate-source.spec.ts', 'swipe-decisions.spec.ts', 'candidate-progression.spec.ts']);
+      'tmdb-candidate-source.spec.ts', 'swipe-decisions.spec.ts', 'candidate-progression.spec.ts', 'selection-rules-candidate-ordering.spec.ts']);
   assert.equal(config.workers, 1); assert.equal(config.repeatEach, 1); assert.equal(config.retries, 0);
   assert.equal(config.reporter[0][0], './e2e/support/safe-reporter.ts');
   for (const field of ['trace', 'video', 'screenshot']) assert.equal(config.use[field], 'off');

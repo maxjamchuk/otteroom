@@ -1,7 +1,9 @@
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { expect, type Page, type Browser, type BrowserContextOptions, type TestInfo, type Response, type Request, type Route, type Frame, type WebSocketRoute } from '@playwright/test';
 import { safeBody, SafeDiagnostics } from './safe-diagnostics.ts';
 import { candidateBoundaryDiagnostic, containmentDiagnostic } from './harness-observability.ts';
+import { localSupabaseContainer } from '../../scripts/local-supabase.mjs';
 
 export type PublicApi = { origin: string; publicKey: string };
 export type RoomProjection = { id: string; code: string; state: string; voter_count: number;
@@ -11,6 +13,15 @@ export type RoomProjection = { id: string; code: string; state: string; voter_co
   candidate_progression_status: 'inactive' | 'collecting' | 'advancing' | 'agreed' | 'exhausted';
   candidate_sequence: number; decision_completed_count: number };
 export type CreationConfiguration = { requiredVoterCount: number; creatorIsVoter: boolean };
+export type RetainedSelectionRules = {
+  ordering: 'vote_count_desc' | 'average_rating_desc' | 'popularity_desc' | 'title_asc';
+  minimumVoteCount: number;
+  minimumAverageRating: number | null;
+  metadataLanguage: string;
+  genreMode: 'or' | 'and';
+  agreementNumerator: number;
+  agreementDenominator: number;
+};
 export const twoVoters = { requiredVoterCount: 2, creatorIsVoter: true } as const;
 export type ResponseValidationDrain = {
   drainResponses(): Promise<void>;
@@ -181,7 +192,7 @@ export async function isolateCandidateAcquisition(pages: Page[],
 // application roster endpoint, diagnostic dumps or derived host/guest authority.
 export function committedRoomSnapshot(room: RoomProjection) {
   if (!/^[0-9a-f-]{36}$/.test(room.id) || !/^[0-9A-F]{10}$/.test(room.code)) throw new Error('E2E_SAFE_FAILURE');
-  const result = spawnSync('docker', ['exec', 'supabase_db_otteroom-room-session',
+  const result = spawnSync('docker', ['exec', localSupabaseContainer(),
     'psql', '-X', '-U', 'postgres', '-d', 'postgres', '-At', '-c',
     `SELECT coalesce(json_agg(json_build_object('row', row_to_json(r), 'xmin', r.xmin::text,
       'members', (SELECT coalesce(json_agg(m ORDER BY m.user_id), '[]'::json) FROM
@@ -547,22 +558,22 @@ export async function assertAccepted(response: Response, room: RoomProjection, o
 export async function createWaiting(page: Page, diagnostics: SafeDiagnostics, configuration: CreationConfiguration = twoVoters) {
   const api = await startHost(page, diagnostics);
   await configureCreation(page, configuration);
-  const created = page.waitForResponse(response => response.url().endsWith('/rpc/create_room'));
+  const created = page.waitForResponse(response => new URL(response.url()).pathname === '/functions/v1/room-create');
   const recovered = page.waitForResponse(response => response.url().endsWith('/rpc/join_room'));
   await page.getByRole('button', { name: 'Create Room' }).click();
   const response = await created, request = response.request().postDataJSON();
   const rows = await response.json();
-  expect(response.ok() && Object.keys(request).sort().join(',') === 'p_creation_request_id,p_creator_is_voter,p_required_voter_count' &&
-    request.p_required_voter_count === configuration.requiredVoterCount && request.p_creator_is_voter === configuration.creatorIsVoter &&
-    Array.isArray(rows) && rows.length === 1 && rows[0].outcome === 'created' &&
-    Object.keys(rows[0]).sort().join(',') === 'candidate_acquisition_status,candidate_progression_status,candidate_sequence,decision_completed_count,filter_completed_count,filter_resolution_status,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
-    rows[0].is_creator === true && rows[0].is_voter === configuration.creatorIsVoter && rows[0].room_state === 'waiting' &&
-    rows[0].voter_count === Number(configuration.creatorIsVoter) && rows[0].required_voter_count === configuration.requiredVoterCount &&
-    rows[0].filter_completed_count === 0 && rows[0].filter_resolution_status === 'pending' &&
-    rows[0].candidate_acquisition_status === 'pending' && rows[0].candidate_progression_status === 'inactive' &&
-    rows[0].candidate_sequence === 0 && rows[0].decision_completed_count === 0).toBe(true);
+  expect(response.ok() && Object.keys(request).sort().join(',') === 'creation_request_id,creator_is_voter,required_voter_count' &&
+    request.required_voter_count === configuration.requiredVoterCount && request.creator_is_voter === configuration.creatorIsVoter &&
+    rows && !Array.isArray(rows) && rows.outcome === 'created' &&
+    Object.keys(rows).sort().join(',') === 'candidate_acquisition_status,candidate_progression_status,candidate_sequence,decision_completed_count,filter_completed_count,filter_resolution_status,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count' &&
+    rows.is_creator === true && rows.is_voter === configuration.creatorIsVoter && rows.room_state === 'waiting' &&
+    rows.voter_count === Number(configuration.creatorIsVoter) && rows.required_voter_count === configuration.requiredVoterCount &&
+    rows.filter_completed_count === 0 && rows.filter_resolution_status === 'pending' &&
+    rows.candidate_acquisition_status === 'pending' && rows.candidate_progression_status === 'inactive' &&
+    rows.candidate_sequence === 0 && rows.decision_completed_count === 0).toBe(true);
   const rooms = await ownRooms(page, api);
-  expect(rooms.length === 1 && rooms[0].id === rows[0].room_id && rooms[0].code === rows[0].room_code).toBe(true);
+  expect(rooms.length === 1 && rooms[0].id === rows.room_id && rooms[0].code === rows.room_code).toBe(true);
   const room = rooms[0];
   await assertAccepted(await recovered, room, 'already_member', { isCreator: true, isVoter: configuration.creatorIsVoter }, 'waiting');
   await assertWaiting(page, diagnostics, room);
@@ -598,9 +609,11 @@ export async function linkGuest(guest: SafeDiagnostics, room: RoomProjection, in
 }
 
 export function selectCreatedTrial(rows: unknown, rooms: RoomProjection[], request: unknown, priorRequest: string, priorRoom: string) {
+  const record = rows && typeof rows === 'object' && !Array.isArray(rows) ? rows as Record<string, unknown> : null;
   if (typeof request !== 'string' || !/^[0-9a-f-]{36}$/.test(request) || request === priorRequest ||
-    !Array.isArray(rows) || rows.length !== 1 || rows[0]?.outcome !== 'created' || rows[0].room_id === priorRoom) throw new Error('E2E_SAFE_FAILURE');
-  const matches = rooms.filter(room => room.id === rows[0].room_id && room.code === rows[0].room_code && room.state === 'waiting');
+    !record || record.outcome !== 'created' || record.room_id === priorRoom) throw new Error('E2E_SAFE_FAILURE');
+  if (Object.keys(record).sort().join(',') !== 'candidate_acquisition_status,candidate_progression_status,candidate_sequence,decision_completed_count,filter_completed_count,filter_resolution_status,is_creator,is_voter,outcome,required_voter_count,room_code,room_id,room_state,voter_count') throw new Error('E2E_SAFE_FAILURE');
+  const matches = rooms.filter(room => room.id === record.room_id && room.code === record.room_code && room.state === 'waiting');
   if (matches.length !== 1) throw new Error('E2E_SAFE_FAILURE');
   return matches[0];
 }
@@ -616,13 +629,13 @@ export async function createWaitingWithSession(page: Page, diagnostics: SafeDiag
   expect((await (responses ? navigateAfterResponseValidation(responses, [page], home) : home()))?.status() === 200).toBe(true);
   await expect(page.getByRole('button', { name: 'Create Room' })).toBeVisible();
   await configureCreation(page, configuration);
-  const created = page.waitForResponse(response => new URL(response.url()).pathname === '/rest/v1/rpc/create_room');
+  const created = page.waitForResponse(response => new URL(response.url()).pathname === '/functions/v1/room-create');
   const recovered = page.waitForResponse(response => new URL(response.url()).pathname === '/rest/v1/rpc/join_room');
   await page.getByRole('button', { name: 'Create Room' }).click();
   const response = await created;
   expect(response.ok()).toBe(true);
   const request = response.request().postDataJSON();
-  const room = selectCreatedTrial(await response.json(), await ownRooms(page, api), request?.p_creation_request_id,
+  const room = selectCreatedTrial(await response.json(), await ownRooms(page, api), request?.creation_request_id,
     previous.row.creation_request_id, previous.row.id);
   await assertAccepted(await recovered, room, 'already_member', { isCreator: true, isVoter: configuration.creatorIsVoter }, 'waiting');
   await assertWaiting(page, diagnostics, room);
@@ -631,4 +644,45 @@ export async function createWaitingWithSession(page: Page, diagnostics: SafeDiag
   const invitation = await page.getByLabel('Invitation link', { exact: true }).innerText();
   expect(invitation === new URL(`/room/${room.code}`, page.url()).href).toBe(true);
   return { api, room, invitation, participant };
+}
+
+// Test-only retained-rule fixture. Production room creation remains the Edge
+// transport above; this bounded local database call supplies a second startup
+// generation for the acceptance proof without adding a client configuration
+// surface or an environment override.
+export async function createRetainedRulesFixture(page: Page, diagnostics: SafeDiagnostics,
+  api: PublicApi, configuration: CreationConfiguration, rules: RetainedSelectionRules) {
+  if (!Number.isSafeInteger(configuration.requiredVoterCount) || configuration.requiredVoterCount < 2 ||
+      !['vote_count_desc','average_rating_desc','popularity_desc','title_asc'].includes(rules.ordering) ||
+      !Number.isSafeInteger(rules.minimumVoteCount) || rules.minimumVoteCount < 0 ||
+      rules.minimumAverageRating !== null && (typeof rules.minimumAverageRating !== 'number' ||
+        !Number.isFinite(rules.minimumAverageRating) || rules.minimumAverageRating < 0 || rules.minimumAverageRating > 10) ||
+      !/^[A-Za-z]{2}-[A-Za-z]{2}$/.test(rules.metadataLanguage) || !['or','and'].includes(rules.genreMode) ||
+      !Number.isSafeInteger(rules.agreementNumerator) || !Number.isSafeInteger(rules.agreementDenominator) ||
+      rules.agreementNumerator < 1 || rules.agreementNumerator > rules.agreementDenominator || rules.agreementDenominator < 1)
+    throw new Error('E2E_SAFE_FAILURE');
+  const actor = await ownParticipant(page), requestId = randomUUID();
+  const rating = rules.minimumAverageRating === null ? 'null' : String(rules.minimumAverageRating);
+  const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
+  const result = spawnSync('docker', ['exec', localSupabaseContainer(), 'psql', '-X', '-U', 'postgres',
+    '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-qAt', '-c',
+    `set role service_role; select row_to_json(r)::text from public.create_room_with_selection_rules(
+      '${actor}'::uuid,'${requestId}'::uuid,${configuration.requiredVoterCount},${configuration.creatorIsVoter},
+      'configured_009_v1',${quote(rules.ordering)},${rules.minimumVoteCount},${rating},${quote(rules.metadataLanguage)},
+      ${quote(rules.genreMode)},${rules.agreementNumerator},${rules.agreementDenominator}) r; reset role;`],
+    { encoding: 'utf8', timeout: 10000, maxBuffer: 8192 });
+  if (result.status !== 0 || result.error) throw new Error('E2E_SAFE_FAILURE');
+  let created: Record<string, unknown>;
+  try { created = JSON.parse(result.stdout.trim()); } catch { throw new Error('E2E_SAFE_FAILURE'); }
+  if (created.outcome !== 'created' || typeof created.room_id !== 'string' || typeof created.room_code !== 'string')
+    throw new Error('E2E_SAFE_FAILURE');
+  const joined = page.waitForResponse(response => new URL(response.url()).pathname === '/rest/v1/rpc/join_room');
+  expect((await page.goto(`/room/${created.room_code}`, { waitUntil: 'domcontentloaded' }))?.status() === 200).toBe(true);
+  const rooms = await ownRooms(page, api, created.room_id, created.room_code);
+  if (rooms.length !== 1) throw new Error('E2E_SAFE_FAILURE');
+  const room = rooms[0];
+  await assertAccepted(await joined, room, 'already_member', { isCreator: true, isVoter: configuration.creatorIsVoter }, 'waiting');
+  await assertWaiting(page, diagnostics, room);
+  const invitation = new URL(`/room/${room.code}`, page.url()).href;
+  return { api, room, invitation, participant: actor };
 }

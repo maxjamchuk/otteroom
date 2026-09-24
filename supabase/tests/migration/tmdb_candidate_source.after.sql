@@ -33,7 +33,7 @@ select pg_temp.require((select count(*)=11 from pg_attribute a cross join latera
 select pg_temp.require((select bool_and(has_function_privilege('service_role',oid,'execute')
  and not has_function_privilege('authenticated',oid,'execute')) from pg_proc where oid in(
  'public.prepare_room_tmdb_candidate(uuid,uuid)'::regprocedure,
- 'public.commit_room_tmdb_candidate(uuid,uuid,integer,bigint,smallint,integer[],boolean)'::regprocedure,
+ 'public.commit_room_tmdb_candidate(uuid,uuid,integer,bigint,smallint,integer[],boolean,bigint,numeric)'::regprocedure,
  'public.commit_room_tmdb_no_candidates(uuid,uuid,integer)'::regprocedure)));
 set local role service_role;
 select pg_temp.require((select outcome='acquire' from public.prepare_room_tmdb_candidate(

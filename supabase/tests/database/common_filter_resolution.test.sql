@@ -165,6 +165,8 @@ insert into public.rooms(id,code,creation_request_id,creator_user_id,required_vo
   ('05110000-0000-4000-a000-000000000007','F500000007','05120000-0000-4000-a000-000000000007','05100000-0000-4000-a000-000000000001',2,2,2,null,'2026-01-01','2026-01-01'),
   ('05110000-0000-4000-a000-000000000008','F500000008','05120000-0000-4000-a000-000000000008','05100000-0000-4000-a000-000000000001',2,2,2,null,'2026-01-01','2026-01-01'),
   ('05110000-0000-4000-a000-000000000009','F500000009','05120000-0000-4000-a000-000000000009','05100000-0000-4000-a000-000000000001',2,2,2,null,'2026-01-01','2026-01-01');
+insert into private.room_selection_rules(room_id,rule_set_kind,candidate_ordering,metadata_language,genre_mode,agreement_numerator,agreement_denominator)
+select id,'legacy_005_006_008','legacy_source_order','en-US','or',2,3 from public.rooms where code like 'F50000000%';
 insert into public.room_members(id,room_id,user_id,is_voter) values
   ('05130000-0000-4000-a000-000000000001','05110000-0000-4000-a000-000000000001','05100000-0000-4000-a000-000000000001',true),
   ('05130000-0000-4000-a000-000000000002','05110000-0000-4000-a000-000000000002','05100000-0000-4000-a000-000000000001',true),
@@ -445,6 +447,7 @@ begin
     perform extensions.dblink_exec(own,format(
       'insert into auth.users(id) values(%1$L),(%2$L),(%3$L);'
       'insert into public.rooms(id,code,creation_request_id,creator_user_id,required_voter_count,voter_count,filter_completed_count) values(%4$L,%5$L,%6$L,%1$L,2,2,2),(%7$L,%8$L,%9$L,%1$L,2,2,2);'
+      'insert into private.room_selection_rules(room_id,rule_set_kind,candidate_ordering,metadata_language,genre_mode,agreement_numerator,agreement_denominator) values(%4$L,''legacy_005_006_008'',''legacy_source_order'',''en-US'',''or'',2,3),(%7$L,''legacy_005_006_008'',''legacy_source_order'',''en-US'',''or'',2,3);'
       'insert into public.room_members(id,room_id,user_id,is_voter) values(%10$L,%4$L,%1$L,true),(%11$L,%4$L,%2$L,true),(%12$L,%7$L,%1$L,true),(%13$L,%7$L,%3$L,true);'
       'insert into public.participant_filters(room_member_id,genres,release_year_from,release_year_to) values(%10$L,''{action}'',2000,2010),(%11$L,''{drama}'',%14$s,%15$s),(%12$L,''{}'',2000,2020),(%13$L,''{comedy}'',2005,2015)',
       u1,u2,u3,rid,code,extensions.gen_random_uuid(),other_rid,other_code,extensions.gen_random_uuid(),

@@ -13,9 +13,10 @@ const expoConfig = fs.readFileSync(path.join(root, 'app.json'), 'utf8');
 const edgeSource = fs.readFileSync(path.join(root, 'supabase/functions/room-candidate/index.ts'), 'utf8');
 
 it('provides the reviewed Feature 006 zero-secret commands and a reproducible Deno 2 runtime', () => {
-  expect(manifest.scripts['test:edge']).toBe('deno test --allow-env --allow-net=127.0.0.1 supabase/functions/_tests');
+  expect(manifest.scripts['test:edge']).toBe('deno test --allow-env --allow-read=config,supabase/functions --allow-net=127.0.0.1 supabase/functions/_tests');
   expect(manifest.scripts['test:tmdb:contract']).toBe('node scripts/run-tmdb-contract.mjs');
   expect(manifest.scripts['test:e2e:feature006']).toBe('node scripts/run-e2e.mjs feature006');
+  expect(manifest.scripts['test:e2e:feature009']).toBe('node scripts/run-e2e.mjs feature009');
   expect(manifest.devDependencies.deno).toMatch(/^2\./);
 });
 

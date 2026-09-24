@@ -1,6 +1,51 @@
 export type HarnessDiagnostic = ContainmentDiagnostic | CandidateBoundaryDiagnostic |
   CandidateOverlapDiagnostic | FilterResolutionBoundaryDiagnostic |
-  CandidateTerminalGuardDiagnostic | CandidateHealthGuardDiagnostic;
+  CandidateTerminalGuardDiagnostic | CandidateHealthGuardDiagnostic |
+  CandidatePresentationDiagnostic;
+
+export type CandidatePresentationDiagnostic = Readonly<{
+  kind: 'candidate-presentation';
+  presentationState: 'route-loading' | 'route-error' | 'route-other' |
+    'metadata-loading' | 'metadata-request-failure' | 'metadata-recovery' |
+    'stale-client-projection' | 'metadata-ready-card-missing' | 'heading-visible' |
+    'acquisition-loading' | 'acquisition-failure' | 'poster-loading' |
+    'poster-failure' | 'no-poster' | 'integrity-error' | 'exhausted' | 'agreed' |
+    'other';
+  routeView: 'room' | 'loading' | 'error' | 'malformed' | 'other';
+  candidateAttempt: 'not-observed' | 'acquiring' | 'acquisition-error' |
+    'loading-metadata' | 'metadata-error' | 'loading-poster' | 'poster-error' |
+    'available' | 'no-poster' | 'no-candidates' | 'integrity-error';
+  canonicalReadable: boolean;
+  acquisitionStatus: 'pending' | 'assigned' | 'no_candidates' | 'unavailable';
+  progressionStatus: 'inactive' | 'collecting' | 'advancing' | 'agreed' |
+    'exhausted' | 'unavailable';
+  candidateSequence: number | null;
+  decisionCount: number | null;
+  canonicalCandidateIdentityPresent: boolean;
+  titleMetadataPresent: boolean;
+  releaseYearMetadataPresent: boolean;
+  posterMetadataPresent: boolean;
+  metadataRequestState: 'none' | 'pending' | 'completed' | 'failed';
+  metadataRequestAttemptCount: number;
+  metadataRecoveryActive: boolean;
+  metadataHttpStatusClass: 'none' | '2xx' | '4xx' | '5xx' | 'network' | 'other';
+  metadataResultClass: 'none' | 'available' | 'metadata_unavailable' |
+    'candidate_acquisition_unavailable' | 'other-success' | 'other-failure' |
+    'unreadable';
+  requestSequenceMatches: boolean | null;
+  candidateCardExists: boolean;
+  expectedHeadingExists: boolean;
+  expectedHeadingVisible: boolean;
+  expectedHeadingHidden: boolean;
+  loadingSurfacePresent: boolean;
+  errorSurfacePresent: boolean;
+  exhaustedSurfacePresent: boolean;
+  agreedSurfacePresent: boolean;
+  clientProjectionStale: boolean;
+}>;
+
+type CandidatePresentationState = Omit<CandidatePresentationDiagnostic,
+  'kind' | 'presentationState' | 'expectedHeadingHidden' | 'clientProjectionStale'>;
 
 export type CandidateTerminalGuard = 'binding-present' | 'snapshot-readable' |
   'acquisition-status' | 'progression-status' | 'candidate-sequence' |
@@ -221,6 +266,92 @@ const candidateResponseFailures = new Set([
 const candidateResponseExceptionCategories = new Set([
   'none', 'protocol', 'target-closed', 'generic-error', 'non-error',
 ]);
+const routeViews = new Set(['room', 'loading', 'error', 'malformed', 'other']);
+const candidateAttempts = new Set([
+  'not-observed', 'acquiring', 'acquisition-error', 'loading-metadata',
+  'metadata-error', 'loading-poster', 'poster-error', 'available', 'no-poster',
+  'no-candidates', 'integrity-error',
+]);
+const metadataRequestStates = new Set(['none', 'pending', 'completed', 'failed']);
+const metadataHttpStatusClasses = new Set(['none', '2xx', '4xx', '5xx', 'network', 'other']);
+const metadataResultClasses = new Set([
+  'none', 'available', 'metadata_unavailable', 'candidate_acquisition_unavailable',
+  'other-success', 'other-failure', 'unreadable',
+]);
+
+export function candidatePresentationDiagnostic(state: CandidatePresentationState):
+  CandidatePresentationDiagnostic {
+  if (!state || typeof state !== 'object' || Array.isArray(state) ||
+      Object.keys(state).sort().join(',') !==
+        'acquisitionStatus,agreedSurfacePresent,candidateAttempt,candidateCardExists,candidateSequence,canonicalCandidateIdentityPresent,canonicalReadable,decisionCount,errorSurfacePresent,exhaustedSurfacePresent,expectedHeadingExists,expectedHeadingVisible,loadingSurfacePresent,metadataHttpStatusClass,metadataRecoveryActive,metadataRequestAttemptCount,metadataRequestState,metadataResultClass,posterMetadataPresent,progressionStatus,releaseYearMetadataPresent,requestSequenceMatches,routeView,titleMetadataPresent' ||
+      !routeViews.has(state.routeView) || !candidateAttempts.has(state.candidateAttempt) ||
+      !acquisitionStatuses.has(state.acquisitionStatus) ||
+      !progressionStatuses.has(state.progressionStatus) ||
+      !(state.candidateSequence === null || boundedCount(state.candidateSequence, 2147483647)) ||
+      !(state.decisionCount === null || boundedCount(state.decisionCount, 2147483647)) ||
+      !metadataRequestStates.has(state.metadataRequestState) ||
+      !boundedCount(state.metadataRequestAttemptCount, 100) ||
+      !metadataHttpStatusClasses.has(state.metadataHttpStatusClass) ||
+      !metadataResultClasses.has(state.metadataResultClass) ||
+      !(state.requestSequenceMatches === null || typeof state.requestSequenceMatches === 'boolean') ||
+      ![state.canonicalReadable, state.canonicalCandidateIdentityPresent,
+        state.titleMetadataPresent, state.releaseYearMetadataPresent,
+        state.posterMetadataPresent, state.metadataRecoveryActive, state.candidateCardExists,
+        state.expectedHeadingExists, state.expectedHeadingVisible,
+        state.loadingSurfacePresent, state.errorSurfacePresent,
+        state.exhaustedSurfacePresent, state.agreedSurfacePresent]
+        .every(value => typeof value === 'boolean') ||
+      state.expectedHeadingVisible && !state.expectedHeadingExists ||
+      !state.canonicalReadable && (state.acquisitionStatus !== 'unavailable' ||
+        state.progressionStatus !== 'unavailable' || state.candidateSequence !== null ||
+        state.decisionCount !== null || state.canonicalCandidateIdentityPresent) ||
+      state.metadataRequestState === 'none' && (state.metadataRequestAttemptCount !== 0 ||
+        state.metadataHttpStatusClass !== 'none' || state.metadataResultClass !== 'none') ||
+      state.metadataRequestState === 'pending' && (state.metadataRequestAttemptCount < 1 ||
+        state.metadataHttpStatusClass !== 'none' || state.metadataResultClass !== 'none') ||
+      (state.metadataRequestState === 'completed' || state.metadataRequestState === 'failed') &&
+        (state.metadataRequestAttemptCount < 1 || state.metadataHttpStatusClass === 'none' ||
+          state.metadataResultClass === 'none')) throw new Error('E2E_SAFE_FAILURE');
+
+  const expectedHeadingHidden = state.expectedHeadingExists && !state.expectedHeadingVisible;
+  const clientProjectionStale = state.requestSequenceMatches === false || state.canonicalReadable && (
+    state.acquisitionStatus === 'assigned' &&
+      (['acquiring', 'no-candidates'].includes(state.candidateAttempt) ||
+        state.candidateAttempt === 'not-observed' && !state.titleMetadataPresent) ||
+    state.acquisitionStatus === 'no_candidates' &&
+      (state.titleMetadataPresent || state.candidateCardExists ||
+        ['loading-metadata', 'metadata-error', 'loading-poster', 'poster-error',
+          'available', 'no-poster'].includes(state.candidateAttempt)));
+
+  let presentationState: CandidatePresentationDiagnostic['presentationState'];
+  if (state.routeView === 'loading') presentationState = 'route-loading';
+  else if (state.routeView === 'error' || state.routeView === 'malformed') presentationState = 'route-error';
+  else if (state.routeView !== 'room') presentationState = 'route-other';
+  else if (state.progressionStatus === 'exhausted' || state.exhaustedSurfacePresent)
+    presentationState = 'exhausted';
+  else if (state.expectedHeadingVisible) presentationState = 'heading-visible';
+  else if (state.progressionStatus === 'agreed' || state.agreedSurfacePresent)
+    presentationState = 'agreed';
+  else if (state.acquisitionStatus === 'assigned' && state.candidateAttempt === 'loading-metadata' &&
+      state.metadataRequestState === 'pending' && state.metadataRecoveryActive)
+    presentationState = 'metadata-recovery';
+  else if (state.acquisitionStatus === 'assigned' && state.metadataRequestState === 'failed')
+    presentationState = 'metadata-request-failure';
+  else if (clientProjectionStale) presentationState = 'stale-client-projection';
+  else if (state.acquisitionStatus === 'assigned' && state.titleMetadataPresent &&
+      !state.candidateCardExists) presentationState = 'metadata-ready-card-missing';
+  else if (state.candidateAttempt === 'loading-metadata') presentationState = 'metadata-loading';
+  else if (state.candidateAttempt === 'acquiring') presentationState = 'acquisition-loading';
+  else if (state.candidateAttempt === 'acquisition-error') presentationState = 'acquisition-failure';
+  else if (state.candidateAttempt === 'loading-poster') presentationState = 'poster-loading';
+  else if (state.candidateAttempt === 'poster-error') presentationState = 'poster-failure';
+  else if (state.candidateAttempt === 'no-poster') presentationState = 'no-poster';
+  else if (state.candidateAttempt === 'integrity-error') presentationState = 'integrity-error';
+  else presentationState = 'other';
+
+  return Object.freeze({ kind: 'candidate-presentation', presentationState, ...state,
+    expectedHeadingHidden, clientProjectionStale });
+}
 
 export function candidateTerminalGuardDiagnostic(state: Omit<CandidateTerminalGuardDiagnostic, 'kind'>):
   CandidateTerminalGuardDiagnostic {
@@ -392,6 +523,17 @@ export function candidateOverlapDiagnostic(state: CandidateOverlapState): Candid
 export function parseHarnessDiagnostic(value: unknown): HarnessDiagnostic {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('E2E_SAFE_FAILURE');
   const item = value as Record<string, unknown>;
+  if (item.kind === 'candidate-presentation') {
+    if (Object.keys(item).sort().join(',') !==
+        'acquisitionStatus,agreedSurfacePresent,candidateAttempt,candidateCardExists,candidateSequence,canonicalCandidateIdentityPresent,canonicalReadable,clientProjectionStale,decisionCount,errorSurfacePresent,exhaustedSurfacePresent,expectedHeadingExists,expectedHeadingHidden,expectedHeadingVisible,kind,loadingSurfacePresent,metadataHttpStatusClass,metadataRecoveryActive,metadataRequestAttemptCount,metadataRequestState,metadataResultClass,posterMetadataPresent,presentationState,progressionStatus,releaseYearMetadataPresent,requestSequenceMatches,routeView,titleMetadataPresent')
+      throw new Error('E2E_SAFE_FAILURE');
+    const { kind: _kind, presentationState: _presentationState,
+      expectedHeadingHidden: _expectedHeadingHidden,
+      clientProjectionStale: _clientProjectionStale, ...state } = item;
+    const rebuilt = candidatePresentationDiagnostic(state as CandidatePresentationState);
+    if (JSON.stringify(rebuilt) !== JSON.stringify(item)) throw new Error('E2E_SAFE_FAILURE');
+    return rebuilt;
+  }
   if (item.kind === 'candidate-terminal-guard') {
     if (Object.keys(item).sort().join(',') !==
         'acquisitionMatches,acquisitionStatus,bindingPresent,candidateSequence,decisionCount,decisionsZero,expected,guard,kind,progressionMatches,progressionStatus,sequenceMatches,snapshotReadable,terminalKindMatches')

@@ -44,6 +44,8 @@ insert into public.rooms(id,code,creation_request_id,creator_user_id,required_vo
 values('77100000-0000-4000-a000-000000000001','F700000001',
  '77200000-0000-4000-a000-000000000001','77000000-0000-4000-a000-000000000003',2,2,2,
  'compatible','pending','inactive',0,0);
+insert into private.room_selection_rules(room_id,rule_set_kind,candidate_ordering,metadata_language,genre_mode,agreement_numerator,agreement_denominator)
+values('77100000-0000-4000-a000-000000000001','legacy_005_006_008','legacy_source_order','en-US','or',2,3);
 insert into public.room_members(id,room_id,user_id,is_voter) values
 ('77300000-0000-4000-a000-000000000001','77100000-0000-4000-a000-000000000001','77000000-0000-4000-a000-000000000001',true),
 ('77300000-0000-4000-a000-000000000002','77100000-0000-4000-a000-000000000001','77000000-0000-4000-a000-000000000002',true),

@@ -1,19 +1,19 @@
 /** @jest-environment node */
 import { spawnSync } from 'node:child_process';
+import { expectCleanNodeChild } from './subprocess-diagnostics';
 
-// Child assertions never forward raw fixtures/errors into Jest diagnostics.
+// Child assertions use only synthetic status and key fixtures.
 function verify(source: string) {
   const result = spawnSync(process.execPath, ['--input-type=module'], {
     input: source, encoding: 'utf8', timeout: 20000, maxBuffer: 131072,
   });
-  expect(result.error === undefined).toBe(true);
-  expect(result.status).toBe(0);
-  expect(result.stdout.trim() === '' && result.stderr.trim() === '').toBe(true);
+  expectCleanNodeChild(result);
 }
 
 const prelude = `
   import assert from 'node:assert/strict';
   import fs from 'node:fs/promises';
+  import fsSync from 'node:fs';
   import os from 'node:os';
   import path from 'node:path';
   import { spawn } from 'node:child_process';
@@ -127,10 +127,37 @@ describe('local public environment wrapper', () => {
   `));
 
   it('captures exact local CLI arguments and rejects nonzero, malformed, oversized and spawn failures safely', () => verify(prelude + `
+    const owner = await fs.mkdtemp(path.join(os.tmpdir(), 'otteroom-t072-supabase-'));
+    const ownedTemp = path.join(owner, 'tmp'), ownedHome = path.join(owner, 'home');
+    await fs.mkdir(ownedTemp); await fs.mkdir(ownedHome);
+    const configHome = path.join(ownedTemp, 'otteroom-supabase-config');
+    await fs.mkdir(configHome);
+    process.env.TMPDIR = ownedTemp;
+    process.env.HOME = ownedHome;
+    const workdir = owner;
+    await fs.mkdir(path.join(workdir, 'supabase'));
+    await fs.writeFile(path.join(workdir, 'supabase', 'config.toml'), '[project]\\n');
+    process.env.OTTEROOM_SUPABASE_PROJECT_ID = 'otteroom-env-contract';
+    process.env.OTTEROOM_SUPABASE_WORKDIR = workdir;
+    process.once('exit', () => fsSync.rmSync(owner, { recursive: true, force: true }));
     process.env.PATH = path.join(process.cwd(), 'node_modules', '.bin') + path.delimiter + process.env.PATH;
     const cli = code => (command, args, options) => {
+      if (command !== path.join(process.cwd(), 'node_modules', '.bin', 'supabase'))
+        process.stderr.write('TEST_CLI_EXECUTABLE_MISMATCH\\n');
       assert.equal(command, path.join(process.cwd(), 'node_modules', '.bin', 'supabase'));
-      assert.deepEqual(args, ['status', '--output', 'env']);
+      if (JSON.stringify(args) !== JSON.stringify(['status', '--output', 'env', '--workdir', workdir]))
+        process.stderr.write('TEST_CLI_ARGS_MISMATCH\\n');
+      assert.deepEqual(args, ['status', '--output', 'env', '--workdir', workdir]);
+      if (path.resolve(options.cwd) !== process.cwd()) process.stderr.write('TEST_CLI_CWD_MISMATCH\\n');
+      assert.equal(path.resolve(options.cwd), process.cwd());
+      if (options.env.HOME !== ownedHome || options.env.TMPDIR !== ownedTemp ||
+          options.env.XDG_CONFIG_HOME !== configHome) process.stderr.write('TEST_CLI_OWNED_ENV_MISMATCH\\n');
+      assert.equal(options.env.HOME, ownedHome);
+      assert.equal(options.env.TMPDIR, ownedTemp);
+      assert.equal(options.env.XDG_CONFIG_HOME, configHome);
+      assert.equal(options.env.CI, '1');
+      assert.equal(options.env.DO_NOT_TRACK, '1');
+      assert.equal(options.env.SUPABASE_TELEMETRY_DISABLED, '1');
       assert.equal(options.shell === undefined || options.shell === false, true);
       return spawn(process.execPath, ['-e', code], options);
     };

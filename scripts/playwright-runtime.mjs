@@ -2,21 +2,24 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { localExecutable, runManagedProcess } from './safe-process.mjs';
 
+const root = fileURLToPath(new URL('../', import.meta.url));
 export const PLAYWRIGHT_VERSION = '1.63.0';
 export const PLAYWRIGHT_IMAGE = 'mcr.microsoft.com/playwright:v1.63.0-noble';
+const localPlaywrightPackages = Object.freeze(['playwright', 'playwright-core']);
 const nativeURL = 'http://127.0.0.1:8081';
 // Scope-forward loopback over the official connection, not the host firewall.
 const dockerURL = nativeURL;
 const hints = Object.freeze({
   DOCKER_UNAVAILABLE: 'Install/start Docker Engine and allow this user to reach its local daemon; rerun npm run playwright:install.',
   DOCKER_IMAGE_MISSING: 'Run npm run playwright:install to pull the pinned image.',
+  DOCKER_PACKAGE_MISSING: 'Run npm ci to install the pinned project-local Playwright packages before the E2E command.',
   DOCKER_PREPARE_FAILED: 'Check Docker access and registry connectivity; rerun npm run playwright:install.',
   DOCKER_START_FAILED: 'Check local Docker resources and host-gateway support; rerun the E2E command.',
-  DOCKER_NOT_READY: 'Check container resources and npm registry connectivity for playwright@1.63.0; rerun the E2E command.',
+  DOCKER_NOT_READY: 'Check the owned container state and pinned Playwright package preparation; rerun the E2E command.',
   DOCKER_CLEANUP_FAILED: 'Check Docker access and remove only the container carrying this invocation owner label.',
   UNSUPPORTED_PLATFORM: 'Use a supported x64/arm64 OS, or Linux with Docker and the pinned official image.',
   RUNTIME_OVERRIDE_REJECTED: 'Remove custom browser/runtime environment overrides; the repository runner selects and owns the runtime.',
@@ -29,6 +32,15 @@ export function runtimeDiagnostic(error) {
   return error instanceof RuntimeError ? `${error.message}: ${hints[error.message]}` : 'PLAYWRIGHT_RUNTIME_FAILED';
 }
 export function signalExit(signal) { return signal?.aborted ? signal.reason === 'SIGINT' ? 130 : 143 : undefined; }
+
+function assertLocalPlaywrightPackages() {
+  for (const packageName of localPlaywrightPackages) {
+    try {
+      const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'node_modules', packageName, 'package.json'), 'utf8'));
+      if (packageJson.name !== packageName || packageJson.version !== PLAYWRIGHT_VERSION) throw new Error();
+    } catch { throw new RuntimeError('DOCKER_PACKAGE_MISSING'); }
+  }
+}
 
 export function selectRuntime({ platform = os.platform(), arch = os.arch(), release = os.release(), version = os.version(), osRelease } = {}) {
   if (!['x64', 'arm64'].includes(arch)) throw new RuntimeError('UNSUPPORTED_PLATFORM');
@@ -119,6 +131,7 @@ export async function prepareRuntime({ kind = selectRuntime(), docker = dockerCo
 } = {}) {
   if (kind === 'native') return await nativeInstall();
   if (kind !== 'docker') throw new RuntimeError('UNSUPPORTED_PLATFORM');
+  assertLocalPlaywrightPackages();
   await requireDocker(docker, signal);
   const result = await docker(['pull', PLAYWRIGHT_IMAGE], { signal, timeoutMs: 600000 });
   if (signal?.aborted) return signalExit(signal);
@@ -139,13 +152,19 @@ export async function withPlaywrightRuntime(run, { kind = selectRuntime(), docke
   try {
     await requireDocker(docker, signal);
     if ((await docker(['image', 'inspect', '--format', '{{.Id}}', PLAYWRIGHT_IMAGE], { signal })).code !== 0) throw new RuntimeError('DOCKER_IMAGE_MISSING');
+    assertLocalPlaywrightPackages();
     if (signal?.aborted) return signalExit(signal);
     createAttempted = true;
     const created = await docker(['create', '--name', name, '--label', label, '--init', '--user', 'pwuser', '--workdir', '/home/pwuser',
       '--shm-size=1g', '--log-driver=none', '--add-host=hostmachine:host-gateway', '--publish', '127.0.0.1::3000',
-      '--env', 'CI=1', '--env', 'PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1', PLAYWRIGHT_IMAGE,
-      'npx', '--yes', `playwright@${PLAYWRIGHT_VERSION}`, 'run-server', '--port', '3000', '--host', '0.0.0.0'], { signal });
+      '--env', 'CI=1', '--env', 'PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1', '--env', 'NODE_PATH=/home/pwuser',
+      '--entrypoint', '/usr/bin/node', PLAYWRIGHT_IMAGE,
+      '/home/pwuser/playwright/cli.js', 'run-server', '--port', '3000', '--host', '0.0.0.0'], { signal });
     if (created.code !== 0 || signal?.aborted) throw new RuntimeError('DOCKER_START_FAILED');
+    for (const packageName of localPlaywrightPackages) {
+      const copied = await docker(['cp', path.join(root, 'node_modules', packageName), `${name}:/home/pwuser/${packageName}`], { signal });
+      if (copied.code !== 0 || signal?.aborted) throw new RuntimeError('DOCKER_START_FAILED');
+    }
     if ((await docker(['start', name], { signal })).code !== 0) throw new RuntimeError('DOCKER_START_FAILED');
     status('started');
     const port = await docker(['inspect', '--format', '{{(index (index .NetworkSettings.Ports "3000/tcp") 0).HostPort}}', name], { metadata: true, signal });

@@ -34,19 +34,14 @@ select is((select count(*)::integer from pg_publication_tables
 select ok(exists(select 1 from pg_publication_tables where pubname='supabase_realtime'
     and schemaname='public' and tablename='rooms'), 'rooms remains the sole Realtime relation');
 
-select ok(to_regprocedure('private.candidate_agreement_threshold(integer)') is not null,
-  'private bigint-safe threshold helper exists');
-select is((select array_agg(private.candidate_agreement_threshold(n) order by n)
-  from generate_series(2,10) n), array[2,2,3,4,4,5,6,6,7],
-  'threshold N=2..10 is the exact integer vector');
-select throws_ok($$select private.candidate_agreement_threshold(1)$$,
-  '22023', 'Invalid voter count', 'threshold rejects N below two');
+select ok(to_regprocedure('private.candidate_agreement_threshold(uuid,integer)') is not null,
+  'private bigint-safe snapshot-derived threshold helper exists');
 
 select ok(to_regprocedure('public.get_room_candidate_decision(uuid,integer,bigint)') is not null
   and to_regprocedure('public.submit_room_candidate_decision(uuid,integer,bigint,public.candidate_decision_value)') is not null,
   'decision RPCs have the frozen progression-aware signatures');
 select ok(to_regprocedure('public.prepare_room_tmdb_candidate(uuid,uuid)') is not null
-  and to_regprocedure('public.commit_room_tmdb_candidate(uuid,uuid,integer,bigint,smallint,integer[],boolean)') is not null
+  and to_regprocedure('public.commit_room_tmdb_candidate(uuid,uuid,integer,bigint,smallint,integer[],boolean,bigint,numeric)') is not null
   and to_regprocedure('public.commit_room_tmdb_no_candidates(uuid,uuid,integer)') is not null,
   'candidate prepare and commit RPCs have the frozen signatures');
 select ok((select bool_and(pg_get_userbyid(proowner)='postgres' and prosecdef
@@ -54,7 +49,7 @@ select ok((select bool_and(pg_get_userbyid(proowner)='postgres' and prosecdef
       'public.get_room_candidate_decision(uuid,integer,bigint)'::regprocedure,
       'public.submit_room_candidate_decision(uuid,integer,bigint,public.candidate_decision_value)'::regprocedure,
       'public.prepare_room_tmdb_candidate(uuid,uuid)'::regprocedure,
-      'public.commit_room_tmdb_candidate(uuid,uuid,integer,bigint,smallint,integer[],boolean)'::regprocedure,
+      'public.commit_room_tmdb_candidate(uuid,uuid,integer,bigint,smallint,integer[],boolean,bigint,numeric)'::regprocedure,
       'public.commit_room_tmdb_no_candidates(uuid,uuid,integer)'::regprocedure)),
   'protected RPCs are postgres-owned security definers with empty search path');
 select ok(has_function_privilege('authenticated',
@@ -76,6 +71,8 @@ begin
     candidate_progression_status,candidate_sequence,decision_completed_count)
   values(rid,upper(encode(extensions.gen_random_bytes(5),'hex')),extensions.gen_random_uuid(),uid,
     p_n,p_n,p_n,'compatible','pending','inactive',0,0);
+  insert into private.room_selection_rules(room_id,rule_set_kind,candidate_ordering,metadata_language,genre_mode,agreement_numerator,agreement_denominator)
+    values(rid,'legacy_005_006_008','legacy_source_order','en-US','or',2,3);
   insert into private.room_filter_resolutions(room_id,release_year_from,release_year_to)
     values(rid,2000,2026);
   for i in 1..p_n loop
@@ -83,6 +80,8 @@ begin
     mid:=extensions.gen_random_uuid();
     insert into public.room_members(id,room_id,user_id,is_voter) values(mid,rid,uid,true);
   end loop;
+  insert into public.participant_filters(room_member_id,genres,release_year_from,release_year_to)
+    select id,'{}'::public.participant_genre[],2000,2026 from public.room_members where room_id=rid;
   -- Install the occurrence after every fixed voter exists so same-room FKs are exercised.
   insert into public.room_candidate_occurrences(id,room_id,sequence,tmdb_movie_id,status)
     values(oid,rid,1,p_tmdb,'collecting');
@@ -108,7 +107,7 @@ end;$f$;
 create temporary table progression_threshold_results(n integer,t integer,below jsonb,at jsonb);
 do $matrix$ declare n integer;t integer;begin
   for n in 2..10 loop
-    t:=private.candidate_agreement_threshold(n);
+    t:=case when n=2 then 2 else ((n::bigint*2+3-1)/3)::integer end;
     insert into progression_threshold_results values(n,t,
       pg_temp.progression_room(n,t-1,800000+n*10,'no'),
       pg_temp.progression_room(n,t-1,800001+n*10,'yes'));
@@ -130,9 +129,9 @@ do $successor$ declare rejected jsonb;rid uuid;actor uuid;winner jsonb;replay js
   rid:=(rejected->>'room_id')::uuid;
   select user_id into actor from public.room_members where room_id=rid and is_voter limit 1;
   select to_jsonb(x) into winner from public.commit_room_tmdb_candidate(
-    rid,actor,1,880002::bigint,2020::smallint,'{}'::integer[],false) x;
+    rid,actor,1,880002::bigint,2020::smallint,'{}'::integer[],false,null::bigint,null::numeric) x;
   select to_jsonb(x) into replay from public.commit_room_tmdb_candidate(
-    rid,actor,1,880003::bigint,2020::smallint,'{}'::integer[],false) x;
+    rid,actor,1,880003::bigint,2020::smallint,'{}'::integer[],false,null::bigint,null::numeric) x;
   perform pg_temp.require((winner->>'outcome')='assigned'
     and (winner->>'candidate_sequence')::integer=2
     and replay->>'tmdb_movie_id'=winner->>'tmdb_movie_id'
@@ -194,6 +193,7 @@ begin
  perform extensions.dblink_exec(own,format(
   'insert into auth.users(id)values(%1$L),(%2$L),(%3$L);'
   'insert into public.rooms(id,code,creation_request_id,creator_user_id,required_voter_count,voter_count,filter_completed_count,filter_resolution_status)values(%4$L,%5$L,%6$L,%1$L,2,2,2,''compatible'');'
+  'insert into private.room_selection_rules(room_id,rule_set_kind,candidate_ordering,metadata_language,genre_mode,agreement_numerator,agreement_denominator)values(%4$L,''legacy_005_006_008'',''legacy_source_order'',''en-US'',''or'',2,3);'
   'insert into public.room_members(id,room_id,user_id,is_voter)values(%7$L,%4$L,%1$L,true),(%8$L,%4$L,%2$L,true);'
   'insert into private.room_filter_resolutions(room_id,release_year_from,release_year_to)values(%4$L,2000,2026);'
   'insert into public.room_candidate_occurrences(id,room_id,sequence,tmdb_movie_id)values(%9$L,%4$L,1,890001);'
@@ -230,13 +230,15 @@ begin
  perform extensions.dblink_exec(own,format(
   'insert into auth.users(id)values(%1$L),(%2$L);'
   'insert into public.rooms(id,code,creation_request_id,creator_user_id,required_voter_count,voter_count,filter_completed_count,filter_resolution_status,candidate_progression_status,candidate_sequence)values(%3$L,%4$L,%5$L,%1$L,2,2,2,''compatible'',''advancing'',1);'
+  'insert into private.room_selection_rules(room_id,rule_set_kind,candidate_ordering,metadata_language,genre_mode,agreement_numerator,agreement_denominator)values(%3$L,''legacy_005_006_008'',''legacy_source_order'',''en-US'',''or'',2,3);'
   'insert into public.room_members(room_id,user_id,is_voter)values(%3$L,%1$L,true),(%3$L,%2$L,true);'
+  'insert into public.participant_filters(room_member_id,genres,release_year_from,release_year_to)select id,''{}''::public.participant_genre[],2000,2026 from public.room_members where room_id=%3$L;'
   'insert into private.room_filter_resolutions(room_id,release_year_from,release_year_to)values(%3$L,2000,2026);'
   'insert into public.room_candidate_occurrences(id,room_id,sequence,tmdb_movie_id,status,resolved_at)values(%6$L,%3$L,1,891001,''rejected'',transaction_timestamp())',
   u1,u2,rid,upper(encode(extensions.gen_random_bytes(5),'hex')),extensions.gen_random_uuid(),oid));
  perform extensions.dblink_exec(own,'begin');perform pg_temp.remote_json(own,format('select to_jsonb(id) from public.rooms where id=%L for update',rid));
- perform pg_temp.require(extensions.dblink_send_query(a,format('select to_jsonb(x) from public.commit_room_tmdb_candidate(%L,%L,1,891002,2020::smallint,''{}''::integer[],false)x',rid,u1))=1
-  and extensions.dblink_send_query(b,format('select to_jsonb(x) from public.commit_room_tmdb_candidate(%L,%L,1,891003,2020::smallint,''{}''::integer[],false)x',rid,u2))=1,
+ perform pg_temp.require(extensions.dblink_send_query(a,format('select to_jsonb(x) from public.commit_room_tmdb_candidate(%L,%L,1,891002,2020::smallint,''{}''::integer[],false,null::bigint,null::numeric)x',rid,u1))=1
+  and extensions.dblink_send_query(b,format('select to_jsonb(x) from public.commit_room_tmdb_candidate(%L,%L,1,891003,2020::smallint,''{}''::integer[],false,null::bigint,null::numeric)x',rid,u2))=1,
   'two source proposals dispatched');
  perform extensions.dblink_exec(own,'commit');perform pg_temp.await(a);perform pg_temp.await(b);
  select j into ra from extensions.dblink_get_result(a)t(j jsonb);perform j from extensions.dblink_get_result(a)t(j jsonb);

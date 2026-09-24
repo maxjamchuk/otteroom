@@ -5,10 +5,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { localExecutable, runManagedProcess } from './safe-process.mjs';
+import { localSupabaseArgs, localSupabaseContainer, localSupabaseRuntime } from './local-supabase.mjs';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
-const project='otteroom-room-session';
-const container=`supabase_db_${project}`;
+const runtime=localSupabaseRuntime();
+const project=runtime.project;
+const container=localSupabaseContainer();
 const env={...process.env,PATH:`${path.join(root,'node_modules/.bin')}${path.delimiter}${process.env.PATH??''}`,
   CI:'1',DO_NOT_TRACK:'1',SUPABASE_TELEMETRY_DISABLED:'1'};
 const lock=path.join(os.tmpdir(),`otteroom-tmdb-candidate-migration-${project}.lock`);
@@ -49,7 +51,7 @@ try{
     .map(async name=>[name,digest(await fs.readFile(path.join(root,'supabase/migrations',name)))]));
   stage='feature005-reset';resetStarted=true;
   const cli=localExecutable('supabase');
-  await managed(cli,['db','reset','--local','--version','20260912000000','--no-seed']);
+  await managed(cli,localSupabaseArgs(['db','reset','--local','--version','20260912000000','--no-seed']));
   stage='feature005-fixtures';
   let snapshot=(await bounded('docker',sqlArgs,{input:await fs.readFile(path.join(root,
     'supabase/tests/migration/tmdb_candidate_source.before.sql'),'utf8')})).trim();
@@ -57,7 +59,7 @@ try{
   if(parsed.rooms?.length!==6||parsed.members?.length!==9||parsed.parents?.length!==2
     ||parsed.clauses?.length!==3||parsed.candidates?.length!==4)fail();
   receipt('legacy-rooms=6 members=9 parents=2 clauses=3 fixture-candidates=4 gotrue-signups=0');
-  stage='actual-cutover';await managed(cli,['migration','up','--local']);
+  stage='actual-cutover';await managed(cli,localSupabaseArgs(['migration','up','--local']));
   stage='compatibility';
   const variable=snapshot.replaceAll('\\','\\\\').replaceAll("'","\\'");
   await managed('docker',sqlArgs,{input:`\\set feature006_snapshot '${variable}'\n${await fs.readFile(path.join(root,
@@ -70,7 +72,7 @@ try{
   receipt(`stage=${stage} result=FAIL`);process.exitCode=abort.signal.aborted?130:1;
 }finally{
   if(resetStarted){try{
-    await managed(localExecutable('supabase'),['db','reset','--local','--no-seed'],{signal:null});
+    await managed(localExecutable('supabase'),localSupabaseArgs(['db','reset','--local','--no-seed']),{signal:null});
     const empty=(await bounded('docker',sqlArgs,{signal:null,input:`select not exists(select 1 from public.rooms)
       and not exists(select 1 from public.candidate_decisions)
       and not exists(select 1 from public.room_candidate_occurrences)

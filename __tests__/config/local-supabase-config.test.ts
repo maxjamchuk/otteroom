@@ -37,11 +37,13 @@ const fixture = '[auth]\nenable_anonymous_sign_ins = true\n[auth.rate_limit]\nan
 
 it('keeps destructive migration fixtures outside normal recursive pgTAP discovery', () => {
   const manifest = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-  expect(manifest.scripts['db:test']).toBe('supabase test db supabase/tests/database');
+  expect(manifest.scripts['db:test']).toBe('node scripts/supabase-cli.mjs test db supabase/tests/database');
+  expect(manifest.scripts['db:reset']).toBe('node scripts/supabase-cli.mjs db reset');
+  expect(manifest.scripts.edge).toBe('node scripts/supabase-cli.mjs functions serve room-candidate --env-file supabase/functions/.env.local');
   const suites = fs.readdirSync('supabase/tests/database', { recursive: true });
   expect(suites.filter(name => String(name).endsWith('.sql')).sort()).toEqual([
     'candidate_progression.test.sql','common_filter_resolution.test.sql', 'participant_filter_concurrency.test.sql',
-    'room_candidate.test.sql', 'room_session.test.sql', 'swipe_decisions.test.sql',
+    'room_candidate.test.sql', 'room_session.test.sql', 'selection_rules.test.sql', 'swipe_decisions.test.sql',
     'tmdb_candidate_source.test.sql',
   ]);
   for (const phase of ['before', 'after']) {
@@ -77,5 +79,39 @@ describe('committed local Supabase Auth policy', () => {
   });
   it('never mutates the canonical file while testing altered fixtures', () => {
     expect(fs.readFileSync('supabase/config.toml', 'utf8') === canonical).toBe(true);
+  });
+
+  it('routes isolated T072 Supabase state through a distinct project/workdir', () => {
+    const runtime = fs.readFileSync('scripts/local-supabase.mjs', 'utf8');
+    const provisioner = fs.readFileSync('scripts/t072-isolated-supabase.mjs', 'utf8');
+    for (const source of [runtime, provisioner]) {
+      expect(source).toContain('OTTEROOM_SUPABASE_PROJECT_ID');
+      expect(source).toContain('OTTEROOM_SUPABASE_WORKDIR');
+      expect(source).toContain('otteroom-t072-supabase-');
+    }
+    expect(runtime).toContain("'--workdir', runtime.workdir");
+    expect(provisioner).toContain("'stop', '--project-id', project, '--no-backup'");
+    for (const file of [
+      'scripts/check-room-membership-migration.mjs',
+      'scripts/check-participant-filters-migration.mjs',
+      'scripts/check-common-filter-resolution-migration.mjs',
+      'scripts/check-tmdb-candidate-migration.mjs',
+      'scripts/check-swipe-decisions-migration.mjs',
+      'scripts/check-candidate-progression-migration.mjs',
+      'scripts/check-selection-rules-migration.mjs',
+    ]) {
+      const source = fs.readFileSync(file, 'utf8');
+      expect(source).not.toContain('supabase_db_otteroom-room-session');
+      expect(source).toContain('localSupabaseContainer');
+      expect(source).toContain('localSupabaseArgs');
+    }
+    for (const file of [
+      'e2e/support/room-harness.ts',
+      'e2e/support/decision-harness.ts',
+    ]) {
+      const source = fs.readFileSync(file, 'utf8');
+      expect(source).not.toContain('supabase_db_otteroom-room-session');
+      expect(source).toContain('localSupabaseContainer');
+    }
   });
 });

@@ -260,6 +260,8 @@ export type Database = {
           p_room_id: string
           p_tmdb_genre_ids: number[]
           p_tmdb_movie_id: number
+          p_vote_average: number
+          p_vote_count: number
         }
         Returns: {
           candidate_progression_status: Database["public"]["Enums"]["candidate_progression_status"]
@@ -281,11 +283,20 @@ export type Database = {
           tmdb_movie_id: number
         }[]
       }
-      create_room: {
+      create_room_with_selection_rules: {
         Args: {
+          p_actor_user_id: string
+          p_agreement_denominator: number
+          p_agreement_numerator: number
+          p_candidate_ordering: string
           p_creation_request_id: string
           p_creator_is_voter: boolean
+          p_genre_mode: string
+          p_metadata_language: string
+          p_minimum_average_rating: number
+          p_minimum_vote_count: number
           p_required_voter_count: number
+          p_rule_set_kind: string
         }
         Returns: {
           candidate_acquisition_status: Database["public"]["Enums"]["candidate_acquisition_status"]
@@ -366,13 +377,19 @@ export type Database = {
       prepare_room_tmdb_candidate: {
         Args: { p_actor_user_id: string; p_room_id: string }
         Returns: {
+          candidate_ordering: string
           candidate_progression_status: Database["public"]["Enums"]["candidate_progression_status"]
           candidate_sequence: number
           excluded_tmdb_movie_ids: Json
           genre_clauses_tmdb_ids: Json
+          genre_mode: string
+          metadata_language: string
+          minimum_average_rating: number
+          minimum_vote_count: number
           outcome: string
           release_year_from: number
           release_year_to: number
+          rule_set_kind: string
           tmdb_movie_id: number
         }[]
       }

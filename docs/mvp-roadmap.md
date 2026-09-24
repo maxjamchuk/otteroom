@@ -1,7 +1,11 @@
 # Otteroom MVP Roadmap
 
 **Status:** Normative current sequencing and directional feature decomposition.
-Established 2026-09-10. Features 001–008 are COMPLETE; Feature 009 is PLANNED.
+Established 2026-09-10. Features 001–008 are COMPLETE. Feature 009 is
+release-complete within its frozen scope after the owner's latest-source
+live-TMDB browser recheck passed. T098 fresh-checkout certification was
+discontinued by owner waiver, not passed. Feature 010 Discovery and Feature 011
+Match are unstarted.
 
 ## Authority and feature boundaries
 
@@ -39,17 +43,21 @@ roadmap does not authorize implementing the whole MVP at once.
 | 006 | TMDB Candidate Source | COMPLETE | Real eligible TMDB candidates with stable room assignment |
 | 007 | Swipe Decisions | COMPLETE | Independent, persistent right/left decisions per voter and candidate |
 | 008 | Candidate Progression | COMPLETE | Recoverable progression governed by resolved agreement semantics; stop advancing on agreement |
-| 009 | Match | PLANNED | Authoritative shared choice and match experience using the established agreement rule; first useful MVP boundary |
+| 009 | Selection Rules and Candidate Ordering | RELEASE-COMPLETE; READY TO COMMIT | Server YAML, immutable room rules, eligibility, four ordering modes and agreement; owner latest-source recheck passed; T098 waived, not passed |
+| 010 | Discovery | DEFERRED; UNSPECIFIED | Research ways to offer more varied, useful movie suggestions before choosing an algorithm |
+| 011 | Match | PLANNED; UNSTARTED | Authoritative shared choice and match experience using the room's retained agreement rule; first useful MVP boundary |
 
-The current order is **001 → 002 → 003 → 004 → 005 → 006 → 007 → 008 → 009**.
+The current sequence is **001 → 002 → 003 → 004 → 005 → 006 → 007 → 008 → 009 → 010 → 011**.
 Generalized membership precedes filters, swipes and matches so those concepts do
 not inherit fixed host/guest seats. The configured voting group assembles and
 becomes fixed before filters begin. Individual filters precede common resolution;
 resolution precedes production candidate acquisition; independent decisions
-precede progression. The agreement policy for more than two voters must be
-resolved before or during 008 specification so progression can distinguish
-continuing from agreement. Feature 009 then delivers the completed match
-experience using that already-resolved policy.
+precede progression. Feature 008 established the completed fixed agreement and
+progression baseline. Feature 009 deliberately adds externally configured,
+room-stable selection rules while preserving the established source,
+progression, privacy, authority, no-repeat and fixed-membership contracts.
+Feature 010 is a separate, future Discovery feature. Feature 011 delivers the
+Match experience using the agreement rule retained by the room.
 
 ### 001 — Room Session — COMPLETE
 
@@ -234,7 +242,7 @@ Feature 007 owns authoritative independent left/right decisions. It need not
 resolve the larger-group agreement policy unless its future specification
 deliberately requires that decision. Decision lifecycle details and any
 implementation library belong to the 007 specification and plan. Agreement
-semantics must be established by 008 specification; final match UX belongs to 009.
+semantics must be established by 008 specification; final Match UX belongs to 011.
 
 Feature 007 completed on 2026-09-18 at validated implementation SHA
 `06f88fab32f8954a824c663e36d08c6af51292a7`. Its deterministic, bounded
@@ -251,10 +259,11 @@ workspace Git metadata was read-only.
 **Goal:** After the required decisions for the current candidate are resolved,
 advance the room to another eligible TMDB candidate when appropriate.
 
-**Resolved product decision:** Feature 008 defines the fixed agreement threshold
-as two yes decisions for two voters and `(2 * N + 2) div 3` for `N >= 3`. The
-rule is evaluated only after all fixed voters decide; it is not configurable
-and does not introduce early resolution.
+**Completed baseline decision:** Feature 008 defines the fixed agreement
+threshold as two yes decisions for two voters and `(2 * N + 2) div 3` for
+`N >= 3`. The rule is evaluated only after all fixed voters decide; within the
+completed Feature 008 slice it is not configurable and does not introduce early
+resolution.
 
 Expected product result:
 
@@ -272,11 +281,87 @@ Expected product result:
 The 008 specification defines the observable conditions for appropriate
 progression, the agreement handoff and a verifiable release boundary using the
 resolved policy. Stopping and handing off must be demonstrable without an
-unimplemented 009 UI. Feature 008 does not implement Match UI; Feature 009 adds
-the shared-choice experience using the same semantics. Queue/database mechanics
-are not decided here.
+unimplemented Match UI. Feature 008 does not implement Match UI; Feature 011
+adds the shared-choice experience. Feature 009 deliberately evolves the
+selection and larger-group agreement rules for newly created rooms while
+preserving the complete-decision-set timing and Feature 008 progression
+contracts. Queue/database mechanics are not decided here.
 
-### 009 — Match
+### 009 — Selection Rules and Candidate Ordering — RELEASE-COMPLETE; READY TO COMMIT
+
+T096/T097 remain valid charged evidence for their tested source at 23 + 22 = 45
+identities. The T100 current-worktree validation and G5 product audit passed for
+that source. A subsequent mixed-clause source correction has deterministic and
+bounded live source evidence, and the owner's latest-product-source manual
+live-TMDB browser recheck passed. T096/T097 and T100 do not certify that later
+source correction.
+The owner intentionally discontinued T098
+independent fresh-checkout certification because the remaining work had become
+validation-infrastructure work unrelated to product acceptance. T098 did not
+pass; all attempts and receipts remain historical diagnostics, and its planned
+additional 17 identities were not spent. The previous 62-identity combined
+figure is not current-source certification.
+
+The owner's manual live-TMDB mixed-clause browser recheck is complete. No
+Feature 009 release blocker remains. Discovery
+is outside Feature 009. The [Feature 009 quickstart](../specs/009-selection-rules-candidate-ordering/quickstart.md)
+preserves the earlier receipts and the latest source correction.
+
+**Goal:** Apply one validated server rule set to each newly created room so
+candidate eligibility, candidate order and larger-group agreement are explicit,
+consistent and stable for that room.
+
+Expected product result:
+
+- The server reads and validates the external rule configuration at startup.
+  Invalid configuration prevents startup explicitly; changing it requires a
+  configuration edit and restart. There is no hot reload, administration UI,
+  configuration service or new participant-facing setting.
+- Candidate ordering defaults to descending vote count. Supported alternatives
+  are descending average rating, descending popularity and ascending
+  alphabetical title order. Eligibility includes a configurable minimum vote
+  count, an optional minimum average rating and configured metadata language.
+  Exact numeric cutoff values are deployment tuning choices, not fixed product
+  requirements. The current `config/selection-rules.yaml` uses minimum vote count
+  `100`, no rating cutoff, `en-US`, `popularity_desc`, OR genres and exact `2/3`.
+  These are editable operational settings for newly created rooms after a
+  successful restart/redeploy, not product requirements. The earlier
+  `500`/`vote_count_desc` generation remains historical evidence.
+- A voter's selected genres use one configured within-voter rule: OR by default,
+  or AND. Every voter with a genre restriction must still be satisfied, so the
+  voter predicates remain combined across the complete fixed group. Resolution,
+  retrieval and final eligibility validation use the same meaning.
+- Exactly two voters continue to require two yes decisions. For three or more
+  voters, the room uses the ceiling of its configured exact fraction multiplied
+  by the fixed voter count. The default fraction is exactly `2/3`, not `66%`.
+  Agreement still waits for every fixed voter to decide; Feature 009 adds no
+  early resolution.
+- Each new room retains the complete rule set effective when it was created.
+  Later configuration changes or restarts do not change that room. Rooms created
+  before Feature 009 retain the completed Feature 006/008 behavior rather than
+  being silently enrolled into a different rule set.
+- Finding no eligible candidate never weakens a filter, lowers a cutoff or
+  changes AND to OR. Incomplete or failed source work remains distinguishable
+  from completed, genuine exhaustion.
+
+Feature 009 reuses the Feature 006 candidate source and Feature 008 progression
+contracts. It preserves candidate authority, individual-filter and decision
+privacy, no-repeat behavior, fixed membership, recovery and convergence. It
+does not add Match presentation, early resolution, configuration UI or
+unrelated selection features. Configuration format, persistence representation
+and cross-component mechanics belong to the Feature 009 plan. Discovery and
+randomized recommendations are outside this frozen release scope.
+
+### 010 — Discovery — DEFERRED; UNSPECIFIED
+
+**Goal:** Offer more varied, useful movie suggestions. Research and compare
+algorithms before selecting an implementation. Random starting pages, room
+seeds, shuffled pools and weighted ranking are discussion options only, not
+approved designs or requirements. No Discovery specification or implementation
+has started. Seen/watched history and a candidate traversal cursor remain
+separate deferred ideas; neither is included in Discovery or a prerequisite.
+
+### 011 — Match — PLANNED; UNSTARTED
 
 **Goal:** Produce the successful shared movie choice.
 
@@ -287,15 +372,15 @@ Expected product result:
 - The match screen presents current movie metadata from TMDB.
 - Reload/reconnect preserves the match; no participant receives a contradictory one.
 
-Feature 009 consumes the agreement semantics established by completed Feature
-008; it is not the first feature to determine whether agreement happened. It
-owns the authoritative matched `tmdb_movie_id`, convergence, match presentation
-and recovery. The two-voter and larger-group rules remain the fixed Feature 008
-policy above.
+Feature 011 consumes the authoritative agreement outcome established through
+Features 008–009; it is not the first feature to determine whether agreement
+happened. It owns the authoritative matched `tmdb_movie_id`, convergence, match
+presentation and recovery. Each room's retained agreement rule remains
+authoritative.
 
 ## First useful MVP boundary
 
-The first MVP is complete after **Feature 009 Match**, provided all prior feature
+The first MVP is complete after **Feature 011 Match**, provided all prior feature
 acceptance remains green under the explicitly evolved contracts. It supports:
 
 - Creating rooms with a required voter count (default 2) and a creator voting
@@ -305,8 +390,8 @@ acceptance remains green under the explicitly evolved contracts. It supports:
   membership readiness.
 - A fixed voting group once the configured voter count is assembled, followed
   by recoverable voter filters and common filter resolution before browsing.
-- Real TMDB candidates, independent left/right swipes, authoritative candidate
-  progression and one shared match.
+- Real TMDB candidates governed by room-stable selection rules, independent
+  left/right swipes, authoritative candidate progression and one shared match.
 - Reload/reconnect, a functional web version and mobile-compatible architecture
   with mobile as the primary interaction target.
 

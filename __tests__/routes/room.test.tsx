@@ -3,6 +3,7 @@ import { router } from 'expo-router';
 import { StrictMode } from 'react';
 import QRCode from 'react-native-qrcode-svg';
 import RoomRouteScreen from '../../app/room/[code]';
+import { controlledCandidate, controlledSuccessor } from '../../e2e/support/tmdb-controlled-fixture';
 
 const mockJoin = jest.fn(), mockRefetch = jest.fn(), mockBootstrap = jest.fn(), mockRemove = jest.fn();
 const mockRecover = jest.fn(), mockSubmit = jest.fn(), mockEnsureCandidate = jest.fn();
@@ -294,6 +295,36 @@ it('gives a voting creator the same authoritative Yes/No controls without changi
   expect(mockSubmitDecision).toHaveBeenCalledWith(host.room_id,1,7,'yes');
   expect(screen.getByText('You chose Yes')).toBeVisible();
   expect(mockEnsureCandidate).toHaveBeenCalledTimes(1);
+});
+
+it('renders the exact M02 title-order winner from Edge state as the CandidateCard heading', async () => {
+  const assigned = ready({ is_creator: true, is_voter: false, required_voter_count: 3,
+    voter_count: 3, filter_completed_count: 3, filter_resolution_status: 'compatible',
+    candidate_acquisition_status: 'assigned', candidate_progression_status: 'collecting',
+    candidate_sequence: 1 });
+  mockJoin.mockResolvedValue(assigned);
+  mockRefetch.mockResolvedValue({ id: host.room_id, code: host.room_code, state: 'ready',
+    voter_count: 3, required_voter_count: 3, filter_completed_count: 3,
+    filter_resolution_status: 'compatible', candidate_acquisition_status: 'assigned',
+    candidate_progression_status: 'collecting', candidate_sequence: 1,
+    decision_completed_count: 0 });
+  mockEnsureCandidate.mockResolvedValue({ outcome: 'available', candidateSequence: 1,
+    candidateProgressionStatus: 'collecting', candidate: {
+      tmdbMovieId: controlledSuccessor.tmdbMovieId, title: controlledSuccessor.title,
+      releaseYear: controlledSuccessor.releaseYear,
+      posterUrl: 'https://image.tmdb.org/t/p/w500/controlled-successor.png' } });
+  mockGetDecision.mockResolvedValue({ outcome: 'observer', myDecision: null, completedCount: 0,
+    requiredVoterCount: 3, decisionSetComplete: false, agreementThreshold: 2,
+    candidateOutcome: 'collecting', candidateProgressionStatus: 'collecting', candidateSequence: 1 });
+
+  await mount();
+  expect(mockEnsureCandidate).toHaveBeenCalledWith(host.room_id);
+  expect(screen.getByTestId('candidate-card')).toBeVisible();
+  expect(screen.getByRole('header', { name: controlledSuccessor.title })).toBeVisible();
+  expect(screen.getByTestId('candidate-title')).toHaveTextContent(controlledSuccessor.title);
+  expect(screen.getByTestId('candidate-year')).toHaveTextContent(String(controlledSuccessor.releaseYear));
+  expect(screen.getByLabelText(`Poster for ${controlledSuccessor.title}`)).toBeVisible();
+  expect(screen.queryByText(controlledCandidate.title)).toBeNull();
 });
 
 it('lets a non-voting creator recover aggregate status but exposes no decision controls', async () => {

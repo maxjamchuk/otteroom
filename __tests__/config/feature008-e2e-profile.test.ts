@@ -10,6 +10,9 @@ jest.mock('../../e2e/support/room-harness', () => ({
   committedRoomSnapshot: jest.fn(),
   realtimeBarrier: jest.fn(),
 }));
+jest.mock('../../scripts/local-supabase.mjs', () => ({
+  localSupabaseContainer: () => 'synthetic-local-database',
+}));
 
 const verify = (source: string, transformTypes = false) => {
   const result = spawnSync(process.execPath, [...(transformTypes
@@ -129,7 +132,7 @@ it('keeps convergence, foreign-JWT preflight, and case fail-fast deterministic',
   expect(harness).not.toMatch(/getByText\(\/\\d\+ of \\d\+ decisions collected/);
   expect(cases).toMatch(/p_expected_tmdb_movie_id: tmdbMovieId/);
   expect(cases).toMatch(/roomId: room\.id, tmdbMovieId: controlledCandidate\.tmdbMovieId/);
-  expect(runner).toMatch(/invocation\.profile === 'feature008'.*'--max-failures', '1'/s);
+  expect(runner).toMatch(/\['feature008', 'feature009'\].*'--max-failures', '1'/s);
 });
 
 it('places response validation at each L01 navigation boundary that can retire a candidate document', () => {
@@ -179,7 +182,9 @@ it('keeps G04 aggregate recovery on the real controlled provider path', () => {
         '22222222-2222-4222-8222-222222222222',rpc:async name=>name==='prepare_room_tmdb_candidate'
           ?{outcome:'acquire',candidate_sequence:0,candidate_progression_status:'inactive',
             tmdb_movie_id:null,release_year_from:2000,release_year_to:2010,
-            genre_clauses_tmdb_ids:[[18]],excluded_tmdb_movie_ids:[]}
+            genre_clauses_tmdb_ids:[[18]],excluded_tmdb_movie_ids:[],rule_set_kind:'configured_009_v1',
+            candidate_ordering:'vote_count_desc',minimum_vote_count:500,minimum_average_rating:null,
+            metadata_language:'en-US',genre_mode:'or'}
           :{outcome:'assigned',candidate_sequence:1,candidate_progression_status:'collecting',
             tmdb_movie_id:6006},search:value=>searchTmdbCandidate(value,common),
         details:id=>loadTmdbPresentation(id,common)});

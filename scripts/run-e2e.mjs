@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CredentialRegistry, startRegistryServer } from '../e2e/support/credential-registry.ts';
 import { scanArtifacts } from './check-e2e-artifacts.mjs';
 import { localExecutable, runManagedProcess } from './safe-process.mjs';
+import { localSupabaseArgs } from './local-supabase.mjs';
 import { withPlaywrightRuntime, runtimeEnvironment, runtimeDiagnostic, signalExit } from './playwright-runtime.mjs';
 import { startTmdbStub } from '../e2e/support/tmdb-stub.ts';
 
@@ -20,6 +21,7 @@ const resolutionCases = new Map([['I01', 3], ['I02', 4], ['I03', 2]]);
 const feature006Cases = new Map([['J01', 3], ['J02', 4], ['J03', 2]]);
 const feature007Cases = new Map([['K01', 2], ['K02', 4]]);
 const feature008Cases = new Map([['L01', 2], ['L02', 4]]);
+const feature009Cases = new Map([['M01', 2], ['M02', 4]]);
 const t063DebugCases = new Map([['I01',3],['I03',2],['H02',3],['H03',3],['E05',3],['E06',3],
   ['E09',2],['E11',1],['E12-mutation',3],['J01',3],['J02',4]]);
 const t063RemainingCases = new Map([['I03',2],['H02',3],['J01',3],['J02',4]]);
@@ -27,7 +29,7 @@ const t063FinalCases = new Map([['H02',3],['J01',3],['J02',4]]);
 const acceptanceSelections = new Set(['@membership', 'G01', 'G02', 'G03', 'G04', 'G05', 'G06', 'G07', 'G08', 'G09',
   '@filters', 'H01', 'H02', 'H03', '@auth', '@us1', '@us2-join', '@us2-realtime', '@us3', '@us4', '@capacity-smoke',
   '@resolution', 'I01', 'I02', 'I03', '@feature006', 'J01', 'J02', 'J03',
-  '@feature007', 'K01', 'K02', '@feature008', 'L01', 'L02',
+  '@feature007', 'K01', 'K02', '@feature008', 'L01', 'L02', '@feature009', 'M01', 'M02',
   'E01', 'E02', 'E03', 'E04', 'E05', 'E06', 'E07', 'E08', 'E09', 'E10', 'E11', 'E12',
   smokeSelection, t063DebugSelection, t063RemainingSelection, t063FinalSelection]);
 
@@ -38,18 +40,55 @@ export function validateInvocationEnvironment(environment = process.env) {
     throw new Error('UNSAFE_OVERRIDE_REJECTED');
 }
 
+export async function probeAuthTarget({ apiUrl, fetchImpl = globalThis.fetch, signal } = {}) {
+  let endpoint;
+  try {
+    if (typeof apiUrl !== 'string' || !apiUrl || /[\s\x00-\x1f\x7f'"`\\]/.test(apiUrl)) throw new Error();
+    const parsed = new URL(apiUrl);
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) throw new Error();
+    endpoint = new URL('/auth/v1/health', parsed).toString();
+  } catch { throw new Error('AUTH_TARGET_CONFIG_INVALID'); }
+  if (typeof fetchImpl !== 'function') throw new Error('AUTH_TARGET_UNAVAILABLE');
+  try {
+    const timeout = AbortSignal.timeout(3000);
+    const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    const response = await fetchImpl(endpoint, { method: 'GET', redirect: 'error', signal: requestSignal });
+    const status = response?.status;
+    if (!Number.isInteger(status) || status < 200 || status > 299) throw new Error('AUTH_TARGET_UNHEALTHY');
+    return status;
+  } catch (error) {
+    if (error instanceof Error && error.message === 'AUTH_TARGET_UNHEALTHY') throw error;
+    throw new Error('AUTH_TARGET_UNAVAILABLE');
+  }
+}
+
+async function probeConfiguredAuthTarget({ signal } = {}) {
+  try {
+    const local = parseEnv(fs.readFileSync(path.join(root, '.env.local'), 'utf8'));
+    return await probeAuthTarget({ apiUrl: local.EXPO_PUBLIC_SUPABASE_URL, signal });
+  } catch (error) {
+    if (error instanceof Error && /^AUTH_TARGET_(?:CONFIG_INVALID|UNHEALTHY|UNAVAILABLE)$/.test(error.message)) throw error;
+    throw new Error('AUTH_TARGET_CONFIG_UNAVAILABLE');
+  }
+}
+
+function invocationDiagnostic(error) {
+  return error instanceof Error && /^AUTH_TARGET_(?:CONFIG_INVALID|CONFIG_UNAVAILABLE|UNHEALTHY|UNAVAILABLE)$/.test(error.message)
+    ? error.message : runtimeDiagnostic(error);
+}
+
 export function parseInvocation(argv) {
   const [requestedMode, ...requestedOptions] = argv;
-  if (!['acceptance', 'smoke', 'security', 'feature006', 'feature007', 'feature008'].includes(requestedMode)) throw new Error('SAFE_INVOCATION_REQUIRED');
-  if (['smoke', 'feature006', 'feature007', 'feature008'].includes(requestedMode) && requestedOptions.length > 0) throw new Error('UNSAFE_OVERRIDE_REJECTED');
-  const mode = ['smoke', 'feature006', 'feature007', 'feature008'].includes(requestedMode) ? 'acceptance' : requestedMode;
+  if (!['acceptance', 'smoke', 'security', 'feature006', 'feature007', 'feature008', 'feature009'].includes(requestedMode)) throw new Error('SAFE_INVOCATION_REQUIRED');
+  if (['smoke', 'feature006', 'feature007', 'feature008', 'feature009'].includes(requestedMode) && requestedOptions.length > 0) throw new Error('UNSAFE_OVERRIDE_REJECTED');
+  const mode = ['smoke', 'feature006', 'feature007', 'feature008', 'feature009'].includes(requestedMode) ? 'acceptance' : requestedMode;
   const profile = requestedMode === 'smoke' ? 'smoke' : requestedMode === 'feature006' ? 'feature006' :
     requestedMode === 'feature007' ? 'feature007' : requestedMode === 'feature008' ? 'feature008' :
-    mode === 'security' ? 'security' : 'acceptance';
+    requestedMode === 'feature009' ? 'feature009' : mode === 'security' ? 'security' : 'acceptance';
   const options = requestedMode === 'smoke' ? ['--grep', smokeSelection] :
     requestedMode === 'feature006' ? ['--grep', '@feature006'] :
     requestedMode === 'feature007' ? ['--grep', '@feature007'] :
-    requestedMode === 'feature008' ? ['--grep', '@feature008'] : requestedOptions;
+    requestedMode === 'feature008' ? ['--grep', '@feature008'] : requestedMode === 'feature009' ? ['--grep', '@feature009'] : requestedOptions;
   const forwarded = [], seen = new Set();
   let grep;
   for (let i = 0; i < options.length; i++) {
@@ -66,7 +105,7 @@ export function parseInvocation(argv) {
       (mode === 'security' && value !== '1') || (name === '--repeat-each' && Number(value) > 3)) throw new Error('UNSAFE_OVERRIDE_REJECTED');
     forwarded.push(name, value);
   }
-  if (['@feature006', '@feature007', '@feature008', 'K01', 'K02', 'L01', 'L02', 'J03'].includes(grep) &&
+  if (['@feature006', '@feature007', '@feature008', '@feature009', 'K01', 'K02', 'L01', 'L02', 'M01', 'M02', 'J03'].includes(grep) &&
     forwarded.some((value, index) => index % 2 === 0 && value !== '--grep'))
     throw new Error('UNSAFE_OVERRIDE_REJECTED');
   const boundedProfile=mode==='acceptance'&&grep==='@resolution'?'resolution':
@@ -117,6 +156,12 @@ export function verifyAcceptanceProfile(profile, results) {
   if(profile==='feature008'){
     if(!Array.isArray(results)||results.length!==feature008Cases.size)return false;
     return [...feature008Cases].every(([browserCase,identities])=>results.some(result=>
+      exactReceipt(result,browserCase,identities)))&&
+      results.reduce((sum,result)=>sum+result.identities,0)===6;
+  }
+  if(profile==='feature009'){
+    if(!Array.isArray(results)||results.length!==feature009Cases.size)return false;
+    return [...feature009Cases].every(([browserCase,identities])=>results.some(result=>
       exactReceipt(result,browserCase,identities)))&&
       results.reduce((sum,result)=>sum+result.identities,0)===6;
   }
@@ -179,7 +224,7 @@ export function verifyAcceptanceProfile(profile, results) {
 export function playwrightArguments(invocation) {
   return ['test', '--config', 'playwright.config.ts', '--project',
     invocation.mode === 'security' ? 'credential-safety' : 'acceptance',
-    ...(invocation.profile === 'feature008' ? ['--max-failures', '1'] : []),
+    ...(['feature008', 'feature009'].includes(invocation.profile) ? ['--max-failures', '1'] : []),
     ...invocation.forwarded];
 }
 
@@ -219,7 +264,7 @@ async function startControlledProvider(registry, signal) {
   fs.writeFileSync(envFile, `TMDB_API_READ_ACCESS_TOKEN=${token}\nTMDB_API_BASE_URL=${stub.edgeBaseUrl}\n`,
     { flag: 'wx', mode: 0o600 });
   const command = localExecutable('supabase');
-  const child = spawn(command, ['functions','serve','room-candidate','--env-file',envFile,'--log-level','error'], {
+  const child = spawn(command, localSupabaseArgs(['functions','serve','room-candidate','room-create','--env-file',envFile,'--log-level','error']), {
     cwd: root, detached: process.platform !== 'win32', stdio: ['ignore','pipe','pipe'], env: {
       ...process.env, XDG_CONFIG_HOME: '/tmp/otteroom-supabase-config', SUPABASE_TELEMETRY_DISABLED: '1',
     },
@@ -240,7 +285,7 @@ async function startControlledProvider(registry, signal) {
 
 // Dependency injection is restricted to in-process synthetic tests, never CLI flags.
 export async function executeInvocation(invocation, { artifactRoot = path.join(root, 'test-results'), launch = launchPlaywright,
-  runtime = withPlaywrightRuntime, provider = startControlledProvider, signal } = {}) {
+  runtime = withPlaywrightRuntime, provider = startControlledProvider, authProbe = probeConfiguredAuthTarget, signal } = {}) {
   const registry = new CredentialRegistry();
   let server, closeProvider, outcome = 1;
   try {
@@ -250,6 +295,9 @@ export async function executeInvocation(invocation, { artifactRoot = path.join(r
     if (fs.realpathSync(artifactRoot) !== path.resolve(artifactRoot)) throw new Error('UNSAFE_ARTIFACT_ROOT');
     const directory = fs.mkdtempSync(path.join(artifactRoot, 'run-'));
     server = await startRegistryServer(registry);
+    // A dead local Auth target must be rejected before Playwright can spend an
+    // anonymous attempt. Static A/B diagnostics intentionally remain target-free.
+    if (invocation.mode === 'security' && !invocation.staticOnly) await authProbe({ signal });
     if (invocation.mode === 'acceptance') closeProvider = await provider(registry, signal);
     const exitCode = await runtime(selected => launch({ invocation, directory, registry, socket: server.endpoint, signal, runtime: selected }), { signal });
     // Child close includes reporter/web-server teardown; scan even when tests failed.
@@ -264,14 +312,14 @@ export async function executeInvocation(invocation, { artifactRoot = path.join(r
     process.stdout.write(JSON.stringify({ component: 'e2e-controller', selection: invocation.staticOnly ? 'synthetic-only' : invocation.profile,
       status: outcome === 0 ? 'passed' : 'failed', artifacts: scan.fileCount, findings: scan.findings,
       innerExit: exitCode, probeArtifactsComplete: completeProbe,
-      scenarios: results.map(result => ({ scenario: ['A', 'B', 'C', 'baseline', 'auth', 'filters', 'membership', 'resolution', 'candidate', 'decision', 'progression', 'us1', 'us2-join', 'us2-realtime', 'us3', 'us4', 'capacity-smoke'].includes(result.scenario) ? result.scenario : 'other', status: result.status === 'passed' ? 'passed' : 'failed',
-        browserCase: ['G01', 'G02', 'G03', 'G04', 'G05', 'G06', 'G07', 'G08', 'G09', 'H01', 'H02', 'H03', 'I01', 'I02', 'I03', 'J01', 'J02', 'J03', 'K01', 'K02', 'L01', 'L02', 'E01', 'E02', 'E03', 'E04', 'E05', 'E06', 'E07', 'E08', 'E09', 'E10', 'E11', 'E12-read', 'E12-subscription', 'E12-navigation', 'E12-mutation'].includes(result.browserCase) ? result.browserCase : 'none',
+      scenarios: results.map(result => ({ scenario: ['A', 'B', 'C', 'baseline', 'auth', 'filters', 'membership', 'resolution', 'candidate', 'decision', 'progression', 'selection-rules', 'us1', 'us2-join', 'us2-realtime', 'us3', 'us4', 'capacity-smoke'].includes(result.scenario) ? result.scenario : 'other', status: result.status === 'passed' ? 'passed' : 'failed',
+        browserCase: ['G01', 'G02', 'G03', 'G04', 'G05', 'G06', 'G07', 'G08', 'G09', 'H01', 'H02', 'H03', 'I01', 'I02', 'I03', 'J01', 'J02', 'J03', 'K01', 'K02', 'L01', 'L02', 'M01', 'M02', 'E01', 'E02', 'E03', 'E04', 'E05', 'E06', 'E07', 'E08', 'E09', 'E10', 'E11', 'E12-read', 'E12-subscription', 'E12-navigation', 'E12-mutation'].includes(result.browserCase) ? result.browserCase : 'none',
         worker: Number.isInteger(result.worker) && result.worker >= 0 && result.worker < 4 ? result.worker : -1,
         repetition: Number.isInteger(result.repetition) && result.repetition >= 1 && result.repetition <= 3 ? result.repetition : 0,
         signups: Number.isInteger(result.signups) ? result.signups : 0, identities: Number.isInteger(result.identities) ? result.identities : 0 })),
     }) + '\n');
-    if (results.some(result => result.budgetFailure === true)) process.stderr.write(`AUTH_BUDGET_FAILURE HTTP 429: ${invocation.profile === 'smoke' ? 'smoke N=16' : invocation.profile==='feature006'?'feature006 N=9':invocation.profile==='feature007'?'feature007 N=6':invocation.profile==='feature008'?'feature008 N=6':invocation.profile==='resolution'?'resolution N=9':invocation.profile==='h03'?'H03 N=3':invocation.profile==='j03'?'J03 N=2':invocation.profile==='t063-debug'?'T063 debug N=30':invocation.profile==='t063-debug-remaining'?'T063 debug remaining N=12':invocation.profile==='t063-final-target'?'T063 final target N=10':'acceptance N=112'}, local anonymous_users=150. Check configured limit and remaining hourly allowance; stop/start only after config change, never retry/reset/restart to evade quota.\n`);
-  } catch (error) { process.stderr.write(runtimeDiagnostic(error) + '\n'); outcome = signalExit(signal) ?? 1; }
+    if (results.some(result => result.budgetFailure === true)) process.stderr.write(`AUTH_BUDGET_FAILURE HTTP 429: ${invocation.profile === 'smoke' ? 'smoke N=16' : invocation.profile==='feature006'?'feature006 N=9':invocation.profile==='feature007'?'feature007 N=6':invocation.profile==='feature008'?'feature008 N=6':invocation.profile==='feature009'?'feature009 N=6':invocation.profile==='resolution'?'resolution N=9':invocation.profile==='h03'?'H03 N=3':invocation.profile==='j03'?'J03 N=2':invocation.profile==='t063-debug'?'T063 debug N=30':invocation.profile==='t063-debug-remaining'?'T063 debug remaining N=12':invocation.profile==='t063-final-target'?'T063 final target N=10':'acceptance N=112'}, local anonymous_users=150. Check configured limit and remaining hourly allowance; stop/start only after config change, never retry/reset/restart to evade quota.\n`);
+  } catch (error) { process.stderr.write(invocationDiagnostic(error) + '\n'); outcome = signalExit(signal) ?? 1; }
   finally {
     try { await closeProvider?.(); } catch { process.stderr.write('TMDB_STUB_CLEANUP_FAILED\n'); outcome = 1; }
     try { await server?.close(); } catch { process.stderr.write('E2E_CLEANUP_FAILED\n'); outcome = 1; }

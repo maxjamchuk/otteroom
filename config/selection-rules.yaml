@@ -1,0 +1,5 @@
+minimum_vote_count: 100
+metadata_language: en-US
+ordering: popularity_desc
+genre_mode: or
+larger_group_agreement: 2/3

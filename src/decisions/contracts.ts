@@ -67,7 +67,7 @@ function projection(row: Raw): DecisionProjection {
       completed > required || typeof complete !== 'boolean' || complete !== (completed === required) ||
       typeof sequence !== 'number' || !Number.isSafeInteger(sequence) || sequence < 1 ||
       typeof threshold !== 'number' || !Number.isSafeInteger(threshold) ||
-      threshold !== (required === 2 ? 2 : Math.floor((2 * required + 2) / 3)) ||
+      threshold < 1 || threshold > required || (required === 2 && threshold !== 2) ||
       !(candidateOutcome === 'collecting' || candidateOutcome === 'rejected' || candidateOutcome === 'agreed') ||
       !(progression === 'collecting' || progression === 'advancing' || progression === 'agreed') ||
       candidateOutcome === 'collecting' && (complete || progression !== 'collecting') ||

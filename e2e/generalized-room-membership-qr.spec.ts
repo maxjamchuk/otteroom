@@ -230,7 +230,7 @@ test('@membership G02 room creation failures preserve configuration', async ({ d
   test.setTimeout(90000);
   await safeBody(diagnostics, async () => {
     const page = diagnostics.page, api = await startHost(page, diagnostics);
-    const endpoint = '**/rest/v1/rpc/create_room';
+    const endpoint = '**/functions/v1/room-create';
     const configurations = [{ requiredVoterCount: 2, creatorIsVoter: true }, { requiredVoterCount: 3, creatorIsVoter: false },
       { requiredVoterCount: 3, creatorIsVoter: true }, { requiredVoterCount: 2, creatorIsVoter: false },
       { requiredVoterCount: 2, creatorIsVoter: true }, { requiredVoterCount: 3, creatorIsVoter: false }] as const;
@@ -249,7 +249,7 @@ test('@membership G02 room creation failures preserve configuration', async ({ d
               try {
                 const response = await route.fetch({ maxRetries: 0, maxRedirects: 0, timeout: 15000 });
                 try {
-                  const rows = await response.json(), row = rows?.[0];
+                  const row = await response.json();
                   if (!response.ok() || !row?.room_id || !row?.room_code) throw new Error('E2E_SAFE_FAILURE');
                   committed = committedRoomSnapshot({ id: row.room_id, code: row.room_code, state: 'waiting',
                     voter_count: Number(configurations[index].creatorIsVoter), required_voter_count: configurations[index].requiredVoterCount,
@@ -281,7 +281,7 @@ test('@membership G02 room creation failures preserve configuration', async ({ d
           } catch { interceptionFailed = true; first(); all(); release(); await route.abort('failed').catch(() => {}); }
         };
         await page.route(endpoint, handler);
-        const created = page.waitForResponse(response => new URL(response.url()).pathname === '/rest/v1/rpc/create_room');
+        const created = page.waitForResponse(response => new URL(response.url()).pathname === '/functions/v1/room-create');
         let duplicateCall: Promise<{ ok: boolean; outcome?: string }> | undefined;
         try {
           await page.getByRole('button', { name: 'Create Room', exact: true }).click(); await firstArrival;
@@ -289,9 +289,9 @@ test('@membership G02 room creation failures preserve configuration', async ({ d
           duplicateCall = page.evaluate(async ({ api, body }) => {
             const key = Object.keys(localStorage).find(name => /^sb-.+-auth-token$/.test(name));
             const token = key ? JSON.parse(localStorage.getItem(key) ?? 'null')?.access_token : null;
-            const response = await fetch(`${api.origin}/rest/v1/rpc/create_room`, { method: 'POST',
+            const response = await fetch(`${api.origin}/functions/v1/room-create`, { method: 'POST',
               headers: { apikey: api.publicKey, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-            const rows = await response.json(); return { ok: response.ok, outcome: rows?.[0]?.outcome };
+            const row = await response.json(); return { ok: response.ok, outcome: row?.outcome };
           }, { api, body: expectedBody! });
           await allArrived; expect(!interceptionFailed && held === 2 && forwarded === 0).toBe(true);
           clearTimeout(deadline); release(); const duplicateResult = await duplicateCall; await created;
@@ -303,7 +303,7 @@ test('@membership G02 room creation failures preserve configuration', async ({ d
         expect(duplicate).toBe(true);
       }
       if (mode !== 'overlap') {
-        const created = page.waitForResponse(response => new URL(response.url()).pathname === '/rest/v1/rpc/create_room');
+        const created = page.waitForResponse(response => new URL(response.url()).pathname === '/functions/v1/room-create');
         await page.getByRole('button', { name: 'Retry create', exact: true }).click(); await created;
       }
       const rooms = await ownRooms(page, api), added = rooms.filter(room => !before.some(old => old.id === room.id));

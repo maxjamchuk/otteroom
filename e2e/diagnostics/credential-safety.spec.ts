@@ -152,7 +152,7 @@ test('@diagnostics-static B synthetic safety and finalized artifacts', async ({ 
         fs.unlinkSync(path.join(directory, 'feature006-private.json'));
       }
       for (const value of ['candidate_decisions', 'get_room_candidate_decision',
-        'submit_room_candidate_decision', 'room_member_id', 'room_id', 'my_decision=yes',
+        'submit_room_candidate_decision', 'room_member_id', JSON.stringify({ room_id: randomUUID() }), 'my_decision=yes',
         'decision_value=no', 'decision_rpc_payload']) {
         fs.writeFileSync(path.join(directory, 'feature007-private.json'), JSON.stringify({ message: value }));
         expect(scanArtifacts(directory, { registry }).ok).toBe(false);

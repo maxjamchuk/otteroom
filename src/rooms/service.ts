@@ -8,13 +8,11 @@ export class RoomServiceError extends Error {
   constructor() { super('Unable to complete the room request. Please try again.'); this.name = 'RoomServiceError'; }
 }
 
-type CreateArgs = Database['public']['Functions']['create_room']['Args'];
-export async function createRoom(requestId: CreateArgs['p_creation_request_id'],
-  requiredVoterCount: CreateArgs['p_required_voter_count'], creatorIsVoter: CreateArgs['p_creator_is_voter']) {
+export async function createRoom(requestId: string, requiredVoterCount: number, creatorIsVoter: boolean) {
   try {
     await bootstrapAnonymousSession();
-    const { data, error } = await getSupabase().rpc('create_room', {
-      p_creation_request_id: requestId, p_required_voter_count: requiredVoterCount, p_creator_is_voter: creatorIsVoter,
+    const { data, error } = await getSupabase().functions.invoke('room-create', {
+      body: { creation_request_id: requestId, required_voter_count: requiredVoterCount, creator_is_voter: creatorIsVoter },
     });
     if (error) throw new RoomServiceError();
     return narrowCreateResult(data);

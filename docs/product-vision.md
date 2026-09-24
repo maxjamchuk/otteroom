@@ -62,11 +62,14 @@ conflicting current movies for the room. A participant can record a decision
 without waiting for another person's swipe. The exact filter-resolution,
 decision-completion, progression and match semantics belong to the corresponding
 feature specifications. For two voters, both swiping right constitutes
-agreement. The agreement policy for more than two voters must be resolved
-**before or during Feature 008 specification**, before progression rules depend
-on it. Feature 008 must distinguish continued browsing from agreement and stop
-advancing on agreement; Feature 009 consumes that policy for the match
-experience. This vision does not choose the larger-group policy or algorithms.
+agreement. Feature 008 established the larger-group baseline before progression
+depended on it and stops advancing on agreement. Feature 009 deliberately evolves
+selection and larger-group agreement rules for newly created rooms while
+preserving that complete-decision-set boundary. Feature 010 Discovery is
+separate future work on more varied, useful movie suggestions; its algorithm
+requires research and comparison before selection. Feature 011 consumes each
+room's retained agreement rule for the Match experience. This vision does not
+choose a Discovery algorithm.
 
 ## People, membership and devices
 
@@ -75,8 +78,8 @@ swipes and matches must not assume exactly one host and one guest. Two voters
 are the minimum meaningful group. The creator configures a required voter count
 when creating the room, with a default of **2** and support for larger groups.
 This is the number of people required to vote, not the total number of people,
-clients or connected devices present. No exact maximum is set here; the future
-Feature 003 specification may define the supported UI range.
+clients or connected devices present. No exact maximum is set here; the Feature
+003 specification defines the supported UI range.
 
 The following concepts are distinct even when one mobile client serves several
 purposes:
@@ -181,6 +184,11 @@ candidates to selected services, including regional selection in a later
 feature. This capability is outside the first MVP unless the roadmap is
 deliberately revised to promote it. No provider-filter behavior is authorized now.
 
+Seen/watched history and a candidate traversal cursor are deferred ideas. Neither
+is automatically part of Discovery or required before it. Random starting pages,
+room seeds, shuffled pools and weighted ranking are possible research topics,
+not approved Discovery designs or requirements.
+
 ## Completed slices and deliberate evolution
 
 [Feature 001](../specs/001-room-session/spec.md) proved create/join, invitations,
@@ -240,6 +248,6 @@ role enum, maximum voter count, agreement threshold for more than two
 voters, filter-intersection SQL or algorithm, TMDB endpoint, caching TTL, swipe
 animation library, mobile navigation, TV framework or provider-filter algorithm.
 Those details belong to the relevant feature specifications and plans, subject
-to the product invariants and constitutional scope rules. The larger-group
-agreement decision has a mandatory deadline: before or during Feature 008
-specification, before dependent progression rules are approved.
+to the product invariants and constitutional scope rules. Feature 008 established
+the baseline larger-group agreement rule; Feature 009 made that rule configurable
+for newly created rooms.

@@ -8,7 +8,21 @@ const MAX_TEXT = 1024 * 1024;
 const forbidden = /(?:^|[-_.])(?:trace|har|storage[-_.]?state|cookies?|sessions?|network|requests?|responses?|websocket)(?:[-_.]|$)/i;
 const textTypes = new Set(['.txt', '.json', '.md']);
 const feature006Private = /(?:tmdb_movie_id|movie_candidate_id|genre_clauses_tmdb_ids|release_year_(?:from|to)|p_actor_user_id|tmdb_api_read_access_token|supabase_service_role_key|upstream_(?:payload|request|response)|(?:request|response)_(?:body|headers?))/i;
-const feature007Private = /(?:candidate_decisions|(?:get|submit)_room_candidate_decision|room_member_id|member_id|room_id|(?:my_decision|decision_value)\s*[=:]\s*(?:yes|no)|decision_(?:request|response|rpc)_payload)/i;
+// Public room projections are allowed to name their schema fields in bounded
+// source/contract diagnostics. Private values are still rejected structurally:
+// UUID literals catch room/member/user identifiers, and identifier assignments
+// catch quoted key/value forms even when a synthetic value is not UUID-shaped.
+const publicRoomProjectionKeys = new Set([
+  'outcome', 'room_id', 'room_code', 'room_state', 'is_creator', 'is_voter',
+  'voter_count', 'required_voter_count', 'filter_completed_count',
+  'filter_resolution_status', 'candidate_acquisition_status',
+  'candidate_progression_status', 'candidate_sequence', 'decision_completed_count',
+]);
+const protectedIdentifierKeys = new Set(['room_id', 'room_member_id', 'member_id', 'user_id']);
+const feature007Private = /(?:candidate_decisions|(?:get|submit)_room_candidate_decision|room_member_id|member_id|decision_(?:request|response|rpc)_payload)/i;
+const feature007PrivateDecision = /(?:["']?(?:my_decision|decision_value)["']?)\s*(?::|=(?!=))\s*["']?(?:yes|no)["']?/i;
+const feature007IdentifierAssignment = /(?:["']?(?:room_id|room_member_id|member_id|user_id)["']?)\s*(?::|=(?!=))\s*(?:["'][^"'\r\n]+["']|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+const uuidLiteral = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i;
 const feature008Private = /(?:room_candidate_occurrences|candidate_occurrence_id|occurrence_(?:id|history)|excluded_tmdb_movie_ids|private_exclusions|progression_(?:request|response|rpc)_payload|raw_(?:progression|decision|rpc)_payload|internal_tmdb_id)/i;
 
 function crc32(bytes) {
@@ -63,16 +77,28 @@ export function scanArtifacts(directory, { registry } = {}) {
     if (depth > 12) { fail(file, 'incomplete-scan'); return; }
     if (containsCredential(text, known())) fail(file, 'credential-content');
     if (feature006Private.test(text)) fail(file, 'feature006-private-content');
-    if (feature007Private.test(text)) fail(file, 'feature007-private-content');
+    if (feature007Private.test(text) || feature007PrivateDecision.test(text) ||
+        feature007IdentifierAssignment.test(text) || uuidLiteral.test(text))
+      fail(file, 'feature007-private-content');
     if (feature008Private.test(text)) fail(file, 'feature008-private-content');
   }
-  function inspectJson(value, file, depth = 0) {
+  function inspectJson(value, file, depth = 0, parentKey = '') {
     if (depth > 12) { fail(file, 'incomplete-scan'); return; }
-    if (typeof value === 'string') inspectText(value, file, depth);
+    if (typeof value === 'string') {
+      inspectText(value, file, depth);
+      // A parsed room_id field is a protected identifier value even when a
+      // synthetic test uses a non-UUID placeholder. Null/empty fields carry no
+      // identifier and remain safe.
+      if (protectedIdentifierKeys.has(parentKey) && value.length > 0) fail(file, 'feature007-private-content');
+      if ((parentKey === 'my_decision' || parentKey === 'decision_value') && /^(?:yes|no)$/i.test(value))
+        fail(file, 'feature007-private-content');
+    }
     else if (value && typeof value === 'object') {
       for (const [key, item] of Object.entries(value)) {
-        inspectText(key, file, depth);
-        inspectJson(item, file, depth + 1);
+        // Treat approved room-projection names as schema keys, not evidence of
+        // a private field. Their values are still recursively inspected.
+        if (!publicRoomProjectionKeys.has(key)) inspectText(key, file, depth);
+        inspectJson(item, file, depth + 1, key);
       }
     }
   }

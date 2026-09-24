@@ -1,6 +1,7 @@
 import { expect, type Page, type Request, type Route, type TestInfo } from '@playwright/test';
 import { spawnSync } from 'node:child_process';
 import { committedRoomSnapshot, realtimeBarrier, type PublicApi, type RoomProjection } from './room-harness.ts';
+import { localSupabaseContainer } from '../../scripts/local-supabase.mjs';
 
 export type SafeDecision = 'yes' | 'no';
 export type OwnDecisionResult = Readonly<{
@@ -59,7 +60,7 @@ export function acceptedDecisionViewSatisfied(state: AcceptedDecisionState,
     currentProgression === 'Group agreement reached. Candidate selection has stopped.';
 }
 
-export function validateOwnDecisionResult(value: unknown): OwnDecisionResult {
+export function validateOwnDecisionResult(value: unknown, expectedThreshold?: number): OwnDecisionResult {
   if (!Array.isArray(value) || value.length !== 1 || !value[0] || typeof value[0] !== 'object' ||
       Array.isArray(value[0]) || Object.keys(value[0]).sort().join(',') !== [...fields].sort().join(',')) {
     throw new Error('E2E_SAFE_FAILURE');
@@ -76,7 +77,7 @@ export function validateOwnDecisionResult(value: unknown): OwnDecisionResult {
       (required as number) < 2 || (completed as number) > (required as number) ||
       row.decision_set_complete !== (completed === required) ||
       !Number.isInteger(row.candidate_sequence) || (row.candidate_sequence as number) < 1 ||
-      row.agreement_threshold !== ((required as number) === 2 ? 2 : Math.floor((2 * (required as number) + 2) / 3)) ||
+      row.agreement_threshold !== (expectedThreshold ?? ((required as number) === 2 ? 2 : Math.floor((2 * (required as number) + 2) / 3))) ||
       !['collecting','rejected','agreed'].includes(String(row.candidate_outcome)) ||
       !['collecting','advancing','agreed'].includes(String(row.candidate_progression_status)) ||
       (row.candidate_outcome === 'collecting') !== (row.candidate_progression_status === 'collecting') ||
@@ -89,7 +90,8 @@ export function validateOwnDecisionResult(value: unknown): OwnDecisionResult {
 }
 
 async function rpc(page: Page, api: PublicApi, room: RoomProjection,
-  name: 'get_room_candidate_decision' | 'submit_room_candidate_decision', value?: SafeDecision) {
+  name: 'get_room_candidate_decision' | 'submit_room_candidate_decision', value?: SafeDecision,
+  expectedThreshold?: number) {
   const snapshot = committedRoomSnapshot(room).row;
   const tmdbMovieId = snapshot.tmdb_movie_id, candidateSequence = snapshot.candidate_sequence;
   if (!Number.isSafeInteger(tmdbMovieId) || (tmdbMovieId as number) <= 0) throw new Error('E2E_SAFE_FAILURE');
@@ -108,15 +110,16 @@ async function rpc(page: Page, api: PublicApi, room: RoomProjection,
     if (!response.ok) throw new Error('E2E_SAFE_FAILURE');
     return response.json();
   }, { ...api, name, roomId: room.id, tmdbMovieId, candidateSequence, value });
-  return validateOwnDecisionResult(rows);
+  return validateOwnDecisionResult(rows, expectedThreshold);
 }
 
-export function recoverOwnDecision(page: Page, api: PublicApi, room: RoomProjection) {
-  return rpc(page, api, room, 'get_room_candidate_decision');
+export function recoverOwnDecision(page: Page, api: PublicApi, room: RoomProjection, expectedThreshold?: number) {
+  return rpc(page, api, room, 'get_room_candidate_decision', undefined, expectedThreshold);
 }
 
-export function submitOwnDecision(page: Page, api: PublicApi, room: RoomProjection, value: SafeDecision) {
-  return rpc(page, api, room, 'submit_room_candidate_decision', value);
+export function submitOwnDecision(page: Page, api: PublicApi, room: RoomProjection, value: SafeDecision,
+  expectedThreshold?: number) {
+  return rpc(page, api, room, 'submit_room_candidate_decision', value, expectedThreshold);
 }
 
 export function boundedCandidateIdentity(room: RoomProjection): number {
@@ -131,7 +134,7 @@ export function boundedCandidateIdentity(room: RoomProjection): number {
 export function preassembleAssignedCandidate(room: RoomProjection, tmdbMovieId: number) {
   if (!/^[0-9a-f-]{36}$/.test(room.id) || !Number.isSafeInteger(tmdbMovieId) || tmdbMovieId <= 0)
     throw new Error('E2E_SAFE_FAILURE');
-  const result = spawnSync('docker', ['exec', 'supabase_db_otteroom-room-session', 'psql', '-X',
+  const result = spawnSync('docker', ['exec', localSupabaseContainer(), 'psql', '-X',
     '-U', 'postgres', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-qAt', '-c',
     `begin;
      insert into public.room_candidate_occurrences(room_id,sequence,tmdb_movie_id,release_year,status)
@@ -194,7 +197,7 @@ export function preassembleDecisionRooms(template: RoomProjection, count: number
       'candidate_sequence',1,'decision_completed_count',0) order by code)
       from feature007_room_seed;
     commit;`;
-  const result = spawnSync('docker', ['exec', 'supabase_db_otteroom-room-session', 'psql', '-X',
+  const result = spawnSync('docker', ['exec', localSupabaseContainer(), 'psql', '-X',
     '-U', 'postgres', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-qAt', '-c', sql],
   { encoding: 'utf8', timeout: 15000, maxBuffer: 16384 });
   if (result.status !== 0 || result.error) throw new Error('E2E_SAFE_FAILURE');

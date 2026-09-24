@@ -46,6 +46,10 @@ const progressionCases=new Map([
   ['@feature008 L01 exact-two candidate progression lifecycle','L01'],
   ['@feature008 L02 creator and larger-group candidate progression convergence','L02'],
 ]);
+const selectionRulesCases=new Map([
+  ['@feature009 M01 configured order cutoff and exact-two progression','M01'],
+  ['@feature009 M02 localized order AND decoy and exact-fraction boundary','M02'],
+]);
 
 function scenarioFor(title: unknown): string {
   if (typeof title !== 'string') return 'unclassified';
@@ -55,6 +59,7 @@ function scenarioFor(title: unknown): string {
   if(candidateCases.has(title))return 'candidate';
   if(decisionCases.has(title))return 'decision';
   if(progressionCases.has(title))return 'progression';
+  if(selectionRulesCases.has(title))return 'selection-rules';
   if (title.startsWith('@baseline ')) return 'baseline';
   if (title.startsWith('@auth ')) return 'auth';
   if (title.startsWith('@us1 E01 ')) return 'us1';
@@ -83,6 +88,7 @@ function browserCaseFor(title: unknown): string {
   if(scenario==='candidate')return candidateCases.get(title)!;
   if(scenario==='decision')return decisionCases.get(title)!;
   if(scenario==='progression')return progressionCases.get(title)!;
+  if(scenario==='selection-rules')return selectionRulesCases.get(title)!;
   if (['us1', 'us2-join', 'us2-realtime', 'us4'].includes(scenario)) {
     return title.match(/^@[^ ]+ (E(?:0[1-9]|1[0-2])) /)?.[1] ?? 'none';
   }
@@ -124,6 +130,8 @@ export function safeResult(test: { title?: unknown; expectedStatus?: unknown; re
       ? 'CONTROLLED_AUTH_DIAGNOSTIC_FAILURE' : status === 'passed' ? 'PASS' : 'E2E_FAILURE',
     cleanup: receipt('safe-context-cleanup', 'complete'),
     authSuccess: receipt('safe-auth-success', 'confirmed'),
+    authResult: [...(result.annotations ?? [])].reverse().find(item => item.type === 'safe-auth-result' &&
+      ['transport', 'protocol', 'success', 'http_4xx', 'http_5xx', 'rate_limited'].includes(item.description ?? ''))?.description ?? 'none',
     signups: count('safe-signups'),
     identities: count('safe-identities'),
     performanceSamples: bounded('safe-performance-samples', 20),
@@ -177,7 +185,7 @@ export default class SafeReporter implements Reporter {
     if (!this.#directory) return;
     if (this.#runnerFailed) this.#results.push({
       scenario: 'runner', browserCase: 'none', worker: -1, repetition: 0, context: 'none', status: 'failed', category: 'E2E_FAILURE',
-      cleanup: false, authSuccess: false, signups: 0, identities: 0, performanceSamples: 0,
+      cleanup: false, authSuccess: false, authResult: 'none', signups: 0, identities: 0, performanceSamples: 0,
       performancePassing: 0, performanceMaximumMs: 0, performanceRecoverableFailures: 0,
       budgetFailure: false, capture: 'none', captureAttempts: 0, artifactsComplete: false, location: 'none', stage: 'none', ui: 'none', uiReason: 'none',
       harnessDiagnostics: [],

@@ -136,8 +136,12 @@ begin
     and result->>'decision_completed_count'='0'
     and result->>'candidate_progression_status'='inactive' and result->>'candidate_sequence'='0'
     and (select count(*) from jsonb_object_keys(result))=14);
-  result:=pg_temp.rpc('f5000000-0000-4000-8000-000000000001',
-    $$select * from public.create_room('f5200000-0000-4000-8000-000000000099',2,true)$$);
+  set local role service_role;
+  select to_jsonb(x) into result from public.create_room_with_selection_rules(
+    'f5000000-0000-4000-8000-000000000001',
+    'f5200000-0000-4000-8000-000000000099',2,true,
+    'configured_009_v1','vote_count_desc',500,null,'en-US','or',2,3) x;
+  reset role;
   perform pg_temp.require(result->>'outcome'='created'
     and result->>'filter_resolution_status'='pending'
     and result->>'decision_completed_count'='0'

@@ -1,8 +1,10 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { sanitizeDiagnostic } from '../e2e/support/sanitize-diagnostics.ts';
+import { localSupabaseArgs } from './local-supabase.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 
@@ -20,9 +22,9 @@ export function localExecutable(name) {
 export function operationSpec(operation) {
   switch (operation) {
     case 'web:e2e': return { binary: 'expo', args: ['start', '--web', '--port', '8081'] };
-    case 'supabase:start': return { binary: 'supabase', args: ['start'] };
-    case 'supabase:status': return { binary: 'supabase', args: ['status'] };
-    case 'supabase:stop': return { binary: 'supabase', args: ['stop'] };
+    case 'supabase:start': return { binary: 'supabase', args: localSupabaseArgs(['start']) };
+    case 'supabase:status': return { binary: 'supabase', args: localSupabaseArgs(['status']) };
+    case 'supabase:stop': return { binary: 'supabase', args: localSupabaseArgs(['stop']) };
     default: throw new Error('PROCESS_OPERATION_REJECTED');
   }
 }
@@ -70,7 +72,6 @@ export async function runManagedProcess({ command, args, input, label, signal, e
       child.stderr.resume();
       child.stdin.on('error', () => {});
       child.on('error', () => finish(1));
-      child.on('exit', () => killGroup('SIGKILL'));
       child.on('close', (code, sig) => finish(overflow ? 1 : timedOut ? 124 : stopped ? signal?.reason === 'SIGINT' ? 130 : 143 : code ?? (sig === 'SIGINT' ? 130 : 143)));
       child.stdin.end(input);
       emit('started');
@@ -93,7 +94,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
       // Managed Expo stays inside Playwright's web-server process group, so even
       // forced runner teardown cannot strand a detached Metro process.
       detached: operation !== 'web:e2e',
-      env: { ...process.env, CI: '1' }, signal: abort.signal,
+      env: { ...process.env, CI: '1', DO_NOT_TRACK: '1', SUPABASE_TELEMETRY_DISABLED: '1',
+        XDG_CONFIG_HOME: path.join(os.tmpdir(), 'otteroom-supabase-config') }, signal: abort.signal,
       onStatus: message => process.stdout.write(message + '\n'),
     });
   } catch { process.stderr.write('SAFE_PROCESS_FAILED\n'); process.exitCode = 1; }

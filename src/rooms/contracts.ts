@@ -1,7 +1,7 @@
 import type { Database } from '../types/database.generated';
 import { normalizeRoomCode } from './code';
 
-type GeneratedRow = Database['public']['Functions']['create_room']['Returns'][number];
+type GeneratedRow = Database['public']['Functions']['join_room']['Returns'][number];
 export type RoomResolutionStatus = Database['public']['Enums']['filter_resolution_status'];
 export type CandidateAcquisitionStatus = Database['public']['Enums']['candidate_acquisition_status'];
 export type CandidateProgressionStatus = Database['public']['Enums']['candidate_progression_status'];
@@ -71,7 +71,14 @@ export function validProgression(status: unknown, sequence: unknown, count: unkn
   return status === 'exhausted' && acquisition === 'no_candidates' && count === 0;
 }
 const fields = ['outcome', 'room_id', 'room_code', 'room_state', 'is_creator', 'is_voter', 'voter_count', 'required_voter_count','filter_completed_count','filter_resolution_status','candidate_acquisition_status','candidate_progression_status','candidate_sequence','decision_completed_count'] as const satisfies readonly (keyof GeneratedRow)[];
-function oneRow(data: unknown): Record<keyof GeneratedRow, unknown> {
+function oneRow(data: unknown, objectResponse = false): Record<keyof GeneratedRow, unknown> {
+  if (objectResponse) {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new RoomContractError();
+    const row = data as Record<string, unknown>;
+    if (Object.keys(row).length !== fields.length || !fields.every(key => Object.hasOwn(row, key)))
+      throw new RoomContractError();
+    return row as Record<keyof GeneratedRow, unknown>;
+  }
   if (!Array.isArray(data) || data.length !== 1) throw new RoomContractError();
   const row: unknown = data[0];
   if (!row || typeof row !== 'object' || Array.isArray(row) || Object.keys(row).length !== fields.length ||
@@ -97,7 +104,7 @@ function accepted(row: Record<keyof GeneratedRow, unknown>): void {
   }
 }
 export function narrowCreateResult(data: unknown): CreateResult {
-  const row = oneRow(data);
+  const row = oneRow(data, true);
   accepted(row);
   if (!row.is_creator || !(row.outcome === 'already_created' || row.outcome === 'created' &&
     row.room_state === 'waiting' && row.voter_count === (row.is_voter ? 1 : 0)

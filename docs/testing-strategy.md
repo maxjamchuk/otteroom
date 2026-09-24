@@ -128,8 +128,9 @@ Feature 008 adds the override-free `npm run test:e2e:feature008` profile. It
 selects exactly L01 (2 identities) and L02 (4 identities), for owner total 6.
 L03 remains embedded in L01, and L02 reuses its four case-owned identities
 across its three-voter and four-voter room subflows; neither adds a case or an
-identity. The full inventory is therefore 46 cases/112 identities. Including
-C1, the current full-checkpoint formula is `1 + 112 = 113`. Capture remains off;
+identity. At the Feature 008 boundary, the full inventory was 46 cases/112
+identities. Including C1, that historical full-checkpoint formula is
+`1 + 112 = 113`. Capture remains off;
 the controlled provider, credential registry, finalized scanner, safe reporter,
 and owned cleanup remain mandatory.
 
@@ -137,7 +138,152 @@ Feature 008 charged blocks remain separately admitted: normal/run one is
 `1 + 16 + 6 = 23`, the additional repeatability run is `16 + 6 = 22`, their
 cumulative budget is `23 + 22 = 45`, and the fresh-checkout C1 plus smoke block
 is `1 + 16 = 17`. The preserved pre-feature full checkpoint was
-`1 + 106 = 107`; the current full checkpoint is `1 + 112 = 113`.
+`1 + 106 = 107`; the Feature 008-boundary full checkpoint was `1 + 112 = 113`.
+
+## Feature 009 current evidence and owner release check
+
+**Current status: Feature 009 release-complete; ready to commit.** The owner
+reports the latest-product-source manual live-TMDB mixed-clause browser recheck
+PASSED after the source correction. The previously failing three-voter flow
+progressed beyond four rejected candidates, all clients converged on the next
+candidate, and no `deadline`, `request_budget` or incorrect
+`ordering_inconsistent` occurred. The owner later observed valid, more varied
+candidates under operational YAML values `minimum_vote_count: 100` and
+`ordering: popularity_desc`; this is configuration evidence, not a new product
+requirement. T096 and T097 remain valid charged evidence
+for their tested source: 23 identities plus 22 identities, for 45 repeatability
+identities. T100 G5 passed for that source. The later correction has deterministic,
+clean-database and bounded live source replay evidence. T096/T097 and T100 do
+not certify the later source correction; the owner manual recheck is recorded
+separately. The owner intentionally discontinued
+T098 independent fresh-checkout certification because the remaining effort had
+become validation-infrastructure work unrelated to product acceptance. T098 did
+not pass; preserve its attempts and receipts as historical diagnostics. Do not
+claim 62-identity certification for the T096/T097 source or spend the planned
+additional 17 identities. T099 reconciliation and T100 G5 audit used their
+then-current source worktree and non-charged evidence only. Feature 010
+Discovery and Feature 011 Match remain unstarted.
+
+Historical T001–T074 receipts remain preserved certification for their original
+pre-regression source, including all failed, partial, diagnostic, manual, and
+replacement attempts. The post-G5 candidate-source correction invalidated that
+exact-source release claim. The pre-runtime-correction current-source sequence was
+T078 normal acceptance, T079 unchanged-source repeatability, T080 independent
+fresh-checkout evidence, T081 reconciliation, and the passing T082 final current-
+source G5 audit; those receipts remain historical and are not rewritten. The later
+T089 Docker runtime correction changed the authoritative `scripts/` manifest. The
+previously governing corrected-source sequence was T090 normal run one, T091
+unchanged-source repeatability, T092 independent fresh checkout, and T093
+current-source reconciliation. T094 completed the final corrected-current-source
+G5 audit with zero identities and no charged rerun. T081 and T082 performed no
+charged rerun.
+
+The implemented Feature 009 profile adds the override-free
+`npm run test:e2e:feature009` profile. It selects exactly M01 (2 identities) and M02
+(4 identities), for an owner-acceptance total of 6.
+M01 reuses its two voter identities across its bounded room subflows. M02 reuses one
+non-voting creator plus three voters across its three-voter and four-voter subflows;
+neither case adds a hidden identity. Targeted historical selection is `T = 0` because
+the permanent smoke covers the changed creation transport and M01/M02 cover the
+evolved candidate/progression journeys. Capture remains off; workers 1, retries 0,
+repeat 1, the controlled provider, credential registry, finalized scanner, safe
+reporter, and owned cleanup remain mandatory.
+
+The final Feature 009 charged-block and inventory reconciliation is:
+
+| Measure | Formula | Identities/inventory |
+| --- | --- | ---: |
+| M01 | fixed case cap | **2 identities** |
+| M02 | fixed case cap | **4 identities** |
+| Owner acceptance | `2 + 4` | **6 identities** |
+| Permanent smoke | `G03 3 + G04 4 + G05 2 + G08 4 + H01 3` | **5 cases / 16 identities** |
+| C1 security probe | separate controlled probe | **1 identity** |
+| T096 normal checkpoint / repeatability run one | `C1 1 + smoke 16 + owner 6 + T 0` | **PASS; 23 identities** |
+| T097 additional repeatability | `smoke 16 + owner 6` | **PASS; 22 identities** |
+| T096/T097 tested-source repeatability | `23 + 22` | **PASS; 45 identities** |
+| T098 fresh checkout, previously planned | `C1 1 + smoke 16` | **WAIVED by owner; not passed; 0 of 17 additional identities spent** |
+| Final full acceptance inventory | Feature 008 boundary `46/112` + M01/M02 `2/6` | **48 cases / 118 identities** |
+| Final full inventory plus C1 | `118 + 1` | **119 identities** |
+
+The previous `45 + 17 = 62` combined figure was a plan projection only. The
+T098 certification for the T096/T097 source was intentionally discontinued and is not
+included in current accepted evidence. The full inventory remains a case/identity
+count, not a claim that the whole inventory or a 119-identity block was run.
+
+The inventory is repository-derived rather than carried forward from the approved
+projection: the repository profile assertion records the Feature 008 boundary as `42 + 2 + 2
+= 46` cases and `100 + 2 + 4 + 2 + 4 = 112` identities; the current runner maps
+M01/M02 to 2 and 4, and the Feature 009 profile test discovers exactly those two
+additive cases. Therefore the implemented final inventory is `46 + 2 = 48` cases
+and `112 + 2 + 4 = 118` identities, with C1 making 119.
+
+The pre-runtime-correction evidence is T078 normal acceptance, T079
+unchanged-source repeatability, and T080 fresh checkout, recorded in the Feature
+009 quickstart. Their formulas are respectively `23`, `22`, and `17`, with
+cumulative repeatability `45` and repeatability plus fresh checkout `62`; their
+source identity remains historical after the T089 runtime correction. The later
+T090 `23`, T091 `22`, and T092 `17` evidence yielded `23/22/45/17/62` for its
+tested source. Each of those charged blocks has its
+required fresh R02 admission, safe-wrapper/profile selection, fail-fast controls,
+capture-off configuration, exact Auth result, zero-finding scanner, owned cleanup,
+and no HTTP 429; targeted historical work is `T = 0`. Those receipts remain
+historical for their tested sources; T092's 17 identities do not establish a
+fresh-checkout pass for the T096/T097 source.
+
+The quickstart retains and accounts for all earlier failed, partial, diagnostic,
+manual, and replacement attempts. Historical charged accounting is intentionally
+separate from the current-source formulas: the preserved T070/T071/T072 ledger
+records its historical attempts independently, including T070's 41 identities,
+T071's historical charged 22, and T072's 33 charged identities across its failed/
+partial block and recovery. None is added to the current-source `23/22/45`
+repeatability evidence. T098's planned additional 17 identities remain unspent,
+and the combined 62-identity certification for the T096/T097 source was not performed. No
+unfinished charged run remains.
+
+The pre-runtime-correction implementation identity is mutually consistent across
+T078, T079, and T080: workspace HEAD
+`e55a53bbc6494691f9a9e636cfead61a29255982`, a 144-file
+source manifest with path-list SHA-256
+`3f6512790b06794de3a5eeb0f66cc4d7dfaf3e7f7c0c467727b83a411e3f65a6` and
+content-manifest SHA-256
+`b9ad3cc14c8da65064a579c4e43b6782343417f8e5bbc22cbbba95e24f55d62d`.
+The ordered traversal, owner spec, controller, canonical/bundled YAML, and
+generated-types hashes are unchanged across those receipts. T080 independently
+reconstructed the same source in candidate commit
+`b25871b85e01ef6260f286d6f064036910f0a9ce`, tree
+`5f561aa323499846af9a4ed6ec5b6e1451cfe9ef`, and matched the manifest.
+
+T081 historically confirmed the repository-derived inventory; T093
+reconciliation confirms it remains M01 `2`, M02 `4`, owner `6`, full `48 cases /
+118 identities`, and full plus C1 `119`: the fixed Feature 008 runner is `46/112`,
+while the current Feature 009 profile discovers exactly two additive cases. The
+post-G5 traversal correction changed source traversal only and the Playwright
+runtime correction changed owned execution plumbing only; neither changed the
+acceptance inventory. T090, T091, and T092 remain separate historical receipts for
+the corrected source, all report clean scanner/Auth/cleanup evidence and no HTTP
+429, and retain check-only types after the sole T063 write. T075–T080 and all
+earlier attempts remain historical; T094 confirmed Feature 009 complete for its
+tested source. T095 reopened it; the later mixed-clause correction has only its
+own recorded lower-layer and live source evidence. Feature 010 Discovery and
+Feature 011 Match remain unstarted.
+
+The historical corrected-source identity reconciled by T093 and audited by
+T094 is workspace
+HEAD `e55a53bbc6494691f9a9e636cfead61a29255982`, a 144-file source manifest with
+path-list SHA-256 `b7e2ca13cf82fb08ca726f6f6dd5667bb7a4f17d7f27eb6b433b55cc9428b3d8`
+and content-manifest SHA-256
+`478a4ae21bcac343054c0cb5af6af2fc18ebfccd0bce33654647d4e6c5f4fcd7`. Its
+Playwright runtime implementation SHA-256 is
+`9a93ace924ad6026783a3861346abada0f1a2d4e9ff185c4c7f1853481fa29cd`, and the
+generated database types remain
+`69f63e689f5bb9b45ffdc095a12ba5697c4c01335de117bc1e502bb71fdacc03`. T092's
+independent candidate commit/tree are
+`0d8efaaf74f200a0fc7b770569a636ef52aa7679` /
+`d5fc596a834afbd7b4a2bdfecc13ce3632f352aa`; its 144-file path/content manifest
+and runtime hash match T090/T091 and their tested workspace source. The canonical
+and bundled YAML hashes, Feature 009 migration hash, ordered `tmdb-client.ts`
+hash, owner spec, and controller are likewise unchanged across the three
+historical receipts.
 
 ## Feature-specific acceptance
 
@@ -229,8 +375,11 @@ into the checkout, and remove only owned resources afterward.
 
 ## Full historical browser acceptance
 
-The existing `npm run test:e2e` remains the full current E/G/H/I/J/K/L inventory:
-46 cases and 112 identities. Run it, plus C1, when any of the following applies:
+At the Feature 008 boundary, the existing `npm run test:e2e` inventory was the full
+E/G/H/I/J/K/L set: 46 cases and 112 identities. With the implemented Feature 009
+profile, the repository's final full acceptance inventory is 48 cases and 118
+identities, or 119 including C1. Run the applicable full inventory, plus C1, when any
+of the following applies:
 
 - explicit release or milestone validation, including the first useful MVP
   release unless its approved release plan states a stricter superset;
@@ -245,7 +394,7 @@ The existing `npm run test:e2e` remains the full current E/G/H/I/J/K/L inventory
 
 An additive, fail-closed profile selector that leaves full discovery, context
 lifecycle, safety controls and case code unchanged requires static/unit coverage
-of that selector, not an otherwise unmotivated 112-identity rerun. Any change to
+of that selector, not an otherwise unmotivated full-inventory rerun. Any change to
 the underlying execution or safety semantics does require the full gate.
 
 ## R02 accounting
@@ -267,9 +416,10 @@ timestamps, scanner result and cleanup result.
   signup-free hour from the last counted attempt and wait outside the harness.
 - Workers remain 1, retries 0 and repeatEach 1 for normal real-stack profiles
   until a separately reviewed isolation design proves another setting safe.
-- Current full acceptance is 112; the preserved pre-Feature-008 baseline was
-  106; C1 is 1; permanent smoke is 16. Targeted selection costs the sum of its current case budgets and is never
-  free merely because the same case ran earlier in the hour.
+- Feature 008-boundary full acceptance is 112; final Feature 009 full acceptance is
+  118; the preserved pre-Feature-008 baseline was 106; C1 is 1; permanent smoke is
+  16. Targeted selection costs the sum of its current case budgets and is never free
+  merely because the same case ran earlier in the hour.
 
 Let `F` be current-feature identities and `T` the once-only targeted historical
 selection. The normal formulas are:
@@ -281,7 +431,8 @@ selection. The normal formulas are:
 | Cumulative normal plus repeatability | `1 + 2 × (16 + F) + T` |
 | Fresh checkout | `1 + 16 = 17` |
 | Preserved pre-Feature-008 full baseline | `1 + 106 = 107` |
-| Explicit current full historical checkpoint | `1 + 112 = 113` |
+| Feature 008-boundary full historical checkpoint | `1 + 112 = 113` |
+| Final Feature 009 full checkpoint | `1 + 118 = 119` |
 
 To keep a normal checkpoint at or below 50, `F + T` must be at most 33. To keep
 it at or below 30, `F + T` must be at most 13.

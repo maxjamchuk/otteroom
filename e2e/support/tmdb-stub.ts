@@ -1,4 +1,6 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
+import { Buffer } from 'node:buffer';
+import { controlledDiscoverResults, controlledFixtureById } from './tmdb-controlled-fixture.ts';
 
 export const TMDB_STUB_SCENARIOS = Object.freeze([
   'candidate', 'empty', 'timeout', 'rate-limit', 'server-error', 'malformed',
@@ -8,6 +10,7 @@ export type TmdbStubScenario = typeof TMDB_STUB_SCENARIOS[number];
 
 type State = {
   scenario: TmdbStubScenario;
+  language: 'en-US' | 'de-DE';
   hold: boolean;
   released: boolean;
   calls: { discover: number; details: number; configuration: number; poster: number };
@@ -16,16 +19,6 @@ type State = {
   invalid: number;
   release: Set<() => void>;
 };
-
-const candidate = Object.freeze({ id: 6006, adult: false, genre_ids: [18, 28],
-  title: 'Controlled Constellation', release_date: '2005-06-07', poster_path: '/controlled.png' });
-const successor = Object.freeze({ ...candidate, id: 6007, title: 'Controlled Aurora',
-  release_date: '2006-07-08', poster_path: '/controlled-successor.png' });
-const decoys = Object.freeze([
-  { ...candidate, id: 6001, adult: true },
-  { ...candidate, id: 6002, genre_ids: [28] },
-  { ...candidate, id: 6003, release_date: '1888-01-01' },
-]);
 
 function json(response: ServerResponse, status: number, body: unknown, headers: Record<string,string> = {}) {
   const bytes = Buffer.from(JSON.stringify(body));
@@ -42,20 +35,23 @@ async function body(request: IncomingMessage): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 
-function validDiscover(url: URL): boolean {
+function validDiscover(url: URL, language: string): boolean {
   const allowed = new Set(['language','include_adult','include_video','sort_by',
-    'primary_release_date.gte','primary_release_date.lte','page','with_genres']);
+    'primary_release_date.gte','primary_release_date.lte','vote_count.gte','vote_average.gte','page','with_genres']);
   return [...url.searchParams.keys()].every(key => allowed.has(key)) &&
-    url.searchParams.get('language') === 'en-US' && url.searchParams.get('include_adult') === 'false' &&
-    url.searchParams.get('include_video') === 'false' && url.searchParams.get('sort_by') === 'primary_release_date.asc' &&
+    url.searchParams.get('language') === language && url.searchParams.get('include_adult') === 'false' &&
+    url.searchParams.get('include_video') === 'false' &&
+    ['primary_release_date.asc','vote_count.desc','vote_average.desc','popularity.desc','title.asc'].includes(url.searchParams.get('sort_by') ?? '') &&
     /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get('primary_release_date.gte') ?? '') &&
     /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get('primary_release_date.lte') ?? '') &&
     /^[1-9]\d*$/.test(url.searchParams.get('page') ?? '') &&
-    (!url.searchParams.has('with_genres') || /^\d+(?:\|\d+)*$/.test(url.searchParams.get('with_genres') ?? ''));
+    (!url.searchParams.has('with_genres') || /^\d+(?:[|,]\d+)*$/.test(url.searchParams.get('with_genres') ?? '')) &&
+    (!url.searchParams.has('vote_count.gte') || /^\d+$/.test(url.searchParams.get('vote_count.gte') ?? '')) &&
+    (!url.searchParams.has('vote_average.gte') || /^\d+(?:\.\d+)?$/.test(url.searchParams.get('vote_average.gte') ?? ''));
 }
 
-function fresh(scenario: TmdbStubScenario, hold = false): State {
-  return { scenario, hold, released: !hold, calls: { discover: 0, details: 0, configuration: 0, poster: 0 },
+function fresh(scenario: TmdbStubScenario, hold = false, language: 'en-US' | 'de-DE' = 'en-US'): State {
+  return { scenario, language, hold, released: !hold, calls: { discover: 0, details: 0, configuration: 0, poster: 0 },
     provider: { requests: 0, completed: 0, active: 0 }, held: 0, invalid: 0, release: new Set() };
 }
 
@@ -76,14 +72,15 @@ export async function startTmdbStub(providerToken: string) {
       }
       if (control && request.method === 'POST') {
         const value = await body(request) as Record<string, unknown>;
-        if (!value || Object.keys(value).some(key => !['scenario','hold','release'].includes(key))) throw new Error('control');
+        if (!value || Object.keys(value).some(key => !['scenario','hold','release','language'].includes(key))) throw new Error('control');
         if (value.release === true) {
           state.released = true; for (const resume of state.release) resume(); state.release.clear();
         } else {
           if (typeof value.scenario !== 'string' || !TMDB_STUB_SCENARIOS.includes(value.scenario as TmdbStubScenario) ||
-              !(value.hold === undefined || typeof value.hold === 'boolean')) throw new Error('control');
+              !(value.hold === undefined || typeof value.hold === 'boolean') ||
+              !(value.language === undefined || value.language === 'en-US' || value.language === 'de-DE')) throw new Error('control');
           for (const resume of state.release) resume();
-          state = fresh(value.scenario as TmdbStubScenario, value.hold === true);
+          state = fresh(value.scenario as TmdbStubScenario, value.hold === true, value.language === 'de-DE' ? 'de-DE' : 'en-US');
         }
         json(response, 200, { ok: true }); return;
       }
@@ -108,7 +105,7 @@ export async function startTmdbStub(providerToken: string) {
       }
       if (url.pathname === '/3/discover/movie' && request.method === 'GET') {
         state.calls.discover++;
-        if (!validDiscover(url)) { state.invalid++; json(response, 422, { status_code: 5 }); return; }
+        if (!validDiscover(url, state.language)) { state.invalid++; json(response, 422, { status_code: 5 }); return; }
         if (state.hold && !state.released) {
           state.held++;
           await new Promise<void>(resolve => {
@@ -125,18 +122,19 @@ export async function startTmdbStub(providerToken: string) {
         if (state.scenario === 'limit') { json(response, 200, { page, total_pages: 101, total_results: 2020, results: [] }); return; }
         // Returning the prior and successor identities in stable order lets the
         // Edge search prove that server-derived exclusions skip history.
-        const results = state.scenario === 'empty' ? [] : [...decoys, candidate, successor];
+        const results = state.scenario === 'empty' ? [] : controlledDiscoverResults;
         json(response, 200, { page, total_pages: 1, total_results: results.length, results }); return;
       }
       if (/^\/3\/movie\/\d+$/.test(url.pathname) && request.method === 'GET') {
         state.calls.details++;
-        if (url.searchParams.get('language') !== 'en-US') { state.invalid++; json(response, 422, {}); return; }
+        if (url.searchParams.get('language') !== state.language) { state.invalid++; json(response, 422, {}); return; }
         if (state.scenario === 'details-error') { json(response, 503, { status_code: 9 }); return; }
         const id = Number(url.pathname.split('/').at(-1));
-        const selected = id === successor.id ? successor : id === candidate.id ? candidate : null;
+        const selected = controlledFixtureById(id);
         if (!selected) { state.invalid++; json(response, 404, { status_code: 34 }); return; }
-        json(response, 200, { id: selected.id, title: selected.title, release_date: selected.release_date,
-          poster_path: state.scenario === 'no-poster' ? null : selected.poster_path }); return;
+        json(response, 200, { id: selected.tmdbMovieId, title: selected.title,
+          release_date: selected.discover.release_date,
+          poster_path: state.scenario === 'no-poster' ? null : selected.posterPath }); return;
       }
       if (url.pathname === '/3/configuration' && request.method === 'GET') {
         state.calls.configuration++;

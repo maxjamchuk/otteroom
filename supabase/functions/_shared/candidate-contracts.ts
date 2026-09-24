@@ -4,6 +4,12 @@ export type CandidateConstraint = Readonly<{
   releaseYearFrom: number;
   releaseYearTo: number;
   clauses: readonly (readonly number[])[];
+  ruleSetKind?: 'legacy_005_006_008' | 'configured_009_v1';
+  ordering?: 'legacy_source_order' | 'vote_count_desc' | 'average_rating_desc' | 'popularity_desc' | 'title_asc';
+  minimumVoteCount?: number | null;
+  minimumAverageRating?: number | null;
+  metadataLanguage?: string;
+  genreMode?: 'or' | 'and';
   excludedTmdbMovieIds?: readonly number[];
 }>;
 
@@ -14,6 +20,9 @@ export type TmdbMovie = Readonly<{
   title: string;
   releaseDate: string;
   posterPath: string | null;
+  voteCount?: number;
+  voteAverage?: number;
+  popularity?: number;
 }>;
 
 export type SearchResult =
@@ -22,8 +31,8 @@ export type SearchResult =
   | Readonly<{ kind: 'search_incomplete'; reason: FailureClass }>;
 
 export type FailureClass = 'timeout' | 'rate_limited' | 'upstream' | 'request_rejected' |
-  'malformed_response' | 'pagination_inconsistent' | 'request_budget' | 'deadline' |
-  'single_day_overflow' | 'internal';
+  'malformed_response' | 'required_metric' | 'pagination_inconsistent' | 'ordering_inconsistent' | 'request_budget' |
+  'deadline' | 'single_day_overflow' | 'internal';
 
 export type PreflightResult =
   | Readonly<{ outcome: 'not_found' }>
@@ -31,11 +40,13 @@ export type PreflightResult =
   | Readonly<{ outcome: 'no_candidates'; candidate_sequence: 0; candidate_progression_status: 'inactive' }>
   | Readonly<{ outcome: 'exhausted'; candidate_sequence: number; candidate_progression_status: 'exhausted' }>
   | Readonly<{ outcome: 'assigned'; candidate_sequence: number;
-      candidate_progression_status: 'collecting' | 'agreed'; tmdb_movie_id: number }>
+      candidate_progression_status: 'collecting' | 'agreed'; tmdb_movie_id: number; metadata_language: string }>
   | Readonly<{ outcome: 'acquire'; release_year_from: number; release_year_to: number;
       candidate_sequence: number; candidate_progression_status: 'inactive' | 'advancing';
       genre_clauses_tmdb_ids: readonly (readonly number[])[];
-      excluded_tmdb_movie_ids: readonly number[] }>;
+      excluded_tmdb_movie_ids: readonly number[]; rule_set_kind: 'legacy_005_006_008' | 'configured_009_v1';
+      candidate_ordering: CandidateConstraint['ordering']; minimum_vote_count: number | null;
+      minimum_average_rating: number | null; metadata_language: string; genre_mode: 'or' | 'and' }>;
 
 export type CommitResult = Readonly<{
   outcome: 'assigned' | 'no_candidates' | 'exhausted' | 'refresh_required' | 'not_found' | 'not_ready';
@@ -58,7 +69,7 @@ export type EdgeDependencies = Readonly<{
   verifyJwt(authorization: string): Promise<string | null>;
   rpc(name: RpcName, args: Record<string, unknown>): Promise<unknown>;
   search(constraint: CandidateConstraint): Promise<SearchResult>;
-  details(tmdbMovieId: number): Promise<CandidatePresentation>;
+  details(tmdbMovieId: number, metadataLanguage?: string): Promise<CandidatePresentation>;
   log?(stage: string, failure: FailureClass | 'none', durationMs: number, count?: number): void;
   now?(): number;
 }>;

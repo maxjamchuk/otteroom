@@ -12,7 +12,7 @@ export const anonymousBudget = Object.freeze({
   E07: 5, E08: 4, E09: 2, E10: 2, E11: 1, E12: 11, auth: 3,
 });
 
-const createEndpoint = '**/rest/v1/rpc/create_room';
+const createEndpoint = '**/functions/v1/room-create';
 
 async function assertHostRecovery(response: import('@playwright/test').Response, room: RoomProjection) {
   const rows = await response.json();
@@ -37,7 +37,7 @@ test('@us1 E01 create host Waiting and suppress rapid duplicate action', async (
     };
     await page.route(createEndpoint, hold);
     try {
-      const createdResponse = page.waitForResponse(response => response.url().endsWith('/rpc/create_room'));
+      const createdResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/functions/v1/room-create');
       const recoveredResponse = page.waitForResponse(response => response.url().endsWith('/rpc/join_room'));
       await page.getByRole('button', { name: 'Create Room' }).evaluate(element => {
         (element as HTMLElement).click(); (element as HTMLElement).click();
@@ -46,10 +46,10 @@ test('@us1 E01 create host Waiting and suppress rapid duplicate action', async (
       await expect(page.getByRole('button', { name: 'Creating room…' })).toBeDisabled();
       release();
       const created = await (await createdResponse).json();
-      expect(Array.isArray(created) && created.length === 1 && created[0].outcome === 'created').toBe(true);
+      expect(!Array.isArray(created) && created.outcome === 'created').toBe(true);
       const recovered = await recoveredResponse;
       const rooms = await ownRooms(page, api);
-      expect(!interceptionFailed && rooms.length === 1 && requests === 1 && rooms[0].id === created[0].room_id && rooms[0].code === created[0].room_code).toBe(true);
+      expect(!interceptionFailed && rooms.length === 1 && requests === 1 && rooms[0].id === created.room_id && rooms[0].code === created.room_code).toBe(true);
       await assertHostRecovery(recovered, rooms[0]);
       await assertWaiting(page, diagnostics, rooms[0]);
       await diagnostics.record({ scenario: 'E01', outcome: 'created; already_member; host; waiting; owned-rooms=1; create-requests=1' });
@@ -91,12 +91,12 @@ test('@us1 E01 committed response loss reuses request and recovers same host', a
     const loseResponse = async (route: Route) => {
       try {
         intercepted++;
-        originalRequest = route.request().postDataJSON()?.p_creation_request_id;
+        originalRequest = route.request().postDataJSON()?.creation_request_id;
         const response = await route.fetch({ maxRetries: 0, maxRedirects: 0, timeout: 15000 });
         try {
-          const rows = await response.json();
-          if (response.ok() && Array.isArray(rows) && rows.length === 1 && rows[0].outcome === 'created') {
-            committed = { room_id: rows[0].room_id, room_code: rows[0].room_code };
+          const row = await response.json();
+          if (response.ok() && row && !Array.isArray(row) && row.outcome === 'created') {
+            committed = { room_id: row.room_id, room_code: row.room_code };
           }
           // The unchanged real response proves commit, but is not delivered to UI.
           await route.abort('failed');
@@ -111,13 +111,13 @@ test('@us1 E01 committed response loss reuses request and recovers same host', a
       const before = await ownRooms(page, api);
       expect(!interceptionFailed && intercepted === 1 && !!originalRequest && !!committed && before.length === 1 && before[0].id === committed.room_id && before[0].code === committed.room_code).toBe(true);
       await page.unroute(createEndpoint, loseResponse);
-      const retryRequest = page.waitForRequest(request => request.url().endsWith('/rpc/create_room'));
-      const retryResponse = page.waitForResponse(response => response.url().endsWith('/rpc/create_room'));
+      const retryRequest = page.waitForRequest(request => new URL(request.url()).pathname === '/functions/v1/room-create');
+      const retryResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/functions/v1/room-create');
       const recovery = page.waitForResponse(response => response.url().endsWith('/rpc/join_room'));
       await page.getByRole('button', { name: 'Retry create' }).click();
-      expect((await retryRequest).postDataJSON()?.p_creation_request_id === originalRequest).toBe(true);
+      expect((await retryRequest).postDataJSON()?.creation_request_id === originalRequest).toBe(true);
       const retry = await (await retryResponse).json();
-      expect(Array.isArray(retry) && retry.length === 1 && retry[0].outcome === 'already_created' && retry[0].room_id === before[0].id && retry[0].room_code === before[0].code).toBe(true);
+      expect(!Array.isArray(retry) && retry.outcome === 'already_created' && retry.room_id === before[0].id && retry.room_code === before[0].code).toBe(true);
       await assertHostRecovery(await recovery, before[0]);
       await assertWaiting(page, diagnostics, before[0]);
       const reloadRecovery = page.waitForResponse(response => response.url().endsWith('/rpc/join_room'));

@@ -10,7 +10,8 @@ select pg_temp.require((select count(*)=3 from legacy_expected));
 select pg_temp.require(not exists(select 1 from pg_attribute where attrelid='public.rooms'::regclass
   and attname in('host_user_id','guest_user_id') and not attisdropped));
 select pg_temp.require(to_regprocedure('public.create_room(uuid)') is null
-  and to_regprocedure('public.create_room(uuid,integer,boolean)') is not null);
+  and to_regprocedure('public.create_room(uuid,integer,boolean)') is null
+  and to_regprocedure('public.create_room_with_selection_rules(uuid,uuid,integer,boolean,text,text,bigint,numeric,text,text,integer,integer)') is not null);
 select pg_temp.require(to_regclass('public.participant_filters') is not null
   and to_regprocedure('public.get_my_participant_filter(uuid)') is not null
   and to_regprocedure('public.submit_my_participant_filter(uuid,participant_genre[],smallint,smallint)') is not null
@@ -71,8 +72,9 @@ begin
         'filter_resolution_status','pending','candidate_acquisition_status','pending',
         'candidate_progression_status','inactive','candidate_sequence',0,'decision_completed_count',0));
       if subject=r.creator_user_id then
-        set local role authenticated;
-        select to_jsonb(x) into result from public.create_room(r.creation_request_id,3,false) x;
+        set local role service_role;
+        select to_jsonb(x) into result from public.create_room_with_selection_rules(
+          subject,r.creation_request_id,3,false,'configured_009_v1','vote_count_desc',500,null,'en-US','or',2,3) x;
         reset role;
         perform pg_temp.require(result=jsonb_build_object('outcome','already_created','room_id',r.id,'room_code',r.code,
           'room_state',r.state,'is_creator',true,'is_voter',true,'voter_count',r.voter_count,

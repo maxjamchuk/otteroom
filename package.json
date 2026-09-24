@@ -22,7 +22,8 @@
     "react-native-screens": "~4.26.0",
     "react-native-svg": "15.15.4",
     "react-native-web": "~0.21.0",
-    "react-native-worklets": "0.10.1"
+    "react-native-worklets": "0.10.1",
+    "yaml": "2.9.0"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",
@@ -48,7 +49,7 @@
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
     "test:client": "jest --runInBand",
-    "test:edge": "deno test --allow-env --allow-net=127.0.0.1 supabase/functions/_tests",
+    "test:edge": "deno test --allow-env --allow-read=config,supabase/functions --allow-net=127.0.0.1 supabase/functions/_tests",
     "test:tmdb:contract": "node scripts/run-tmdb-contract.mjs",
     "web:e2e": "node scripts/safe-process.mjs web:e2e",
     "web:export": "expo export --platform web",
@@ -59,15 +60,16 @@
     "test:e2e:feature006": "node scripts/run-e2e.mjs feature006",
     "test:e2e:feature007": "node scripts/run-e2e.mjs feature007",
     "test:e2e:feature008": "node scripts/run-e2e.mjs feature008",
+    "test:e2e:feature009": "node scripts/run-e2e.mjs feature009",
     "supabase:start": "node scripts/safe-process.mjs supabase:start",
     "supabase:status": "node scripts/safe-process.mjs supabase:status",
     "supabase:stop": "node scripts/safe-process.mjs supabase:stop",
-    "db:reset": "supabase db reset",
-    "db:test": "supabase test db supabase/tests/database",
+    "db:reset": "node scripts/supabase-cli.mjs db reset",
+    "db:test": "node scripts/supabase-cli.mjs test db supabase/tests/database",
     "db:types": "node scripts/database-types.mjs write",
     "db:types:check": "node scripts/database-types.mjs check",
     "env:local": "node scripts/configure-local-env.mjs",
-    "edge": "supabase functions serve room-candidate --env-file supabase/functions/.env.local"
+    "edge": "node scripts/supabase-cli.mjs functions serve room-candidate --env-file supabase/functions/.env.local"
   },
   "private": true,
   "engines": {

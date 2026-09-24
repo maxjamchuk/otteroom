@@ -110,3 +110,8 @@ export async function discardCommittedCandidateResponse(page: Page) {
 export function assertIdentityReceipt(actual: number, expected: 2 | 4) {
   if (!Number.isInteger(actual) || actual !== expected) throw new Error('E2E_SAFE_FAILURE');
 }
+
+export function assertExactThreshold(value: { agreement_threshold: number | null }, expected: number): void {
+  if (!Number.isInteger(expected) || expected < 2 || value.agreement_threshold !== expected)
+    throw new Error('E2E_SAFE_FAILURE');
+}

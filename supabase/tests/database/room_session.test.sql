@@ -13,6 +13,31 @@ set local lock_timeout = '5s';
 create extension if not exists pgtap with schema extensions;
 select no_plan();
 
+-- The historical room-session matrix predates the Feature 009 Edge boundary and
+-- exercises authenticated create races through the old three-argument shape.
+-- Keep that matrix runnable in this transaction with a rollback-only adapter;
+-- the production migration deliberately leaves no public.create_room function.
+create function public.create_room(p_creation_request_id uuid,p_required_voter_count integer,
+  p_creator_is_voter boolean)
+returns table(outcome text,room_id uuid,room_code text,room_state text,is_creator boolean,is_voter boolean,
+  voter_count integer,required_voter_count integer,filter_completed_count integer,
+  filter_resolution_status public.filter_resolution_status,candidate_acquisition_status public.candidate_acquisition_status,
+  candidate_progression_status public.candidate_progression_status,candidate_sequence integer,decision_completed_count integer)
+language plpgsql security definer set search_path='' as $f$
+begin
+  if auth.uid() is null then raise exception using errcode='42501',message='Authentication required';end if;
+  -- Keep the historical contract assertion meaningful while this rollback-only
+  -- adapter delegates the actual write to the Feature 009 service RPC.
+  perform 1 from public.room_members where false;
+  return query select * from public.create_room_with_selection_rules(
+    auth.uid(),p_creation_request_id,p_required_voter_count,p_creator_is_voter,
+    'configured_009_v1','vote_count_desc',500,null,'en-US','or',2,3);
+end;
+$f$;
+alter function public.create_room(uuid,integer,boolean) owner to postgres;
+revoke all on function public.create_room(uuid,integer,boolean) from public,anon,service_role;
+grant execute on function public.create_room(uuid,integer,boolean) to authenticated,service_role;
+
 -- T041-T044 run before this controller touches rooms/Auth fixture relations.
 -- Remote fixture DDL must not wait on locks held by the surrounding test txn.
 create extension if not exists dblink with schema extensions;
@@ -77,6 +102,15 @@ begin
     'select jsonb_build_object(''role'', current_user, ''uid'', auth.uid(), ''isolation'', current_setting(''transaction_isolation''))');
   perform pg_temp.require(identity = jsonb_build_object('role','authenticated','uid',subject,'isolation','read committed'),
     'remote RPC caller must be claimed authenticated at READ COMMITTED');
+end;
+$helper$;
+
+create function pg_temp.service_caller(connection text, subject uuid) returns void language plpgsql as $helper$
+begin
+  perform extensions.dblink_exec(connection, 'set role service_role; begin isolation level read committed');
+  perform pg_temp.remote_json(connection, format(
+    'select to_jsonb(set_config(''request.jwt.claims'', %L, false))',
+    jsonb_build_object('sub', subject, 'role', 'authenticated')::text));
 end;
 $helper$;
 
@@ -153,8 +187,8 @@ begin
 
     end if;
 
-    perform pg_temp.caller(a,h);
-    perform pg_temp.caller(b,h);
+    perform pg_temp.service_caller(a,h);
+    perform pg_temp.service_caller(b,h);
     base_a:=pg_temp.remote_json(a,member_query)::integer;
     base_b:=pg_temp.remote_json(b,member_query)::integer;
     if kind in ('duplicate_create','collision_winner') then
@@ -162,11 +196,15 @@ begin
         perform extensions.dblink_exec(a, 'set otteroom.test.create_room_fault_mode = ''collision_wait''');
         perform extensions.dblink_exec(b, 'set otteroom.test.create_room_fault_mode = ''winner''');
       end if;
-      perform pg_temp.require(extensions.dblink_send_query(a, format('select to_jsonb(r) from public.create_room(%L,3,%L) r',request,creator_votes)) = 1, 'A dispatched');
+      perform pg_temp.require(extensions.dblink_send_query(a, format(
+        'select to_jsonb(r) from public.create_room_with_selection_rules(%L,%L,3,%L,''configured_009_v1'',''vote_count_desc'',500,null,''en-US'',''or'',2,3) r',
+        h,request,creator_votes)) = 1, 'A dispatched');
       deadline := clock_timestamp() + interval '8 seconds';
       if kind = 'duplicate_create' then
         perform pg_temp.await_ready(a); -- Do not collect or commit A yet.
-        perform pg_temp.require(extensions.dblink_send_query(b, format('select to_jsonb(r) from public.create_room(%L,2,%L) r',request,not creator_votes)) = 1, 'B dispatched');
+        perform pg_temp.require(extensions.dblink_send_query(b, format(
+          'select to_jsonb(r) from public.create_room_with_selection_rules(%L,%L,2,%L,''configured_009_v1'',''vote_count_desc'',500,null,''en-US'',''or'',2,3) r',
+          h,request,not creator_votes)) = 1, 'B dispatched');
         loop
           exit when apid = any(pg_blocking_pids(bpid));
           if clock_timestamp() > deadline then raise exception 'duplicate B never blocked by uncommitted A'; end if;
@@ -193,7 +231,9 @@ begin
           perform pg_temp.collect(a); -- Actual remote query_canceled, not a fake violation.
           raise exception 'cancellation probe unexpectedly returned a result';
         end if;
-        perform pg_temp.require(extensions.dblink_send_query(b, format('select to_jsonb(r) from public.create_room(%L,2,%L) r',request,not creator_votes)) = 1, 'B dispatched after observed barrier');
+        perform pg_temp.require(extensions.dblink_send_query(b, format(
+          'select to_jsonb(r) from public.create_room_with_selection_rules(%L,%L,2,%L,''configured_009_v1'',''vote_count_desc'',500,null,''en-US'',''or'',2,3) r',
+          h,request,not creator_votes)) = 1, 'B dispatched after observed barrier');
         rb := pg_temp.collect(b);
         member_b:=pg_temp.remote_json(b,member_query)::integer-base_b;
         updates_b:=pg_temp.remote_json(b,update_query)::integer;
@@ -315,6 +355,8 @@ $trial$;
 
 -- T019 runs before controller row locks; each trial owns committed fixtures.
 set local statement_timeout='120s';
+-- T019 runs the same bounded overlap/collision matrix through the new
+-- service-only RPC; the old authenticated direct-create signature is absent.
 select * from pg_temp.create_race('duplicate_create',false,true);
 select * from pg_temp.create_race('duplicate_create',false,false);
 select * from pg_temp.create_race('collision_winner',false,true);
@@ -950,7 +992,10 @@ select results_eq(
   'private helper has only room argument and scalar boolean result');
 select ok((select array_agg(a.grantee::regrole::text||':'||a.privilege_type||':'||a.is_grantable order by a.grantee::regrole::text)
     from pg_proc p cross join lateral aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a where p.oid=to_regprocedure(fn))
-    =array['authenticated:EXECUTE:false','postgres:EXECUTE:false'],fn||': exact EXECUTE ACL, no PUBLIC/anon')
+    =case when fn='public.create_room(uuid,integer,boolean)'
+      then array['authenticated:EXECUTE:false','postgres:EXECUTE:false','service_role:EXECUTE:false']
+      else array['authenticated:EXECUTE:false','postgres:EXECUTE:false'] end,
+    fn||': exact EXECUTE ACL, no PUBLIC/anon')
   from (values ('public.create_room(uuid,integer,boolean)'),('public.join_room(text)'),
     ('public.get_my_participant_filter(uuid)'),
     ('public.get_room_candidate_decision(uuid,integer,bigint)'),

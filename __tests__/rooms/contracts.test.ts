@@ -7,15 +7,15 @@ const accepted = { outcome: 'created', room_id: '11111111-1111-4111-8111-1111111
 
 it.each([[2, true], [3, true], [2, false], [3, false]] as const)('accepts explicit target%s creator-voter=%s creation', (target, voting) => {
   const row = { ...accepted, required_voter_count: target, is_voter: voting, voter_count: voting ? 1 : 0 };
-  expect(narrowCreateResult([row])).toEqual(row);
-  expect(narrowCreateResult([{ ...row, outcome: 'already_created' }])).toEqual({ ...row, outcome: 'already_created' });
+  expect(narrowCreateResult(row)).toEqual(row);
+  expect(narrowCreateResult({ ...row, outcome: 'already_created' })).toEqual({ ...row, outcome: 'already_created' });
 });
 it.each([true, false])('accepts original creation recovery at intermediate Waiting and Ready, voting=%s', is_voter => {
   for (const voter_count of [2, 3]) {
     const row = { ...accepted, outcome: 'already_created', is_voter, required_voter_count: 3,
       voter_count, room_state: voter_count === 3 ? 'ready' : 'waiting' };
-    expect(narrowCreateResult([row])).toEqual(row);
-    expect(() => narrowCreateResult([{ ...row, outcome: 'created' }])).toThrow(RoomContractError);
+    expect(narrowCreateResult(row)).toEqual(row);
+    expect(() => narrowCreateResult({ ...row, outcome: 'created' })).toThrow(RoomContractError);
   }
 });
 it.each([undefined, null, {}, [], [accepted, accepted], [null], ['created']])('rejects non-single-row data %#', value => {
@@ -40,7 +40,7 @@ it.each([
   { decision_completed_count: 1 }, { decision_completed_count: 1.5 },
   { private_field: 'unexpected' }, { participant_role: 'host' },
 ])('rejects inconsistent create field %#', patch => {
-  expect(() => narrowCreateResult([{ ...accepted, ...patch }])).toThrow(RoomContractError);
+  expect(() => narrowCreateResult({ ...accepted, ...patch })).toThrow(RoomContractError);
 });
 it('requires all twelve fields and rejects null, omissions and extra data for accepted outcomes', () => {
   for (const [parser, outcome, is_creator] of [[narrowCreateResult, 'created', true], [narrowJoinResult, 'joined', false],
@@ -48,10 +48,12 @@ it('requires all twelve fields and rejects null, omissions and extra data for ac
     const row = { ...accepted, outcome, is_creator, required_voter_count: 3 };
     for (const field of Object.keys(row)) {
       const missing: Record<string, unknown> = { ...row }; delete missing[field];
-      expect(() => parser([missing])).toThrow(RoomContractError);
-      expect(() => parser([{ ...row, [field]: null }])).toThrow(RoomContractError);
+      const input = parser === narrowCreateResult ? (value: unknown) => parser(value) : (value: unknown) => parser([value]);
+      expect(() => input(missing)).toThrow(RoomContractError);
+      expect(() => input({ ...row, [field]: null })).toThrow(RoomContractError);
     }
-    expect(() => parser([{ ...row, extra: true }])).toThrow(RoomContractError);
+    const input = parser === narrowCreateResult ? (value: unknown) => parser(value) : (value: unknown) => parser([value]);
+    expect(() => input({ ...row, extra: true })).toThrow(RoomContractError);
   }
 });
 it.each([[true, true], [true, false], [false, true]] as const)('accepts legitimate pending member creator=%s voter=%s before/after assembly', (is_creator, is_voter) => {
@@ -66,7 +68,7 @@ it.each(['compatible', 'incompatible'] as const)('accepts stored terminal %s onl
   const terminal = { ...accepted, outcome: 'already_member', required_voter_count: 3,
     voter_count: 3, room_state: 'ready', filter_completed_count: 3, filter_resolution_status } as const;
   expect(narrowJoinResult([terminal])).toEqual(terminal);
-  expect(narrowCreateResult([{ ...terminal, outcome: 'already_created' }])).toEqual({ ...terminal,
+  expect(narrowCreateResult({ ...terminal, outcome: 'already_created' })).toEqual({ ...terminal,
     outcome: 'already_created' });
   for (const patch of [{ room_state: 'waiting' }, { voter_count: 2 }, { filter_completed_count: 2 }]) {
     expect(() => narrowJoinResult([{ ...terminal, ...patch }])).toThrow(RoomContractError);
@@ -91,7 +93,7 @@ it.each(['assigned','no_candidates'] as const)('accepts candidate terminal %s on
 });
 it('allows technical integer bound without an arbitrary product maximum', () => {
   const row = { ...accepted, required_voter_count: 2147483647 };
-  expect(narrowCreateResult([row])).toEqual(row);
+  expect(narrowCreateResult(row)).toEqual(row);
   expect(narrowJoinResult([{ ...row, outcome: 'already_member', voter_count: 2147483647, room_state: 'ready' }]).outcome).toBe('already_member');
 });
 it.each([
@@ -119,5 +121,5 @@ it.each(['invalid_code', 'not_found', 'full'])('requires exact eleven NULLs for 
     const missing: Record<string, unknown> = { ...rejected }; delete missing[field];
     expect(() => narrowJoinResult([missing])).toThrow(RoomContractError);
   }
-  expect(() => narrowCreateResult([rejected])).toThrow(RoomContractError);
+  expect(() => narrowCreateResult(rejected)).toThrow(RoomContractError);
 });

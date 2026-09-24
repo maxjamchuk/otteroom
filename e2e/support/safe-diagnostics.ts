@@ -64,6 +64,13 @@ export function inspectUiValues(values: string[], known: Iterable<string>): bool
     values.every(value => !containsCredential(value, credentials));
 }
 
+export async function assertOrdinaryJwtPrivacy(page: Page, forbiddenLabels: readonly string[]): Promise<void> {
+  if (forbiddenLabels.length > 8 || forbiddenLabels.some(value => typeof value !== 'string' || value.length < 1 || value.length > 80))
+    throw safeError();
+  const text = await page.locator('body').innerText();
+  if (forbiddenLabels.some(value => text.includes(value))) throw safeError();
+}
+
 export function requireStableCapture(checked: boolean, unchanged: boolean): void {
   if (!checked || !unchanged) throw safeError();
 }
@@ -193,6 +200,10 @@ export class SafeDiagnostics {
   #observeRequest = (request: import('@playwright/test').Request) => {
     if (/\/auth\/v1\/signup(?:\?|$)/.test(request.url())) this.#signups++;
   };
+  #recordAuthResult = (description: 'transport' | 'protocol' | 'success' | 'http_4xx' | 'http_5xx' | 'rate_limited'): void => {
+    if (!this.#info.annotations.some(annotation => annotation.type === 'safe-auth-result'))
+      this.#info.annotations.push({ type: 'safe-auth-result', description });
+  };
   get signupAttempts(): number { return this.#signups; }
   get successfulIdentities(): number { return this.#identities.size; }
 
@@ -202,14 +213,20 @@ export class SafeDiagnostics {
   }
 
   #observeAuth = async (route: import('@playwright/test').Route) => {
+    let authResult: 'transport' | 'protocol' | 'success' | 'http_4xx' | 'http_5xx' | 'rate_limited' = 'transport';
+    let fetchStarted = false;
     try {
       if (this.#signups > this.#signupCap) throw safeError();
       const headers = await route.request().allHeaders();
       const sensitive = [headers.authorization, headers.cookie].filter((value): value is string => !!value);
       if (sensitive.length) await this.register(sensitive);
+      fetchStarted = true;
       const response = await route.fetch({ maxRetries: 0, maxRedirects: 0, timeout: 15000 });
       this.#authStatus = response.status();
+      authResult = this.#authStatus === 429 ? 'rate_limited' : this.#authStatus >= 500 ? 'http_5xx' :
+        this.#authStatus >= 400 ? 'http_4xx' : response.ok() ? 'success' : 'protocol';
       if (this.#authStatus === 429) {
+        this.#recordAuthResult(authResult);
         this.#info.annotations.push({ type: 'safe-auth-budget', description: 'exhausted' });
         throw safeError();
       }
@@ -226,7 +243,9 @@ export class SafeDiagnostics {
         }
         await route.fulfill({ response });
       } finally { bytes.fill(0); await response.dispose(); }
+      this.#recordAuthResult(authResult);
     } catch {
+      this.#recordAuthResult(fetchStarted ? authResult : 'protocol');
       this.#failed = true;
       await route.abort().catch(() => {});
     }
@@ -380,7 +399,7 @@ export class SafeDiagnostics {
       this.context.removeListener('weberror', this.#drop);
       try { await this.context.unrouteAll({ behavior: 'wait' }); }
       finally {
-        try { await this.context.close(); }
+        try { await this.context.close(); this.#info.annotations.push({ type: 'safe-context-cleanup', description: 'complete' }); }
         finally { this.#registry.clear(); this.#identities.clear(); this.#pending.length = 0; }
       }
     }

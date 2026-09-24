@@ -31,7 +31,7 @@ it('distinguishes local malformed input from generic infrastructure failure', ()
   expect(malformedInvitationState()).toEqual({ kind: 'malformed', message: 'Malformed invitation. Enter a valid room code.' });
   expect(joinErrorState()).toEqual({ kind: 'error', message: 'Unable to open this room. Please try again.' });
 });
-const waiting=acceptedRoomState(narrowCreateResult([row]));
+const waiting=acceptedRoomState(narrowCreateResult(row));
 const projection=(count:number)=>({id:row.room_id,code:row.room_code,state:count===3?'ready' as const:'waiting' as const,voter_count:count,required_voter_count:3,filter_completed_count:0,filter_resolution_status:'pending' as const,candidate_acquisition_status:'pending' as const,candidate_progression_status:'inactive' as const,candidate_sequence:0,decision_completed_count:0});
 it('advances intermediate Waiting monotonically, retaining immutable flags and target',()=>{
   const middle=applyRoomRefetch(waiting,projection(2));

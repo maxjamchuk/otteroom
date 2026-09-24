@@ -1,9 +1,11 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { localExecutable } from './safe-process.mjs';
+import { localSupabaseArgs } from './local-supabase.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const maxStatusBytes = 65536;
@@ -51,8 +53,9 @@ export async function readLocalStatus({ spawnProcess = spawn, signal, timeoutMs 
         else resolve(Buffer.concat(chunks).toString('utf8'));
         chunks.length = 0;
       };
-      child = spawnProcess(command, ['status', '--output', 'env'], {
-        cwd: root, env: { ...process.env, CI: '1' },
+      child = spawnProcess(command, localSupabaseArgs(['status', '--output', 'env']), {
+        cwd: root, env: { ...process.env, CI: '1', DO_NOT_TRACK: '1', SUPABASE_TELEMETRY_DISABLED: '1',
+          XDG_CONFIG_HOME: path.join(os.tmpdir(), 'otteroom-supabase-config') },
         detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'],
       });
       child.stdout.on('data', chunk => {
